@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>UniversalForward</title>
+  <style>/*__STYLE__*/</style>
+</head>
+<body>
+  <main class="workspace">
+    <header class="page-heading">
+      <div class="brand"><div class="brand-symbol" aria-hidden="true">U<span>↗</span></div><div><span class="eyebrow">UNIVERSAL FORWARD</span><h1>渠道管理</h1></div></div>
+      <div class="actions"><button id="reload" class="secondary">刷新</button><button id="add" class="primary">＋ 添加渠道</button></div>
+    </header>
+    <section class="metrics" aria-label="渠道概览">
+      <div><span>全部渠道</span><strong id="metricChannels">—</strong></div>
+      <div><span>已启用</span><strong id="metricEnabled">—</strong></div>
+      <div><span>可用 Key</span><strong id="metricKeys">—</strong></div>
+      <div><span>已配置模型</span><strong id="metricModels">—</strong></div>
+    </section>
+    <div id="message" class="feedback" role="status" hidden></div>
+    <div class="toolbar"><div><h2>上游渠道 <span id="channelCount" class="count">0</span></h2><p class="muted">管理连接、密钥和模型路由</p></div><div class="filters"><input id="filter" aria-label="搜索渠道" placeholder="搜索名称、地址或模型"><select id="statusFilter" aria-label="渠道状态"><option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option></select></div></div>
+    <section id="cards" class="channel-grid" aria-live="polite"></section>
+  </main>
+  <dialog id="editor" class="editor-dialog" aria-labelledby="formTitle">
+    <form id="accountForm" novalidate>
+      <header class="dialog-heading"><div><span class="eyebrow">CHANNEL SETTINGS</span><h2 id="formTitle">添加渠道</h2></div><button type="button" id="close" class="icon-button" aria-label="关闭编辑">×</button></header>
+      <input name="id" type="hidden">
+      <div class="editor-layout">
+        <nav class="editor-nav" role="tablist" aria-label="渠道设置">
+          <button type="button" id="tab-basic" role="tab" data-tab="basic" aria-controls="panel-basic" aria-selected="true"><span>01</span>基础设置</button>
+          <button type="button" id="tab-keys" role="tab" data-tab="keys" aria-controls="panel-keys" aria-selected="false"><span>02</span>Key 管理</button>
+          <button type="button" id="tab-models" role="tab" data-tab="models" aria-controls="panel-models" aria-selected="false"><span>03</span>模型与协议</button>
+          <button type="button" id="tab-headers" role="tab" data-tab="headers" aria-controls="panel-headers" aria-selected="false"><span>04</span>请求头</button>
+          <button type="button" id="tab-policy" role="tab" data-tab="policy" aria-controls="panel-policy" aria-selected="false"><span>05</span>重试与映射</button>
+        </nav>
+        <div class="editor-content">
+          <section id="panel-basic" role="tabpanel" aria-labelledby="tab-basic">
+            <div class="section-heading"><h3>连接到你的上游</h3><p>配置渠道名称、服务地址和访问入口</p></div>
+            <div class="field"><label for="label">渠道名称</label><input id="label" name="label" placeholder="例如：主力推理渠道" required maxlength="120"></div>
+            <div class="field"><label for="baseUrl">Base URL</label><input id="baseUrl" name="baseUrl" type="url" placeholder="https://api.example.com/v1" required></div>
+            <div class="field-row"><div class="field"><label for="weight">渠道权重</label><input id="weight" name="weight" type="number" min="0" max="1000" value="100" required><small>0–1000</small></div><div class="field"><label>渠道状态</label><label class="switch-card"><input name="enabled" type="checkbox" checked><span>启用渠道</span></label></div></div>
+            <div class="field"><label>允许端点</label><div id="endpoints" class="endpoint-grid"></div></div>
+          </section>
+          <section id="panel-keys" role="tabpanel" aria-labelledby="tab-keys" hidden>
+            <div class="section-heading"><h3>Key 管理 <span id="keyCount" class="count">0</span></h3><p>每次请求及重试使用同一 Key</p></div>
+            <div class="field"><label for="keySelectionMode">分配策略</label><select id="keySelectionMode"><option value="roundRobin">轮询</option><option value="random">随机</option><option value="priority">主备顺序</option></select><small id="keyModeHint"></small></div>
+            <div id="keyRows" class="key-list"></div>
+            <div class="batch-box"><label for="keyBatch">批量添加</label><textarea id="keyBatch" rows="3" placeholder="每行一个 Key" autocomplete="off" spellcheck="false"></textarea><div class="between"><small>每渠道最多100个 Key</small><button id="keyAdd" type="button" class="secondary">添加到列表</button></div></div>
+          </section>
+          <section id="panel-models" role="tabpanel" aria-labelledby="tab-models" hidden>
+            <div class="section-heading"><h3>模型与协议</h3><p>选择可用模型并设置上游协议</p></div>
+            <div class="discovery-box"><div class="field"><label for="discoveryKey">获取模型使用的 Key</label><select id="discoveryKey"></select></div><div class="actions"><button id="discover" type="button" class="primary">获取候选模型</button><button id="refreshModels" type="button" class="secondary">刷新候选</button></div><div id="discoveryStatus" class="feedback" role="status" hidden></div><div id="candidates" class="candidates"></div></div>
+            <div class="field"><label for="models">允许模型</label><textarea id="models" name="models" rows="4" placeholder="每行一个模型名称" required spellcheck="false"></textarea></div>
+            <div class="between"><h4>上游协议 <span id="protocolCount" class="count">0</span></h4><button id="syncProtocols" type="button" class="text-button">同步当前模型</button></div>
+            <div id="protocolStatus" class="feedback" role="status" hidden></div>
+            <div id="modelProtocols" class="protocol-list"></div>
+          </section>
+          <section id="panel-headers" role="tabpanel" aria-labelledby="tab-headers" hidden>
+            <div class="section-heading"><h3>请求头覆盖</h3><p>选择客户端模板，或编辑自定义请求头</p></div>
+            <div class="template-grid"><button id="templateCodex" type="button" class="template-card"><span class="template-mark">↗</span><strong>Codex</strong><small>Responses</small></button><button id="templateClaude" type="button" class="template-card"><span class="template-mark claude">✳</span><strong>Claude Code</strong><small>Messages</small></button></div>
+            <div class="between editor-toolbar"><div class="segmented" role="group" aria-label="请求头编辑模式"><button type="button" id="headerVisual" aria-pressed="true">可视化</button><button type="button" id="headerJson" aria-pressed="false">JSON</button></div><div class="actions"><button id="headerCopy" type="button" class="text-button">复制</button><button id="headerClear" type="button" class="text-button">清空</button></div></div>
+            <div id="headerVisualPane"><div id="headerRows"></div><button id="headerAdd" type="button" class="add-row">＋ 添加请求头</button></div>
+            <div id="headerJsonPane" hidden><label class="sr-only" for="headerOverride">请求头 JSON</label><textarea id="headerOverride" name="headerOverride" class="code-editor" rows="13" spellcheck="false">{}</textarea><button id="headerFormat" type="button" class="text-button">格式化</button></div>
+            <div id="headerStatus" class="feedback" role="status" hidden></div>
+            <p class="field-hint"><code>{api_key}</code> 引用当前 Key，显式请求头优先。</p>
+          </section>
+          <section id="panel-policy" role="tabpanel" aria-labelledby="tab-policy" hidden>
+            <div class="section-heading"><h3>重试与映射</h3><p>设置请求时限、重试条件和返回状态</p></div>
+            <div class="field-row"><div class="field"><label for="maxRetries">重试次数</label><input id="maxRetries" name="maxRetries" type="number" min="0" max="10" value="0" required><small>0–10次</small></div><div class="field"><label for="headerTimeoutSeconds">响应头超时</label><div class="input-unit"><input id="headerTimeoutSeconds" name="headerTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div></div><div class="field"><label for="totalTimeoutSeconds">总时限</label><div class="input-unit"><input id="totalTimeoutSeconds" name="totalTimeoutSeconds" type="number" min="1" max="3600" value="180" required><span>秒</span></div></div><div class="field"><label for="streamIdleTimeoutSeconds">流空闲超时</label><div class="input-unit"><input id="streamIdleTimeoutSeconds" name="streamIdleTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div></div></div>
+            <div class="field"><label for="retryStatusCodes">自动重试状态码</label><input id="retryStatusCodes" name="retryStatusCodes" placeholder="例如 429,500-503"><small>用逗号分隔状态码或区间</small></div>
+            <div class="between editor-toolbar"><h4>状态码映射</h4><div class="segmented" role="group" aria-label="状态码映射编辑模式"><button type="button" id="mappingVisual" aria-pressed="true">可视化</button><button type="button" id="mappingJson" aria-pressed="false">JSON</button></div></div>
+            <div id="mappingVisualPane"><div id="mappingRows"></div><button type="button" id="mappingAdd" class="add-row">＋ 添加映射</button></div>
+            <div id="mappingJsonPane" hidden><label class="sr-only" for="statusCodeMapping">状态码映射 JSON</label><textarea id="statusCodeMapping" name="statusCodeMapping" class="code-editor" rows="7" spellcheck="false">{}</textarea><button id="mappingFormat" type="button" class="text-button">格式化</button></div>
+            <div id="mappingStatus" class="feedback" role="status" hidden></div>
+          </section>
+        </div>
+      </div>
+      <footer class="editor-footer"><div id="formError" class="feedback error" role="alert" hidden></div><div class="between"><span id="editorSummary" class="muted">未保存</span><div class="actions"><button id="cancel" type="button" class="secondary">取消</button><button id="save" class="primary" type="submit">保存渠道</button></div></div></footer>
+    </form>
+  </dialog>
+  <dialog id="testDialog" class="test-dialog" aria-labelledby="testTitle">
+    <header class="dialog-heading"><div><span class="eyebrow">CONNECTION TEST</span><h2 id="testTitle">测试连接</h2></div><button id="testClose" type="button" class="icon-button" aria-label="关闭测试">×</button></header>
+    <div class="test-content"><div class="test-options"><div class="field"><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div class="field"><label for="testKey">测试 Key</label><select id="testKey"></select></div><label class="inline-check"><input id="testStream" type="checkbox">流式模式</label></div>
+      <div class="test-toolbar"><input id="testFilter" aria-label="筛选测试模型" placeholder="搜索模型"><div class="actions"><button id="testAll" class="primary">测试全部</button><button id="testSelected" class="secondary">测试勾选</button><button id="testCancel" class="secondary" disabled>取消测试</button><button id="testResume" class="secondary" hidden>重试查询</button></div></div>
+      <div id="testProgress" class="feedback" role="status" hidden></div><div id="testError" class="feedback error" role="alert" hidden></div>
+      <div class="table-scroll"><table><thead><tr><th><input id="testSelectAll" type="checkbox" aria-label="勾选可见模型"></th><th>模型</th><th>状态</th><th>结果</th><th>操作</th></tr></thead><tbody id="testRows"></tbody></table></div>
+      <details><summary>结果详情</summary><pre id="testDetails"></pre></details>
+    </div>
+  </dialog>
+  <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmTitle"><h3 id="confirmTitle">确认操作</h3><p id="confirmText"></p><div class="actions"><button id="confirmNo" class="secondary">取消</button><button id="confirmYes" class="primary">确认</button></div></dialog>
+  <dialog id="copyDialog" class="confirm-dialog" aria-labelledby="copyTitle"><h3 id="copyTitle">复制请求头</h3><p class="muted">选中内容后按 Ctrl+C 或长按复制</p><textarea id="copyContent" class="code-editor" readonly rows="10"></textarea><div class="actions"><button id="copyClose" class="primary">关闭</button></div></dialog>
+  <script>/*__SCRIPT__*/</script>
+</body>
+</html>

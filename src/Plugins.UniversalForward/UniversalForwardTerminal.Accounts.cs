@@ -201,11 +201,14 @@ public sealed partial class UniversalForwardTerminal
         if (!TryReadExtraParams(input.ExtraParams, previous.ExtraParams, out var extraParams, out var extraError))
             return context.BadRequest(extraError);
 
+        var headerOverride = input.HeaderOverride ?? previous.HeaderOverride;
+        try { HeaderOverrides.Validate(headerOverride); }
+        catch (FormatException error) { return context.BadRequest(error.Message); }
         var settings = new ForwardApiSettings
         {
             BaseUrl = baseUrl,
             ApiKey = apiKey,
-            HeaderOverride = previous.HeaderOverride,
+            HeaderOverride = headerOverride,
             ExtraParams = extraParams
         };
 
@@ -459,6 +462,7 @@ public sealed partial class UniversalForwardTerminal
         public string? ApiKey { get; init; }
         public string? KeyId { get; init; }
         public JsonElement? ExtraParams { get; init; }
+        public JsonObject? HeaderOverride { get; init; }
     }
     private sealed class AccountIdInput
     {
