@@ -1,0 +1,51 @@
+name: Release UniversalForward
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw "Invalid release tag: $env:RELEASE_TAG"
+          }
+      - name: Test
+        run: dotnet test tests/UniversalForward.Tests/UniversalForward.Tests.csproj -c Release --nologo
+      - name: Build plugin
+        run: pwsh -File ./buildall.ps1 -OutputDirectory ./artifacts/plugins
+      - name: Create archive and index
+        shell: pwsh
+        run: ./package-release.ps1 -Tag $env:RELEASE_TAG
+      - name: Validate release package
+        shell: pwsh
+        run: ./tests/release-packaging.ps1 -Tag $env:RELEASE_TAG
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            artifacts/release/universalforward.zip \
+            artifacts/release/release-index.json \
+            --verify-tag --title "UniversalForward $RELEASE_TAG" \
+            --notes-file artifacts/release/release-notes.md --draft
+          gh release edit "$RELEASE_TAG" --draft=false

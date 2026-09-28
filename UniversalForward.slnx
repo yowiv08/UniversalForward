@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/Plugins.UniversalForward/Plugins.UniversalForward.csproj" />
+  <Project Path="tests/UniversalForward.Tests/UniversalForward.Tests.csproj" />
+</Solution>
