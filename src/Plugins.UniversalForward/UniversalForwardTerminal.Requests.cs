@@ -61,14 +61,36 @@ public sealed partial class UniversalForwardTerminal
         var watch = Stopwatch.StartNew();
         try
         {
+            var isTest = context.HttpClient is ConnectionTestClient;
+            var resolvedHeaders = HeaderOverrides.Resolve(settings.HeaderOverride, context.Request.RequestHeaders,
+                settings.ApiKey, isTest, ClientProfiles.Variables(
+                    isTest ? null : JsonNode.Parse(context.Request.OriginalBody!.Value.GetRawText()),
+                    isTest ? null : context.Request.RequestHeaders));
+            var profile = ClientProfiles.Profile(settings.HeaderOverride);
+            if (isTest && (profile == "codex" && upstreamEndpoint == "/v1/responses"
+                || profile == "claude" && upstreamEndpoint == "/v1/messages"))
+            {
+                resolvedHeaders["Accept"] = "text/event-stream";
+                var testModel = UpstreamModel(context.Request.Model);
+                if (profile == "claude" && testModel.EndsWith("[1m]", StringComparison.OrdinalIgnoreCase))
+                {
+                    testModel = testModel[..^4];
+                    if (!resolvedHeaders["anthropic-beta"].Split(',').Contains("context-1m-2025-08-07"))
+                        resolvedHeaders["anthropic-beta"] += ",context-1m-2025-08-07";
+                }
+                var testBody = ClientProfiles.TestBody(profile, testModel, resolvedHeaders);
+                payload = JsonSerializer.SerializeToUtf8Bytes(testBody, JsonOptions);
+            }
+            var targetEndpoint = profile == "claude" && upstreamEndpoint == "/v1/messages"
+                ? upstreamEndpoint + "?beta=true" : upstreamEndpoint;
             for (var attempt = 0; attempt <= policy.MaxRetries; attempt++)
             {
                 total.Token.ThrowIfCancellationRequested();
-                using var request = new HttpRequestMessage(HttpMethod.Post, BuildUri(settings.BaseUrl, upstreamEndpoint))
+                using var request = new HttpRequestMessage(HttpMethod.Post, BuildUri(settings.BaseUrl, targetEndpoint))
                 { Content = new ByteArrayContent(payload) };
                 request.Content.Headers.ContentType = new("application/json");
                 ApplyRequestHeaders(request, context.Request, settings, ReadExtraParams(settings), headers, upstreamEndpoint);
-                ApplyReplaceHeaders(request, HeaderOverrides.Resolve(settings.HeaderOverride, context.Request.RequestHeaders, settings.ApiKey, context.HttpClient is ConnectionTestClient));
+                ApplyReplaceHeaders(request, resolvedHeaders);
                 using var headerBudget = CancellationTokenSource.CreateLinkedTokenSource(total.Token);
                 headerBudget.CancelAfter(TimeSpan.FromSeconds(policy.HeaderTimeoutSeconds));
                 try
@@ -130,7 +152,8 @@ public sealed partial class UniversalForwardTerminal
         {
             return Completed(RawResponse(504, JsonSerializer.SerializeToUtf8Bytes(new { error = "请求总时限已耗尽" }), "application/json"), 0);
         }
-        catch (FormatException error) { return LocalFailure(error.Message); }
+        catch (Exception error) when (error is FormatException or JsonException or InvalidOperationException)
+        { return LocalFailure(error.Message); }
         finally
         {
             response?.Dispose();

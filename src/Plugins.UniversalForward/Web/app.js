@@ -24,13 +24,17 @@
     retryStatusCodes: '100-199,300-399,401-407,409-499,500-503,505-523,525-599' };
   const templates = {
     codex: {
-      Authorization: 'Bearer {api_key}', 'Content-Type': 'application/json', Accept: 'text/event-stream',
+      'Content-Type': 'application/json', Accept: 'text/event-stream',
+      'User-Agent': 'Codex Desktop/0.146.0-alpha.9.2 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.727.51351)',
       Originator: 'codex_exec', 'X-Codex-Beta-Features': 'remote_compaction_v2',
-      'X-OpenAI-Internal-Codex-Responses-Lite': 'true'
+      'X-OpenAI-Internal-Codex-Responses-Lite': 'true',
+      'Session-Id': '{session_id}', 'Thread-Id': '{thread_id}', 'X-Client-Request-Id': '{session_id}',
+      'X-Codex-Window-Id': '{window_id}', 'X-Codex-Turn-Metadata': '{codex_turn_metadata}'
     },
     claude: {
-      Authorization: 'Bearer {api_key}', 'x-api-key': '{api_key}', 'Content-Type': 'application/json',
+      'Content-Type': 'application/json', 'User-Agent': 'claude-cli/2.1.161 (external, cli)',
       Accept: 'application/json', 'anthropic-version': '2023-06-01', 'x-app': 'cli',
+      'x-claude-code-session-id': '{session_id}', 'anthropic-dangerous-direct-browser-access': 'true',
       'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01'
     }
   };
@@ -104,9 +108,11 @@
     for (const a of visible) {
       const card = el('article', undefined, 'channel-card'), top = el('div', undefined, 'channel-top');
       const title = el('div', undefined, 'channel-title');
-      title.append(el('h3', a.label), el('p', a.baseUrl, 'channel-url'));
-      top.append(el('div', (a.label || 'U').slice(0, 1).toUpperCase(), 'channel-monogram'), title,
+      title.append(el('h3', a.label));
+      top.append(title,
         el('span', a.enabled ? '已启用' : '已停用', 'badge' + (a.enabled ? '' : ' off')));
+      const address = el('p', a.baseUrl, 'channel-url');
+      address.title = a.baseUrl;
       const meta = el('div', undefined, 'channel-meta');
       for (const [label, value] of [['可用 Key', `${(a.keys || []).filter(k => k.enabled).length}/${a.keys?.length || 0}`],
         ['分配', keyModes[a.keySelectionMode] || '轮询'], ['权重', a.weight]]) {
@@ -115,6 +121,11 @@
       const tags = el('div', undefined, 'model-tags');
       for (const model of (a.models || []).slice(0, 3)) tags.append(el('span', model, 'model-tag'));
       if (a.models?.length > 3) tags.append(el('span', `+${a.models.length - 3}`, 'model-tag'));
+      const endpoints = el('div', undefined, 'channel-endpoints');
+      for (const endpoint of a.endpoints || []) endpoints.append(el('span', endpoint.replace(/^\/v1\//, ''), 'endpoint-tag'));
+      const modelHeading = el('div', undefined, 'between channel-model-heading');
+      modelHeading.append(el('h4', '已配置模型'), el('strong', `${a.models?.length || 0} 个`));
+      if (!a.models?.length) tags.append(el('span', '暂无模型', 'muted'));
       const actions = el('div', undefined, 'actions');
       actions.append(button('编辑', () => open(a)), button('测试连接', () => openTests(a)),
         button('模型', () => { open(a); selectTab('models'); }),
@@ -123,7 +134,7 @@
           try { await api('POST', 'accounts/delete', { id: a.id }); await load(); message('渠道已删除'); }
           catch (e) { message(e.message, true); }
         }, 'text-button danger'));
-      card.append(top, meta, tags, actions); root.append(card);
+      card.append(top, address, meta, endpoints, modelHeading, tags, actions); root.append(card);
     }
   }
   async function load() {

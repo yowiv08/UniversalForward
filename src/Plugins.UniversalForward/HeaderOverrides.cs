@@ -41,8 +41,11 @@ internal static class HeaderOverrides
     }
 
     internal static Dictionary<string, string> Resolve(JsonObject config,
-        IReadOnlyDictionary<string, string> client, string apiKey, bool channelTest = false)
+        IReadOnlyDictionary<string, string> client, string apiKey, bool channelTest = false,
+        IReadOnlyDictionary<string, string>? variables = null)
     {
+        config = ClientProfiles.CompleteHeaders(config);
+        variables ??= ClientProfiles.Variables(incoming: channelTest ? null : client);
         Validate(config);
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var all = config.Any(p => p.Key.Trim() == "*");
@@ -73,7 +76,9 @@ internal static class HeaderOverrides
                 var value = client.FirstOrDefault(p => p.Key.Equals(source, StringComparison.OrdinalIgnoreCase)).Value;
                 if (value is not null) Put(result, name, value);
             }
-            else Put(result, name, template.Replace("{api_key}", apiKey, StringComparison.Ordinal));
+            else Put(result, name, Regex.Replace(template, @"\{([a-z_]+)\}", m =>
+                m.Groups[1].Value == "api_key" ? apiKey :
+                variables.TryGetValue(m.Groups[1].Value, out var replacement) ? replacement : m.Value));
         }
         return result;
     }

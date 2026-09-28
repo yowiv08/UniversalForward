@@ -175,6 +175,78 @@ public sealed class ConnectionTestsTests
         { accountId = "account", models = SingleModel, endpoint = "/v1/responses" }))).StatusCode);
     }
 
+    [TestMethod]
+    [DataRow("codex", "/v1/responses")]
+    [DataRow("claude", "/v1/messages")]
+    public async Task ClientProfileTestsSendMatchingBodiesAndPinIdentityAcrossRetries(string profile, string endpoint)
+    {
+        var host = Host();
+        var account = await host.Services.Accounts.GetAsync("account", CancellationToken.None);
+        var fields = ((CustomCredential)account!.Credential).Fields;
+        var settings = System.Text.Json.Nodes.JsonNode.Parse(fields["settings"]!)!.AsObject();
+        settings["endpoints"] = new System.Text.Json.Nodes.JsonArray(endpoint);
+        settings["headerOverride"] = System.Text.Json.Nodes.JsonNode.Parse(profile == "codex"
+            ? """{"Originator":"codex_exec","User-Agent":"Codex Desktop/0.146.0-alpha.9.2 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.727.51351)"}"""
+            : """{"x-app":"cli","anthropic-beta":"claude-code-20250219","User-Agent":"claude-cli/2.1.161 (external, cli)"}""");
+        settings["requestPolicy"] = System.Text.Json.Nodes.JsonNode.Parse("""{"maxRetries":1}""");
+        account.Credential = new CustomCredential(new Dictionary<string, string?>(fields)
+            { ["settings"] = settings.ToJsonString() });
+        var bodies = new List<string>();
+        var sessions = new List<string>();
+        using var handler = new ProfileHandler(async request =>
+        {
+            var text = await request.Content!.ReadAsStringAsync();
+            bodies.Add(text);
+            var body = System.Text.Json.Nodes.JsonNode.Parse(text)!;
+            var session = request.Headers.GetValues(profile == "codex" ? "Session-Id" : "x-claude-code-session-id").Single();
+            sessions.Add(session);
+            Assert.IsTrue(body["stream"]!.GetValue<bool>());
+            Assert.AreEqual("text/event-stream", request.Headers.Accept.Single().MediaType);
+            if (profile == "codex")
+            {
+                Assert.AreEqual("Bearer test-only", request.Headers.GetValues("Authorization").Single());
+                Assert.AreEqual("Codex Desktop/0.146.0-alpha.9.2 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.727.51351)",
+                    string.Join(" ", request.Headers.GetValues("User-Agent")));
+                Assert.AreEqual(session, body["client_metadata"]!["session_id"]!.ToString());
+                Assert.AreEqual(request.Headers.GetValues("X-Codex-Turn-Metadata").Single(),
+                    body["client_metadata"]!["x-codex-turn-metadata"]!.ToString());
+                Assert.IsNull(body["max_output_tokens"]);
+            }
+            else
+            {
+                Assert.AreEqual("test-only", request.Headers.GetValues("x-api-key").Single());
+                Assert.AreEqual("claude-cli/2.1.161 (external, cli)", string.Join(" ", request.Headers.GetValues("User-Agent")));
+                Assert.AreEqual("?beta=true", request.RequestUri!.Query);
+                Assert.AreEqual(session, System.Text.Json.Nodes.JsonNode.Parse(body["metadata"]!["user_id"]!.ToString())!["session_id"]!.ToString());
+            }
+            if (bodies.Count == 1) return new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                { Content = new StringContent("retry") };
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(profile == "codex"
+                    ? "data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.completed\"}\n\n"
+                    : "data: {\"type\":\"message_start\"}\n\ndata: {\"type\":\"message_stop\"}\n\n",
+                    Encoding.UTF8, "text/event-stream")
+            };
+        });
+        Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
+            .Returns(() => new HttpClient(handler, false));
+        using var terminal = new UniversalForwardTerminal(host);
+        var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
+            JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel, endpoint, stream = false }),
+            _ => { }, CancellationToken.None));
+        Assert.IsTrue(result!.Value.GetProperty("rows")[0].GetProperty("success").GetBoolean(), result.ToString());
+        Assert.AreEqual(2, bodies.Count);
+        Assert.AreEqual(bodies[0], bodies[1]);
+        Assert.AreEqual(sessions[0], sessions[1]);
+    }
+
+    private sealed class ProfileHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> reply) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => reply(request);
+    }
+
     private sealed class InspectHandler(Func<HttpRequestMessage, string> reply) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
