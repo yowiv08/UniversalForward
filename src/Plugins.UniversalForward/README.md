@@ -33,8 +33,9 @@ Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配�
 
 ## 请求转发
 
-支持 Chat Completions、Completions、Responses 和 Messages 端点，以及普通响应和 SSE 流式响应。
+仅支持 OpenAI Responses `/v1/responses` 和 Anthropic Messages `/v1/messages`，以及普通响应和 SSE 流式响应。
 协议路由选择上游路径和认证方式；请求及响应内容按上游格式透传。
+客户端使用 `/v1/models` 返回的完整 `platform/model` 模型 ID；渠道模型使用上游实际接受的 ID，保留上游要求的平台前缀。
 Codex 模板为 Responses 请求补齐协议字段和会话元数据，保留原始对话、指令和工具配置。
 Claude 模板为 Messages 请求补齐客户端身份、会话元数据和消息格式，保留自定义系统指令、工具和生成参数。
 Claude 请求头模板包含 1m 上下文标识；模型名使用 `[1m]` 后缀时自动转换为对应请求头。

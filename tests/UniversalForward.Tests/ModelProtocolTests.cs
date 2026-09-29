@@ -8,9 +8,9 @@ public sealed class ModelProtocolTests
     [TestMethod]
     public void MatchingProtocolWinsOverPreference()
     {
-        var options = new ModelProtocolOptions { Protocols = ["chat", "messages"], PreferredProtocol = "messages" };
-        Assert.AreEqual("/v1/chat/completions", options.Select("/v1/chat/completions"));
-        Assert.AreEqual("/v1/messages", options.Select("/v1/responses"));
+        var options = new ModelProtocolOptions { Protocols = ["responses", "messages"], PreferredProtocol = "messages" };
+        Assert.AreEqual("/v1/responses", options.Select("/v1/responses"));
+        Assert.AreEqual("/v1/messages", options.Select("/v1/messages"));
     }
 
     [TestMethod]
@@ -24,6 +24,8 @@ public sealed class ModelProtocolTests
     [TestMethod]
     [DataRow("unknown")]
     [DataRow("")]
+    [DataRow("chat")]
+    [DataRow("completions")]
     public void UnknownProtocolsAreRejected(string name)
         => Assert.Throws<FormatException>(() => new ModelProtocolOptions { Protocols = [name], PreferredProtocol = name }.Validate());
 
@@ -37,6 +39,6 @@ public sealed class ModelProtocolTests
         Assert.Throws<FormatException>(() => new ModelProtocolOptions().Select("/v1/completions"));
         var options = new ModelProtocolOptions { Protocols = ["completions"], PreferredProtocol = "completions" };
         Assert.Throws<FormatException>(() => options.Select("/v1/messages"));
-        Assert.AreEqual("/v1/completions", options.Select("/v1/completions"));
+        Assert.Throws<FormatException>(() => options.Select("/v1/completions"));
     }
 }

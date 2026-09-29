@@ -156,7 +156,6 @@ public sealed partial class UniversalForwardTerminal
                                 if (data.Length == 0) continue;
                                 if (data == "[DONE]")
                                 {
-                                    terminal |= endpoint is "/v1/chat/completions" or "/v1/completions";
                                     continue;
                                 }
                                 using var doc = JsonDocument.Parse(data);
@@ -167,8 +166,7 @@ public sealed partial class UniversalForwardTerminal
                                 {
                                     "/v1/messages" => type is "message_start" or "content_block_start" or "content_block_delta",
                                     "/v1/responses" => type is "response.created" or "response.output_item.added" or "response.output_text.delta",
-                                    _ => root.TryGetProperty("choices", out var choices)
-                                        && choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0
+                                    _ => false
                                 };
                                 recognized |= validEvent;
                                 if (validEvent) firstEventMs ??= watch.ElapsedMilliseconds;
@@ -216,7 +214,7 @@ public sealed partial class UniversalForwardTerminal
     private static string TestEndpoint(ForwardApiSettings settings, string model, string? requested)
         => requested ?? (settings.ModelProtocols.TryGetValue(model, out var options)
             ? ModelProtocolOptions.Endpoint(options.PreferredProtocol)
-            : settings.Endpoints.Contains("/v1/chat/completions") ? "/v1/chat/completions"
+            : settings.Endpoints.Contains("/v1/responses") ? "/v1/responses"
             : settings.Endpoints.FirstOrDefault() ?? throw new FormatException("渠道没有允许端点"));
 
     private static async IAsyncEnumerable<ReadOnlyMemory<byte>> CachedTestStream(byte[] bytes)
@@ -230,13 +228,14 @@ public sealed partial class UniversalForwardTerminal
         => JsonSerializer.SerializeToElement(endpoint switch
         {
             "/v1/responses" => (object)new { model, stream, input = "Reply with OK.", max_output_tokens = 32 },
-            "/v1/completions" => new { model, stream, prompt = "Reply with OK.", max_tokens = 32 },
-            _ => new { model, stream, messages = new[] { new { role = "user", content = "Reply with OK." } }, max_tokens = 32 }
+            "/v1/messages" => new { model, stream, messages = new[] { new { role = "user", content = "Reply with OK." } }, max_tokens = 32 },
+            _ => throw new FormatException("仅支持 Responses 和 Anthropic Messages。")
         });
 
     internal static bool IsTestCompletion(byte[]? bytes, string endpoint)
     {
         if (bytes is null) return false;
+        if (!SupportedEndpoints.Contains(endpoint)) return false;
         try
         {
             using var doc = JsonDocument.Parse(bytes);
@@ -246,16 +245,14 @@ public sealed partial class UniversalForwardTerminal
             if (endpoint == "/v1/responses"
                 && (!root.TryGetProperty("status", out var status) || status.GetString() != "completed"))
                 return false;
-            var property = endpoint switch { "/v1/messages" => "content", "/v1/responses" => "output", _ => "choices" };
+            var property = endpoint == "/v1/messages" ? "content" : "output";
             if (!root.TryGetProperty(property, out var content) || content.ValueKind != JsonValueKind.Array
                 || content.GetArrayLength() == 0) return false;
             return content.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.Object && (endpoint switch
             {
                 "/v1/messages" => item.TryGetProperty("type", out var type) && type.GetString() is "text" or "tool_use",
                 "/v1/responses" => item.TryGetProperty("type", out var type) && type.GetString() is "message" or "function_call",
-                "/v1/completions" => item.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String,
-                _ => item.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object
-                    && (message.TryGetProperty("content", out _) || message.TryGetProperty("tool_calls", out _))
+                _ => false
             }));
         }
         catch (Exception error) when (error is JsonException or InvalidOperationException) { return false; }

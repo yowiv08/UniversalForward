@@ -45,10 +45,6 @@ public sealed class UniversalForwardRequestHeadersTests
     }
 
     [TestMethod]
-    [DataRow("/v1/chat/completions", false)]
-    [DataRow("/v1/chat/completions", true)]
-    [DataRow("/v1/completions", false)]
-    [DataRow("/v1/completions", true)]
     [DataRow("/v1/responses", false)]
     [DataRow("/v1/responses", true)]
     [DataRow("/v1/messages", false)]
@@ -90,7 +86,7 @@ public sealed class UniversalForwardRequestHeadersTests
             await foreach (var _ in rawStream) { }
     }
     [TestMethod]
-    [DataRow("/v1/chat/completions", "Authorization")]
+    [DataRow("/v1/responses", "Authorization")]
     [DataRow("/v1/messages", "X-Api-Key")]
     public async Task ReplaceHeadersOverrideDefaultAuthentication(string endpoint, string header)
     {
@@ -258,7 +254,7 @@ public sealed class UniversalForwardRequestHeadersTests
 
     private static PluginAttemptContext CreateContext(
         string extraParams,
-        string endpoint = "/v1/chat/completions",
+        string endpoint = "/v1/responses",
         bool stream = false,
         Action<HttpRequestMessage>? inspect = null)
     {

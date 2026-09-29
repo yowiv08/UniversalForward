@@ -345,7 +345,7 @@ public sealed class ChannelKeysTests
         PluginKey = "universalforward", PlatformName = "universalforward", Account = account, HttpClient = client, CancellationToken = CancellationToken.None,
         Request = new AdapterRequest
         {
-            Model = "model", Endpoint = "/v1/chat/completions",
+            Model = "model", Endpoint = "/v1/responses",
             OriginalBody = JsonSerializer.SerializeToElement(new { model = "model", messages = new[] { new { role = "user", content = "OK" } } })
         }
     };

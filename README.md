@@ -32,8 +32,10 @@ Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配�
 
 ## 请求转发
 
-支持 Chat Completions、Completions、Responses 和 Messages 端点，以及普通响应和 SSE 流式响应。
+仅支持 OpenAI Responses `/v1/responses` 和 Anthropic Messages `/v1/messages`，以及普通响应和 SSE 流式响应。
 协议路由选择上游路径和认证方式；请求及响应内容按上游格式透传。
+
+客户端使用 `/v1/models` 返回的完整 `platform/model` 模型 ID。渠道模型填写上游实际接受的 ID；上游也是路由服务时，保留它要求的平台前缀。
 
 - 重试次数：0–10次。
 - 响应异常重试：可分别开启限流与空回重试，共享每请求 0–10 次额度，默认 3 次、间隔 5 秒，遵守上游更长的等待要求。

@@ -22,8 +22,8 @@
     $('responseRetrySettings').hidden = !$('rateLimitRetryEnabled').checked && !$('emptyResponseRetryEnabled').checked;
   }
   for (const name of ['rateLimitRetryEnabled', 'emptyResponseRetryEnabled']) $(name).addEventListener('change', updateResponseRetry);
-  const protocolLabels = { chat: 'Chat Completions', responses: 'Responses', messages: 'Claude Messages', completions: 'Completions' };
-  const paths = ['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'];
+  const protocolLabels = { responses: 'OpenAI Responses', messages: 'Anthropic Messages' };
+  const paths = ['/v1/responses', '/v1/messages'];
   const defaults = { maxRetries: 0, headerTimeoutSeconds: 60, totalTimeoutSeconds: 180, streamIdleTimeoutSeconds: 60,
     responseMaxRetries: 3, responseRetryIntervalSeconds: 5,
     retryStatusCodes: '100-199,300-399,401-407,409-499,500-503,505-523,525-599' };
@@ -318,7 +318,7 @@
     const root = $('modelProtocols'); root.replaceChildren(); $('protocolCount').textContent = modelIds().length;
     if (!modelIds().length) { root.append(el('div', '添加模型后在这里配置协议', 'empty')); return; }
     for (const model of modelIds()) {
-      const configured = modelProtocolDraft[model], value = configured || { protocols: ['chat'], preferredProtocol: 'chat', nativeOnly: false };
+      const configured = modelProtocolDraft[model], value = configured || { protocols: ['responses'], preferredProtocol: 'responses', nativeOnly: false };
       const row = el('div', undefined, 'protocol-row'); row.append(el('strong', model));
       const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = !!configured;
       const label = el('label', undefined, 'inline-check'); label.append(enabled, document.createTextNode('指定支持协议')); row.append(label);

@@ -14,7 +14,7 @@ public sealed class ClientRequestCompatibilityTests
     [TestMethod]
     [DataRow("codex", "/v1/responses")]
     [DataRow("", "/v1/responses")]
-    [DataRow("codex", "/v1/chat/completions")]
+    [DataRow("codex", "/v1/messages")]
     [DataRow("claude", "/v1/messages")]
     [DataRow("claude", "/v1/responses")]
     public async Task NormalInvocationCompletesOnlyMatchingProfileAndPinsRetryBody(string profile, string endpoint)

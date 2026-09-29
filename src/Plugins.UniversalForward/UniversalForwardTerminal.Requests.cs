@@ -24,11 +24,13 @@ public sealed partial class UniversalForwardTerminal
         if (!TryReadReplaceHeaders(ReadExtraParams(settings), out var headers, out var headerError))
             return LocalFailure(headerError);
         byte[] payload;
+        var upstreamModel = ReadModels(context.Account).Contains(context.Request.Model, StringComparer.OrdinalIgnoreCase)
+            ? context.Request.Model : UpstreamModel(context.Request.Model);
         var upstreamEndpoint = context.Request.Endpoint;
         try
         {
             settings.RequestPolicy.Validate();
-            var model = UpstreamModel(context.Request.Model);
+            var model = upstreamModel;
             if (settings.ModelProtocols.TryGetValue(model, out var protocol))
             {
                 upstreamEndpoint = protocol.Select(context.Request.Endpoint);
@@ -36,7 +38,7 @@ public sealed partial class UniversalForwardTerminal
             if (context.Request.OriginalBody is not { ValueKind: JsonValueKind.Object } original)
                 return LocalFailure("请求体必须为 JSON 对象");
             var body = JsonNode.Parse(original.GetRawText())!.AsObject();
-            body["model"] = UpstreamModel(context.Request.Model);
+            body["model"] = upstreamModel;
             payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
         }
         catch (Exception error) when (error is JsonException or FormatException or ArgumentException)
@@ -76,7 +78,7 @@ public sealed partial class UniversalForwardTerminal
                 || profile == "claude" && upstreamEndpoint == "/v1/messages"))
             {
                 resolvedHeaders["Accept"] = "text/event-stream";
-                var testModel = UpstreamModel(context.Request.Model);
+                var testModel = upstreamModel;
                 var testBody = ClientProfiles.TestBody(profile, testModel, resolvedHeaders);
                 payload = JsonSerializer.SerializeToUtf8Bytes(testBody, JsonOptions);
             }

@@ -203,7 +203,7 @@ public sealed class ForwardRetryTests
         },
         Request = new AdapterRequest
         {
-            Model = "universalforward/vendor/model", Endpoint = "/v1/chat/completions", Stream = stream,
+            Model = "universalforward/vendor/model", Endpoint = "/v1/responses", Stream = stream,
             OriginalBody = JsonSerializer.SerializeToElement(new { model = "universalforward/vendor/model", messages = new[] { new { role = "user", content = "test" } } })
         }
     };

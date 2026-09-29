@@ -13,10 +13,47 @@ namespace UniversalForward.Tests;
 public sealed class EndpointRoutingTests
 {
     [TestMethod]
-    [DataRow("/v1/chat/completions", "messages", "/v1/messages", false)]
-    [DataRow("/v1/chat/completions", "messages", "/v1/messages", true)]
+    [DataRow("universalforward/model")]
+    [DataRow("vendor/model")]
+    public async Task HostNormalizedUpstreamModelKeepsItsPlatformPrefix(string upstreamModel)
+    {
+        var client = new Mock<IPluginHttpClient>(MockBehavior.Strict);
+        client.Setup(x => x.SendAsync(It.IsAny<HttpRequestMessage>(), false,
+            HttpCompletionOption.ResponseHeadersRead, It.IsAny<CancellationToken>()))
+            .Returns(async (HttpRequestMessage request, bool _, HttpCompletionOption _, CancellationToken ct) =>
+            {
+                var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!;
+                Assert.AreEqual(upstreamModel, body["model"]!.GetValue<string>());
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                { Content = new StringContent("""{"status":"completed","output":[]}""") };
+            });
+        var context = ForwardResponseHandlingTests.Context(client.Object, "codex", false);
+        var fields = new Dictionary<string, string?>(((CustomCredential)context.Account.Credential).Fields)
+        { ["models"] = JsonSerializer.Serialize(new[] { upstreamModel }) };
+        context.Account.Credential = new CustomCredential(fields);
+        context.Request.Model = upstreamModel;
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        Assert.AreEqual(200, (await terminal.InvokeAsync(context)).Response.StatusCode);
+        Assert.AreEqual(1, client.Invocations.Count);
+    }
+
+    [TestMethod]
+    [DataRow("/v1/chat/completions")]
+    [DataRow("/v1/completions")]
+    public async Task LegacyEndpointsNeverReachUpstream(string endpoint)
+    {
+        var client = new Mock<IPluginHttpClient>(MockBehavior.Strict);
+        var context = ForwardResponseHandlingTests.Context(client.Object, "codex", false);
+        context.Request.Endpoint = endpoint;
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        Assert.AreEqual(400, (await terminal.InvokeAsync(context)).Response.StatusCode);
+        Assert.AreEqual(0, client.Invocations.Count);
+    }
+
+    [TestMethod]
     [DataRow("/v1/responses", "messages", "/v1/messages", false)]
-    [DataRow("/v1/messages", "chat", "/v1/chat/completions", false)]
+    [DataRow("/v1/responses", "messages", "/v1/messages", true)]
+    [DataRow("/v1/messages", "responses", "/v1/responses", false)]
     [DataRow("/v1/messages", "responses", "/v1/responses", true)]
     public async Task SwitchesOnlyEndpointAuthenticationAndModel(string incoming, string protocol, string target, bool stream)
     {

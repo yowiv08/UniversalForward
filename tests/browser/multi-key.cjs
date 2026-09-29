@@ -20,7 +20,7 @@ const html = require('./page-source.cjs')();
       const account = {
         id: 'channel', label: '多 Key 渠道', baseUrl: 'https://example.test/v1',
         enabled: true, weight: 100, models: ['model-a', 'model-b'],
-        endpoints: ['/v1/chat/completions', '/v1/messages'], keyRevision: 7,
+        endpoints: ['/v1/messages'], keyRevision: 7,
         keySelectionMode: 'roundRobin', enabledKeyCount: 2, totalKeyCount: 3,
         keys: [
           { id: 'a', name: 'Alpha', masked: '••••••0001', enabled: true },

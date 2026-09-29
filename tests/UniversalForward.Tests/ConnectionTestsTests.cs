@@ -19,14 +19,14 @@ public sealed class ConnectionTestsTests
     private static readonly string[] PreferredPaths = ["/v1/messages", "/v1/responses"];
 
     [TestMethod]
-    [DataRow("/v1/chat/completions", """{"choices":[{"message":{"content":"OK"}}]}""", true)]
+    [DataRow("/v1/chat/completions", """{"choices":[{"message":{"content":"OK"}}]}""", false)]
     [DataRow("/v1/chat/completions", """{"choices":[{}]}""", false)]
     [DataRow("/v1/messages", """{"content":[{"type":"text","text":"OK"}]}""", true)]
     [DataRow("/v1/responses", """{"status":"completed","output":[{"type":"message"}]}""", true)]
     [DataRow("/v1/responses", """{"status":"completed","error":null,"output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}""", true)]
     [DataRow("/v1/responses", """{"status":"failed","output":[{"type":"message"}]}""", false)]
     [DataRow("/v1/responses", """{"status":"incomplete","output":[{"type":"message"}]}""", false)]
-    [DataRow("/v1/completions", """{"choices":[{"text":"OK"}]}""", true)]
+    [DataRow("/v1/completions", """{"choices":[{"text":"OK"}]}""", false)]
     [DataRow("/v1/messages", """{"error":{"message":"bad"},"content":[{"type":"text"}]}""", false)]
     [DataRow("/v1/chat/completions", "not json", false)]
     public void CompletionShapeMustMatchProtocol(string endpoint, string body, bool expected)
@@ -85,7 +85,7 @@ public sealed class ConnectionTestsTests
         {
             sent++;
             return new HttpResponseMessage(upstreamError ? HttpStatusCode.BadRequest : HttpStatusCode.OK)
-            { Content = new StringContent("""{"choices":[{"message":{"content":"OK"}}]}""") };
+            { Content = new StringContent("""{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}""") };
         });
         Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
             .Returns(() => new HttpClient(handler, false));
@@ -93,7 +93,7 @@ public sealed class ConnectionTestsTests
         var registration = Registration(terminal);
         var progress = new List<JsonElement>();
         var result = await registration.ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
-            JsonSerializer.SerializeToElement(new { accountId = "account", models = Models, endpoint = "/v1/chat/completions" }),
+            JsonSerializer.SerializeToElement(new { accountId = "account", models = Models, endpoint = "/v1/responses" }),
             value => progress.Add(value!.Value), CancellationToken.None));
         var rows = result!.Value.GetProperty("rows");
         Assert.AreEqual(2, sent);
@@ -106,8 +106,8 @@ public sealed class ConnectionTestsTests
 
     [TestMethod]
     [DataRow("data: [DONE]\n\n", false)]
-    [DataRow("data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n", true)]
-    [DataRow("data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n", false)]
+    [DataRow("data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\ndata: {\"type\":\"response.completed\"}\n\n", true)]
+    [DataRow("data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n", false)]
     [DataRow("data: {\"error\":{\"message\":\"failed\"}}\n\ndata: [DONE]\n\n", false)]
     public async Task StreamRequiresProtocolEventAndTerminator(string body, bool expected)
     {
@@ -118,7 +118,7 @@ public sealed class ConnectionTestsTests
             .Returns(() => new HttpClient(handler, false));
         using var terminal = new UniversalForwardTerminal(host);
         var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
-            JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel, endpoint = "/v1/chat/completions", stream = true }),
+            JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel, endpoint = "/v1/responses", stream = true }),
             _ => { }, CancellationToken.None));
         Assert.AreEqual(expected, result!.Value.GetProperty("rows")[0].GetProperty("success").GetBoolean());
         Assert.AreEqual(body, result.Value.GetProperty("rows")[0].GetProperty("response").GetString());
@@ -178,7 +178,7 @@ public sealed class ConnectionTestsTests
         cancelled.Cancel();
         await Assert.ThrowsAsync<OperationCanceledException>(() => Registration(terminal).ExecuteAsync(
             new PluginJobContext("job", "universalforward", "universalforward",
-                JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel, endpoint = "/v1/chat/completions" }),
+                JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel, endpoint = "/v1/responses" }),
                 _ => { }, cancelled.Token)));
         Mock.Get(host.Services.Http).Verify(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()), Times.Never);
     }

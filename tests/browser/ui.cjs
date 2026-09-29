@@ -17,7 +17,7 @@ function hostMock() {
   window.pendingToggle = [];
   window.accounts = [
     { id: 'primary', label: '主力推理渠道', baseUrl: 'https://api.example.test/v1', weight: 100, enabled: true,
-      models: ['gpt-5', 'claude-sonnet'], endpoints: ['/v1/chat/completions', '/v1/responses', '/v1/messages'],
+      models: ['gpt-5', 'claude-sonnet'], endpoints: ['/v1/responses', '/v1/messages'],
       keyRevision: 1, keySelectionMode: 'roundRobin',
       keys: [{ id: 'key-a', name: '主 Key', masked: '••••1234', enabled: true }],
       headerOverride: {}, requestPolicy: { statusCodeMapping: { 429: 503 } } },
@@ -82,7 +82,7 @@ function hostMock() {
     const singleCard = await frame.locator('#cards .channel-card').boundingBox();
     assert.ok(singleCard.width <= 480, 'Single channel must remain a compact card');
     assert.ok(Math.abs(singleCard.width - originalCardWidth) < 1, 'Filtering must not stretch cards');
-    assert.equal(await frame.locator('.channel-endpoints .endpoint-tag').count(), 3);
+    assert.equal(await frame.locator('.channel-endpoints .endpoint-tag').count(), 2);
     assert.match(await frame.locator('.channel-model-heading').innerText(), /已配置模型.*2 个/s);
     await page.screenshot({ path: path.join(output, 'ui-channel-card-desktop.png') });
     await frame.locator('#filter').fill('');
@@ -197,7 +197,7 @@ function hostMock() {
     await frame.locator('#syncProtocols').click();
     assert.match(await frame.locator('#protocolStatus').innerText(), /已同步 1/);
     await frame.locator('#modelProtocols input[type=checkbox]').first().check();
-    await frame.locator('#modelProtocols').getByLabel('Claude Messages', { exact: true }).check();
+    await frame.locator('#modelProtocols').getByLabel('Anthropic Messages', { exact: true }).check();
     await frame.locator('#modelProtocols').getByLabel('discovered-a 首选协议').selectOption('messages');
     await page.evaluate(() => { window.failDiscovery = true; });
     await frame.locator('#discover').click();

@@ -19,8 +19,6 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
     private static readonly TimeSpan ModelCacheTtl = TimeSpan.FromDays(30);
     internal static readonly string[] SupportedEndpoints =
     [
-        "/v1/chat/completions",
-        "/v1/completions",
         "/v1/responses",
         "/v1/messages"
     ];
@@ -96,12 +94,15 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
     private static List<ChannelKey> ReadKeys(ForwardApiSettings settings) => ChannelKeys.Read(settings.Keys, settings.ApiKey);
     private bool IsAccountEligible(Account account, AdapterRequest request)
     {
+        if (!SupportedEndpoints.Contains(NormalizeEndpoint(request.Endpoint), StringComparer.OrdinalIgnoreCase))
+            return false;
         var policy = GetAccountModelPolicy(account);
         if (policy is null || !policy.Enabled)
             return false;
         if (!policy.Endpoints.Contains(NormalizeEndpoint(request.Endpoint), StringComparer.OrdinalIgnoreCase))
             return false;
-        return policy.Models.Contains(UpstreamModel(request.Model), StringComparer.OrdinalIgnoreCase);
+        return policy.Models.Contains(request.Model, StringComparer.OrdinalIgnoreCase)
+            || policy.Models.Contains(UpstreamModel(request.Model), StringComparer.OrdinalIgnoreCase);
     }
     private AccountModelPolicy? GetAccountModelPolicy(Account account)
     {
