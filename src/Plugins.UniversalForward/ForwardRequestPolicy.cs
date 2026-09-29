@@ -3,6 +3,10 @@ namespace Plugins.UniversalForward;
 public sealed class ForwardRequestPolicy
 {
     public int MaxRetries { get; set; }
+    public bool RateLimitRetryEnabled { get; set; }
+    public bool EmptyResponseRetryEnabled { get; set; }
+    public int ResponseMaxRetries { get; set; } = 3;
+    public int ResponseRetryIntervalSeconds { get; set; } = 5;
     public string RetryStatusCodes { get; set; } = ForwardRetryRules.DefaultCodes;
     public int HeaderTimeoutSeconds { get; set; } = 60;
     public int TotalTimeoutSeconds { get; set; } = 180;
@@ -11,6 +15,8 @@ public sealed class ForwardRequestPolicy
 
     internal void Validate()
     {
+        if (ResponseMaxRetries is < 0 or > 10 || ResponseRetryIntervalSeconds is < 1 or > 3600)
+            throw new FormatException("响应异常重试次数必须为 0–10，间隔必须为 1–3600 秒。");
         if (MaxRetries is < 0 or > 10)
             throw new FormatException("重试次数必须为 0–10。");
         if (HeaderTimeoutSeconds is < 1 or > 3600 || TotalTimeoutSeconds is < 1 or > 3600

@@ -107,6 +107,44 @@ public sealed class ForwardResponseHandlingTests
     }
 
     [TestMethod]
+    [DataRow(429, true)]
+    [DataRow(429, false)]
+    [DataRow(500, true)]
+    [DataRow(500, false)]
+    public async Task JsonRateLimitErrorIsNotAdvertisedAsAnEventStream(int status, bool stream)
+    {
+        const string error = """{"error":{"message":"rate limit exceeded: token rate limit","type":"rate_limit_error","code":"rate_limit_exceeded"}}""";
+        var client = Client(_ => Task.FromResult(new HttpResponseMessage((HttpStatusCode)status)
+        {
+            Content = new StringContent(error, Encoding.UTF8, "text/event-stream")
+        }));
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(Context(client.Object, "codex", stream));
+        Assert.AreEqual(status, result.Response.StatusCode);
+        Assert.AreEqual("application/json", result.Response.ContentType);
+        Assert.IsFalse(result.Response.IsStreaming);
+        Assert.IsNull(result.Response.RawStream);
+        Assert.AreEqual(error, Encoding.UTF8.GetString(result.Response.RawContent!));
+        Assert.AreEqual(1, client.Invocations.Count);
+    }
+
+    [TestMethod]
+    public async Task StreamingRateLimitEventReachesClientUnchangedWithoutReplay()
+    {
+        const string frames = "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"token rate limit\",\"code\":\"rate_limit_exceeded\"}}\n\n";
+        var client = Client(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(frames, Encoding.UTF8, "text/event-stream")
+        }));
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(Context(client.Object, "codex", true, 2));
+        using var bytes = new MemoryStream();
+        await foreach (var chunk in result.Response.RawStream!) await bytes.WriteAsync(chunk);
+        Assert.AreEqual(frames, Encoding.UTF8.GetString(bytes.ToArray()));
+        Assert.AreEqual(1, client.Invocations.Count);
+    }
+
+    [TestMethod]
     [DataRow("data: {\"type\":\"response.created\"}\n\n", 502)]
     [DataRow("data: {\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}\n\n", 502)]
     [DataRow("", 502)]
@@ -173,10 +211,11 @@ public sealed class ForwardResponseHandlingTests
         return client;
     }
 
-    private static PluginAttemptContext Context(IPluginHttpClient client, string profile, bool stream, int retries = 0) => new()
+    internal static PluginAttemptContext Context(IPluginHttpClient client, string profile, bool stream, int retries = 0,
+        ForwardRequestPolicy? policy = null, CancellationToken cancellation = default) => new()
     {
         PluginKey = "universalforward", PlatformName = "universalforward", HttpClient = client,
-        CancellationToken = CancellationToken.None, TraceId = "trace",
+        CancellationToken = cancellation, TraceId = "trace",
         Account = new Account
         {
             Id = "channel", PluginKey = "universalforward", Platform = "universalforward",
@@ -187,7 +226,7 @@ public sealed class ForwardResponseHandlingTests
                     baseUrl = "https://upstream.example", apiKey = "channel-secret",
                     headerOverride = profile == "codex" ? new Dictionary<string, string> { ["Originator"] = "codex_exec" }
                         : new Dictionary<string, string> { ["x-app"] = "cli", ["anthropic-beta"] = "claude-code-20250219" },
-                    requestPolicy = new ForwardRequestPolicy { MaxRetries = retries }
+                    requestPolicy = policy ?? new ForwardRequestPolicy { MaxRetries = retries }
                 }),
                 ["models"] = """["model"]""", ["modelsConfigured"] = "true"
             })

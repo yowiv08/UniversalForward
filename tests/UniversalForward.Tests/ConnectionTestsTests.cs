@@ -23,6 +23,7 @@ public sealed class ConnectionTestsTests
     [DataRow("/v1/chat/completions", """{"choices":[{}]}""", false)]
     [DataRow("/v1/messages", """{"content":[{"type":"text","text":"OK"}]}""", true)]
     [DataRow("/v1/responses", """{"status":"completed","output":[{"type":"message"}]}""", true)]
+    [DataRow("/v1/responses", """{"status":"completed","error":null,"output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}""", true)]
     [DataRow("/v1/responses", """{"status":"failed","output":[{"type":"message"}]}""", false)]
     [DataRow("/v1/responses", """{"status":"incomplete","output":[{"type":"message"}]}""", false)]
     [DataRow("/v1/completions", """{"choices":[{"text":"OK"}]}""", true)]
@@ -120,6 +121,52 @@ public sealed class ConnectionTestsTests
             JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel, endpoint = "/v1/chat/completions", stream = true }),
             _ => { }, CancellationToken.None));
         Assert.AreEqual(expected, result!.Value.GetProperty("rows")[0].GetProperty("success").GetBoolean());
+        Assert.AreEqual(body, result.Value.GetProperty("rows")[0].GetProperty("response").GetString());
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task StreamErrorKeepsActualRateLimitMessage(bool buffer)
+    {
+        var host = Host();
+        if (buffer)
+        {
+            var account = await host.Services.Accounts.GetAsync("account", CancellationToken.None);
+            var fields = new Dictionary<string, string?>(((CustomCredential)account!.Credential).Fields);
+            var settings = System.Text.Json.Nodes.JsonNode.Parse(fields["settings"]!)!;
+            settings["requestPolicy"] = System.Text.Json.Nodes.JsonNode.Parse(
+                """{"rateLimitRetryEnabled":true,"responseMaxRetries":0}""");
+            fields["settings"] = settings.ToJsonString();
+            account.Credential = new CustomCredential(fields);
+        }
+        using var handler = new ReplyHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"rate limit exceeded: token rate limit\"}}\n\n",
+                Encoding.UTF8, "text/event-stream")
+        });
+        Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
+            .Returns(() => new HttpClient(handler, false));
+        using var terminal = new UniversalForwardTerminal(host);
+        var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
+            JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel, endpoint = "/v1/responses", stream = true }),
+            _ => { }, CancellationToken.None));
+        var row = result!.Value.GetProperty("rows")[0];
+        Assert.IsFalse(row.GetProperty("success").GetBoolean());
+        Assert.AreEqual("rate limit exceeded: token rate limit", row.GetProperty("error").GetString());
+        Assert.AreEqual("event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"rate limit exceeded: token rate limit\"}}\n\n",
+            row.GetProperty("response").GetString());
+    }
+
+    [TestMethod]
+    [DataRow("""{"type":"response.failed","response":{"error":{"message":"token rate limit"}}}""", "token rate limit")]
+    [DataRow("""{"type":"error","code":"rate_limit_exceeded","message":"token rate limit"}""", "token rate limit")]
+    [DataRow("""{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}""", "上游响应未完成：max_output_tokens")]
+    [DataRow("""{"type":"response.created","response":{"error":null}}""", null)]
+    public void ReadsNestedAndTopLevelStreamErrors(string json, string? expected)
+    {
+        using var doc = JsonDocument.Parse(json);
+        Assert.AreEqual(expected, UniversalForwardTerminal.ReadStreamError(doc.RootElement));
     }
 
     [TestMethod]

@@ -28,3 +28,6 @@ dialog{border:1px solid #dfe6f2;border-radius:16px;padding:0;color:inherit;backg
 .channel-card>.actions button{padding:7px 11px;border-radius:8px}
 .channel-card>.actions .danger{margin-left:0;border:1px solid #f6dfe3;background:#fff8f9}
 @media(max-width:560px){.channel-card{padding:18px;max-width:none}.channel-title h3{font-size:17px}.channel-meta{gap:8px 12px}.channel-card>.actions button{padding:7px 10px}}
+:root .response-retry-card { border: 1px solid var(--border, #dce2eb); border-radius: 12px; padding: 16px; margin: 16px 0; }
+.response-retry-toggle { display: inline-flex; align-items: center; gap: 8px; margin: 8px 24px 8px 0; }
+.response-retry-note { font-size: 12px; line-height: 1.7; color: var(--muted, #64748b); }

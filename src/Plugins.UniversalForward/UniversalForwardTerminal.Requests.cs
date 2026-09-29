@@ -58,6 +58,9 @@ public sealed partial class UniversalForwardTerminal
         total.CancelAfter(TimeSpan.FromSeconds(policy.TotalTimeoutSeconds));
         var transferred = false;
         HttpResponseMessage? response = null;
+        AdapterResponse? lastRateLimit = null;
+        var anomalyRetries = 0;
+        var bufferResponses = policy.RateLimitRetryEnabled || policy.EmptyResponseRetryEnabled;
         var watch = Stopwatch.StartNew();
         try
         {
@@ -95,7 +98,7 @@ public sealed partial class UniversalForwardTerminal
             }
             var targetEndpoint = profile == "claude" && upstreamEndpoint == "/v1/messages"
                 ? upstreamEndpoint + "?beta=true" : upstreamEndpoint;
-            for (var attempt = 0; attempt <= policy.MaxRetries; attempt++)
+            for (var attempt = 0; ;)
             {
                 total.Token.ThrowIfCancellationRequested();
                 using var request = new HttpRequestMessage(HttpMethod.Post, BuildUri(settings.BaseUrl, targetEndpoint))
@@ -115,12 +118,72 @@ public sealed partial class UniversalForwardTerminal
                     total.Token.ThrowIfCancellationRequested();
                     await TryLogAsync("request.transport.failed", error.Message, "Error", context.TraceId,
                         context.Account.Id, context.Request.Model, details: new { keyId = selectedKey.Id, keyName = selectedKey.Name, strategy = settings.KeySelectionMode, attempt, retry = attempt < policy.MaxRetries });
-                    if (attempt < policy.MaxRetries) continue;
+                    if (attempt < policy.MaxRetries) { attempt++; continue; }
                     return Completed(RawResponse(error is OperationCanceledException ? 504 : 502,
                         JsonSerializer.SerializeToUtf8Bytes(new { error = error.Message }), "application/json"), 0);
                 }
                 var originalCode = (int)response.StatusCode;
-                if (rules.Contains(originalCode) && attempt < policy.MaxRetries)
+                var skipOrdinaryRetry = false;
+                if (bufferResponses)
+                {
+                    var originalContentType = response.Content.Headers.ContentType?.ToString();
+                    var type = originalContentType ?? "application/json";
+                    var sse = type.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase);
+                    var buffered = await BufferResponseAsync(response, policy.StreamIdleTimeoutSeconds, total.Token);
+                    var bytesRead = buffered.Bytes;
+                    var blank = bytesRead.All(x => x is 9 or 10 or 13 or 32);
+                    var looksJson = Encoding.UTF8.GetString(bytesRead).TrimStart().StartsWith('{');
+                    var analysis = sse || looksJson || response.IsSuccessStatusCode
+                        ? ForwardResponseAnalysis.Read(bytesRead, sse, buffered.Interrupted)
+                        : new ForwardResponseAnalysis();
+                    var limited = !analysis.PermanentError && (originalCode == 429 || analysis.RateLimited);
+                    var empty = !analysis.HasError && response.IsSuccessStatusCode
+                        && (blank || sse && !analysis.Terminal || buffered.Interrupted);
+                    var retryKind = limited && policy.RateLimitRetryEnabled ? "rate_limit"
+                        : empty && !analysis.HasOutput && policy.EmptyResponseRetryEnabled ? "empty_response" : null;
+                    skipOrdinaryRetry = analysis.PermanentError || retryKind != null;
+                    if (limited && policy.RateLimitRetryEnabled && !buffered.Interrupted)
+                        lastRateLimit = RawResponse(originalCode, bytesRead, originalContentType);
+                    total.Token.ThrowIfCancellationRequested();
+                    if (retryKind != null)
+                    {
+                        var delay = ResponseRetryDelay(response, policy.ResponseRetryIntervalSeconds, limited);
+                        var remaining = TimeSpan.FromSeconds(policy.TotalTimeoutSeconds) - watch.Elapsed;
+                        var retry = anomalyRetries < policy.ResponseMaxRetries && delay < remaining;
+                        await TryLogAsync("request.response.retry", retryKind, traceId: context.TraceId,
+                            accountId: context.Account.Id, model: context.Request.Model, statusCode: originalCode,
+                            details: new { kind = retryKind, analysis.State, analysis.IncompleteReason, analysis.HasOutput, analysis.HasUsage,
+                                retryNumber = anomalyRetries, waitSeconds = delay.TotalSeconds,
+                                reason = retry ? "retry" : anomalyRetries >= policy.ResponseMaxRetries ? "exhausted" : "deadline" });
+                        if (!retry)
+                        {
+                            if (limited && lastRateLimit != null)
+                                return Completed(lastRateLimit, lastRateLimit.StatusCode);
+                            return ResponseAnomalyFailure(buffered.Interrupted ? "stream_interrupted"
+                                : blank ? "empty_response" : "missing_terminal");
+                        }
+                        anomalyRetries++;
+                        response.Dispose(); response = null;
+                        await Task.Delay(delay, total.Token);
+                        continue;
+                    }
+                    if (buffered.Interrupted || empty && analysis.HasOutput)
+                        return ResponseAnomalyFailure("stream_interrupted");
+                    if (empty)
+                        return ResponseAnomalyFailure(blank ? "empty_response" : "missing_terminal");
+                    await TryLogAsync("request.response.analyzed", analysis.State, traceId: context.TraceId,
+                        accountId: context.Account.Id, model: context.Request.Model, statusCode: originalCode,
+                        details: new { analysis.State, analysis.IncompleteReason, analysis.HasOutput, analysis.HasUsage,
+                            analysis.HasError, analysis.RateLimited, retries = anomalyRetries });
+                    if (analysis.HasError && response.IsSuccessStatusCode)
+                        return Completed(RawResponse(policy.Map(originalCode), bytesRead, type), originalCode);
+                    var replacement = new ByteArrayContent(bytesRead);
+                    foreach (var header in response.Content.Headers)
+                        replacement.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    response.Content.Dispose();
+                    response.Content = replacement;
+                }
+                if (!skipOrdinaryRetry && rules.Contains(originalCode) && attempt < policy.MaxRetries)
                 {
                     response.Dispose(); response = null;
                     await TryLogAsync("request.retry", $"HTTP {originalCode}，重试同一上游", traceId: context.TraceId,
@@ -128,6 +191,7 @@ public sealed partial class UniversalForwardTerminal
                         details: new { keyId = selectedKey.Id, keyName = selectedKey.Name, strategy = settings.KeySelectionMode, attempt, retryNumber = attempt + 1 });
                     if (originalCode == 520)
                         await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(2000, 250 * (1 << Math.Min(attempt, 3)))), total.Token);
+                    attempt++;
                     continue;
                 }
                 var mappedCode = policy.Map(originalCode);
@@ -165,6 +229,8 @@ public sealed partial class UniversalForwardTerminal
                     return Completed(result, originalCode);
                 }
                 var bytes = await response.Content.ReadAsByteArrayAsync(total.Token);
+                if (!response.IsSuccessStatusCode && IsJsonError(bytes))
+                    contentType = "application/json";
                 if (!response.IsSuccessStatusCode && bytes.Length == 0)
                 {
                     bytes = JsonSerializer.SerializeToUtf8Bytes(new { error = new
@@ -183,17 +249,17 @@ public sealed partial class UniversalForwardTerminal
                     Usage = response.IsSuccessStatusCode ? TryReadUsage(bytes) : null
                 };
                 if (!response.IsSuccessStatusCode)
-                    await TryLogAsync("request.upstream.failed", Encoding.UTF8.GetString(bytes), "Error",
+                    await TryLogAsync("request.upstream.failed", bufferResponses ? $"HTTP {originalCode}" : Encoding.UTF8.GetString(bytes), "Error",
                         context.TraceId, context.Account.Id, context.Request.Model, originalCode);
                 return Completed(output, originalCode);
             }
-            throw new InvalidOperationException("重试预算无效");
         }
         catch (OperationCanceledException) when (!context.CancellationToken.IsCancellationRequested)
         {
+            if (lastRateLimit != null) return Completed(lastRateLimit, lastRateLimit.StatusCode);
             return Completed(RawResponse(504, JsonSerializer.SerializeToUtf8Bytes(new { error = "请求总时限已耗尽" }), "application/json"), 0);
         }
-        catch (Exception error) when (error is IOException or HttpRequestException or DecoderFallbackException)
+        catch (Exception error) when (error is IOException or HttpRequestException or DecoderFallbackException or InvalidDataException)
         {
             await TryLogAsync("request.body.failed", error.Message, "Error", context.TraceId, context.Account.Id,
                 context.Request.Model, 502);
@@ -211,11 +277,77 @@ public sealed partial class UniversalForwardTerminal
         }
     }
 
+    private static PluginInvocationResult ResponseAnomalyFailure(string code)
+        => Completed(RawResponse(502, JsonSerializer.SerializeToUtf8Bytes(new { error = new
+        {
+            code, type = "upstream_error", message = code switch
+            {
+                "empty_response" => "上游响应为空",
+                "missing_terminal" => "上游流缺少结束事件",
+                _ => "上游响应流异常中断"
+            }
+        } }), "application/json"), 502);
+
+    internal static TimeSpan ResponseRetryDelay(HttpResponseMessage response, int seconds, bool rateLimited)
+    {
+        var delay = TimeSpan.FromSeconds(seconds);
+        if (!rateLimited) return delay;
+        if (response.Headers.RetryAfter is { } hint)
+        {
+            var value = hint.Delta ?? (hint.Date - DateTimeOffset.UtcNow);
+            if (value > delay) delay = value.Value;
+        }
+        if (response.Headers.TryGetValues("retry-after-ms", out var values)
+            && double.TryParse(values.FirstOrDefault(), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var ms)
+            && double.IsFinite(ms) && ms > delay.TotalMilliseconds)
+            delay = TimeSpan.FromMilliseconds(Math.Min(ms, TimeSpan.FromDays(365).TotalMilliseconds));
+        return delay;
+    }
+
+    private static async Task<(byte[] Bytes, bool Interrupted)> BufferResponseAsync(
+        HttpResponseMessage response, int idleSeconds, CancellationToken token)
+    {
+        using var output = new MemoryStream();
+        try
+        {
+            var stream = await response.Content.ReadAsStreamAsync(token);
+            var buffer = new byte[16384];
+            while (true)
+            {
+                using var idle = CancellationTokenSource.CreateLinkedTokenSource(token);
+                idle.CancelAfter(TimeSpan.FromSeconds(idleSeconds));
+                var count = await stream.ReadAsync(buffer, idle.Token);
+                if (count == 0) return (output.ToArray(), false);
+                if (output.Length + count > 32 * 1024 * 1024)
+                    throw new InvalidDataException("上游响应超过 32 MiB");
+                output.Write(buffer, 0, count);
+            }
+        }
+        catch (InvalidDataException) { throw; }
+        catch (Exception error) when (error is IOException or HttpRequestException or OperationCanceledException)
+        {
+            token.ThrowIfCancellationRequested();
+            return (output.ToArray(), true);
+        }
+    }
+
     private static string? ResponseHeader(HttpResponseMessage response, string name)
     {
         if (!response.Headers.TryGetValues(name, out var values)) return null;
         var value = string.Join(", ", values).ReplaceLineEndings(" ");
         return value[..Math.Min(256, value.Length)];
+    }
+
+    private static bool IsJsonError(byte[] bytes)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(bytes);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null;
+        }
+        catch (JsonException) { return false; }
     }
 
     private static PluginInvocationResult LocalFailure(string error)

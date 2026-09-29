@@ -18,9 +18,14 @@
     return window.Router2API.request(method, path, body);
   };
   const keyModes = { roundRobin: '轮询', random: '随机', priority: '主备顺序' };
+  function updateResponseRetry() {
+    $('responseRetrySettings').hidden = !$('rateLimitRetryEnabled').checked && !$('emptyResponseRetryEnabled').checked;
+  }
+  for (const name of ['rateLimitRetryEnabled', 'emptyResponseRetryEnabled']) $(name).addEventListener('change', updateResponseRetry);
   const protocolLabels = { chat: 'Chat Completions', responses: 'Responses', messages: 'Claude Messages', completions: 'Completions' };
   const paths = ['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'];
   const defaults = { maxRetries: 0, headerTimeoutSeconds: 60, totalTimeoutSeconds: 180, streamIdleTimeoutSeconds: 60,
+    responseMaxRetries: 3, responseRetryIntervalSeconds: 5,
     retryStatusCodes: '100-199,300-399,401-407,409-499,500-503,505-523,525-599' };
   const templates = {
     codex: {
@@ -177,6 +182,8 @@
     candidates = account?.availableModels || [];
     $('keySelectionMode').value = account?.keySelectionMode || 'roundRobin';
     for (const [name, fallback] of Object.entries(defaults)) form.elements[name].value = account?.requestPolicy?.[name] ?? fallback;
+    for (const name of ['rateLimitRetryEnabled', 'emptyResponseRetryEnabled']) form.elements[name].checked = account?.requestPolicy?.[name] ?? false;
+    updateResponseRetry();
     headerRows = Object.entries(account?.headerOverride || {}).map(([name, value]) => ({ name, value }));
     headerMode = 'visual'; $('headerOverride').value = JSON.stringify(account?.headerOverride || {}, null, 2);
     mappingRows = Object.entries(account?.requestPolicy?.statusCodeMapping || {}).map(([from, to]) => ({ from, to: String(to) }));
@@ -472,6 +479,7 @@
       try { headerOverride = readHeaders(); } catch (e) { fail(e.message, 'headers'); }
       try { statusCodeMapping = readMapping(); } catch (e) { fail(e.message, 'policy'); }
       const requestPolicy = { statusCodeMapping };
+      for (const name of ['rateLimitRetryEnabled', 'emptyResponseRetryEnabled']) requestPolicy[name] = form.elements[name].checked;
       for (const name of Object.keys(defaults)) requestPolicy[name] = name === 'retryStatusCodes' ? form.elements[name].value : Number(form.elements[name].value);
       saving = true; $('save').disabled = true; $('save').textContent = '保存中…';
       const saved = await api('POST', 'accounts/save', {
@@ -508,7 +516,9 @@
         `${r.keyName || r.keyId || '按策略'} · ${r.cancelled ? '已取消' : r.success ? '成功' : '失败'} · ${r.originalStatus ?? '—'} → ${r.mappedStatus ?? '—'} · ${r.durationMs ?? '—'}ms · 重试 ${r.retries ?? 0}次`, 'result-line'));
       const ops = el('td'), run = button('测试', () => startTests([model])); run.disabled = testBusy(); ops.append(run);
       if (results.length) ops.append(button('详情', () => {
-        $('testDetails').textContent = JSON.stringify(results, null, 2); $('testDetails').parentElement.open = true;
+        $('testDetails').textContent = results.map(r =>
+          `${r.keyName || r.keyId || '按策略'}\n${r.response ?? r.error ?? '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
+        ).join('\n\n'); $('testDetails').parentElement.open = true;
       }, 'text-button'));
       row.append(cell, el('td', model), el('td', state), summaryCell, ops); root.append(row);
     }

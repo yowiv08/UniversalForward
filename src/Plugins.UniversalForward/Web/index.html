@@ -69,6 +69,19 @@
             <div class="section-heading"><h3>重试与映射</h3><p>设置请求时限、重试条件和返回状态</p></div>
             <div class="field-row"><div class="field"><label for="maxRetries">重试次数</label><input id="maxRetries" name="maxRetries" type="number" min="0" max="10" value="0" required><small>0–10次</small></div><div class="field"><label for="headerTimeoutSeconds">响应头超时</label><div class="input-unit"><input id="headerTimeoutSeconds" name="headerTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div></div><div class="field"><label for="totalTimeoutSeconds">总时限</label><div class="input-unit"><input id="totalTimeoutSeconds" name="totalTimeoutSeconds" type="number" min="1" max="3600" value="180" required><span>秒</span></div></div><div class="field"><label for="streamIdleTimeoutSeconds">流空闲超时</label><div class="input-unit"><input id="streamIdleTimeoutSeconds" name="streamIdleTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div></div></div>
             <div class="field"><label for="retryStatusCodes">自动重试状态码</label><input id="retryStatusCodes" name="retryStatusCodes" placeholder="例如 429,500-503"><small>用逗号分隔状态码或区间</small></div>
+            <section class="response-retry-card" aria-labelledby="responseRetryTitle">
+              <div class="section-heading"><h4 id="responseRetryTitle">响应异常重试</h4><p>等待上游恢复，成功后返回完整结果</p></div>
+              <label class="response-retry-toggle"><input type="checkbox" id="rateLimitRetryEnabled" name="rateLimitRetryEnabled">限流重试</label>
+              <label class="response-retry-toggle"><input type="checkbox" id="emptyResponseRetryEnabled" name="emptyResponseRetryEnabled">空回重试</label>
+              <p class="response-retry-note">空回仅在没有生成输出时重试，仍可能重复上游执行和计费。</p>
+              <div id="responseRetrySettings" hidden>
+                <div class="field-row">
+                  <div class="field"><label for="responseMaxRetries">最大重试次数</label><input id="responseMaxRetries" name="responseMaxRetries" type="number" min="0" max="10" value="3" required><small>0–10 次，限流与空回共享次数</small></div>
+                  <div class="field"><label for="responseRetryIntervalSeconds">重试间隔</label><div class="input-unit"><input id="responseRetryIntervalSeconds" name="responseRetryIntervalSeconds" type="number" min="1" max="3600" value="5" required><span>秒</span></div></div>
+                </div>
+                <p class="response-retry-note">每个请求独立计数，重试使用同一 Key。启用后不实时输出，等待与重试计入总时限。限流次数耗尽返回上游原文。</p>
+              </div>
+            </section>
             <div class="between editor-toolbar"><h4>状态码映射</h4><div class="segmented" role="group" aria-label="状态码映射编辑模式"><button type="button" id="mappingVisual" aria-pressed="true">可视化</button><button type="button" id="mappingJson" aria-pressed="false">JSON</button></div></div>
             <div id="mappingVisualPane"><div id="mappingRows"></div><button type="button" id="mappingAdd" class="add-row">＋ 添加映射</button></div>
             <div id="mappingJsonPane" hidden><label class="sr-only" for="statusCodeMapping">状态码映射 JSON</label><textarea id="statusCodeMapping" name="statusCodeMapping" class="code-editor" rows="7" spellcheck="false">{}</textarea><button id="mappingFormat" type="button" class="text-button">格式化</button></div>

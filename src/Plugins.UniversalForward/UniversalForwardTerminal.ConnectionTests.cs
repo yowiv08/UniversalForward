@@ -99,6 +99,7 @@ public sealed partial class UniversalForwardTerminal
             var sends = 0;
             var keyId = requestedKeyId;
             string? keyName = null;
+            ConnectionTestClient? captureClient = null;
             try
             {
                 var account = await _host.Accounts.GetAsync(input.AccountId, job.CancellationToken)
@@ -109,7 +110,8 @@ public sealed partial class UniversalForwardTerminal
                 var endpoint = TestEndpoint(settings, model, input.Endpoint);
                 using var http = _host.Http.CreateDirectClient(new PluginHttpClientOptions { AllowAutoRedirect = false });
                 http.Timeout = Timeout.InfiniteTimeSpan;
-                var client = new ConnectionTestClient(http, () => sends++, keyId);
+                using var client = new ConnectionTestClient(http, () => sends++, keyId);
+                captureClient = client;
                 var body = CreateTestBody(model, endpoint, input.Stream);
                 var result = await InvokeAsync(new PluginAttemptContext
                 {
@@ -126,7 +128,12 @@ public sealed partial class UniversalForwardTerminal
                 string? error = null;
                 try
                 {
-                    if (result.Response.RawStream is { } stream)
+                    var responseStream = result.Response.RawStream;
+                    if (responseStream is null && result.Response.RawContent is { } cached
+                        && result.Response.ContentType?.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase) == true
+                        && !IsJsonError(cached))
+                        responseStream = CachedTestStream(cached);
+                    if (responseStream is { } stream)
                     {
                         var decoder = new UTF8Encoding(false, true).GetDecoder();
                         var pending = new StringBuilder();
@@ -167,20 +174,20 @@ public sealed partial class UniversalForwardTerminal
                                 if (validEvent) firstEventMs ??= watch.ElapsedMilliseconds;
                                 terminal |= endpoint == "/v1/messages" && type == "message_stop"
                                     || endpoint == "/v1/responses" && type == "response.completed";
-                                protocolError |= root.TryGetProperty("error", out _)
+                                protocolError |= root.TryGetProperty("error", out var upstreamError) && upstreamError.ValueKind != JsonValueKind.Null
                                     || type is "error" or "response.failed" or "response.incomplete";
+                                error ??= ReadStreamError(root);
                             }
                             pending.Clear().Append(text);
                         }
                         decoder.GetChars([], new char[2], true);
                         valid = terminal && recognized && !protocolError && string.IsNullOrWhiteSpace(pending.ToString());
-                        if (!valid) error = "流缺少完成事件或上游报告错误";
+                        if (!valid) error ??= "流缺少完成事件或上游报告错误";
                     }
                     else
                     {
                         valid = IsTestCompletion(result.Response.RawContent, endpoint);
-                        if (!valid) error = result.Response.RawContent is { } raw
-                            ? Encoding.UTF8.GetString(raw.AsSpan(0, Math.Min(raw.Length, 2048))) : result.Response.Error;
+                        if (!valid) error = "上游响应未正常完成，请查看原始响应";
                     }
                 }
                 finally { if (result.Response.Lifetime is { } lifetime) await lifetime.DisposeAsync(); }
@@ -189,14 +196,16 @@ public sealed partial class UniversalForwardTerminal
                 {
                     model, keyId, keyName, endpoint, success = status is >= 200 and < 300 && valid,
                     originalStatus = status, mappedStatus = result.Response.StatusCode,
-                    durationMs = watch.ElapsedMilliseconds, firstEventMs, retries = Math.Max(0, sends - 1), error
+                    durationMs = watch.ElapsedMilliseconds, firstEventMs, retries = Math.Max(0, sends - 1), error,
+                    response = client.RawBody, responseTruncated = client.Truncated
                 });
             }
             catch (OperationCanceledException) when (job.CancellationToken.IsCancellationRequested) { throw; }
             catch (Exception error)
             {
                 rows.Add(new { model, keyId, keyName, success = false, durationMs = watch.ElapsedMilliseconds,
-                    firstEventMs, retries = Math.Max(0, sends - 1), error = error.Message });
+                    firstEventMs, retries = Math.Max(0, sends - 1), error = error.Message,
+                    response = captureClient?.RawBody, responseTruncated = captureClient?.Truncated ?? false });
             }
             job.ReportProgress(JsonSerializer.SerializeToElement(new
             { completed = rows.Count, total = input.Models.Length * keyIds.Length, rows }, JsonOptions));
@@ -209,6 +218,13 @@ public sealed partial class UniversalForwardTerminal
             ? ModelProtocolOptions.Endpoint(options.PreferredProtocol)
             : settings.Endpoints.Contains("/v1/chat/completions") ? "/v1/chat/completions"
             : settings.Endpoints.FirstOrDefault() ?? throw new FormatException("渠道没有允许端点"));
+
+    private static async IAsyncEnumerable<ReadOnlyMemory<byte>> CachedTestStream(byte[] bytes)
+    {
+        await Task.CompletedTask;
+        for (var offset = 0; offset < bytes.Length; offset += 16384)
+            yield return bytes.AsMemory(offset, Math.Min(16384, bytes.Length - offset));
+    }
 
     internal static JsonElement CreateTestBody(string model, string endpoint, bool stream)
         => JsonSerializer.SerializeToElement(endpoint switch
@@ -225,7 +241,8 @@ public sealed partial class UniversalForwardTerminal
         {
             using var doc = JsonDocument.Parse(bytes);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || root.TryGetProperty("error", out _)) return false;
+            if (root.ValueKind != JsonValueKind.Object
+                || root.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null) return false;
             if (endpoint == "/v1/responses"
                 && (!root.TryGetProperty("status", out var status) || status.GetString() != "completed"))
                 return false;
@@ -244,6 +261,32 @@ public sealed partial class UniversalForwardTerminal
         catch (Exception error) when (error is JsonException or InvalidOperationException) { return false; }
     }
 
+    internal static string? ReadStreamError(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        if (root.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null)
+            return ErrorText(error);
+        if (root.TryGetProperty("response", out var response) && response.ValueKind == JsonValueKind.Object)
+        {
+            if (response.TryGetProperty("error", out error) && error.ValueKind != JsonValueKind.Null)
+                return ErrorText(error);
+            if (response.TryGetProperty("incomplete_details", out var details) && details.ValueKind == JsonValueKind.Object
+                && details.TryGetProperty("reason", out var reason))
+                return "上游响应未完成：" + reason.ToString();
+        }
+        if (root.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String
+            && type.GetString() == "error")
+            return ErrorText(root);
+        return null;
+    }
+
+    private static string ErrorText(JsonElement error)
+    {
+        var text = error.ValueKind == JsonValueKind.Object && error.TryGetProperty("message", out var message)
+            ? message.ToString() : error.ToString();
+        return text[..Math.Min(text.Length, 2048)];
+    }
+
     private sealed class ConnectionTestInput
     {
         public string AccountId { get; init; } = "";
@@ -255,17 +298,65 @@ public sealed partial class UniversalForwardTerminal
         public string?[]? KeyIds { get; init; }
     }
 
-    private sealed class ConnectionTestClient(HttpClient client, Action sent, string? keyId) : IPluginHttpClient
+    private sealed class ConnectionTestClient(HttpClient client, Action sent, string? keyId) : IPluginHttpClient, IDisposable
     {
+        private readonly MemoryStream _capture = new();
+        public string RawBody => Encoding.UTF8.GetString(_capture.ToArray());
+        public bool Truncated { get; private set; }
+        public void Dispose() => _capture.Dispose();
         public string? KeyId { get; } = keyId;
         public ChannelKey? SelectedKey { get; set; }
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption option, CancellationToken ct)
             => SendAsync(request, false, option, ct);
-        public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, bool useProxyPool, HttpCompletionOption option, CancellationToken ct)
+        public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, bool useProxyPool, HttpCompletionOption option, CancellationToken ct)
         {
             if (useProxyPool) throw new InvalidOperationException("渠道测试只使用直连");
             sent();
-            return client.SendAsync(request, option, ct);
+            _capture.SetLength(0);
+            Truncated = false;
+            var response = await client.SendAsync(request, option, ct);
+            var original = response.Content;
+            try
+            {
+                var stream = await original.ReadAsStreamAsync(ct);
+                var content = new StreamContent(new CaptureStream(stream, original, bytes =>
+                {
+                    var remaining = 32 * 1024 * 1024 - (int)_capture.Length;
+                    _capture.Write(bytes.Span[..Math.Min(bytes.Length, remaining)]);
+                    Truncated |= bytes.Length > remaining;
+                }));
+                foreach (var header in original.Headers)
+                    content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                response.Content = content;
+                return response;
+            }
+            catch { response.Dispose(); throw; }
         }
+    }
+
+    private sealed class CaptureStream(Stream source, HttpContent owner, Action<ReadOnlyMemory<byte>> capture) : Stream
+    {
+        public override bool CanRead => source.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var n = source.Read(buffer, offset, count);
+            capture(buffer.AsMemory(offset, n));
+            return n;
+        }
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var n = await source.ReadAsync(buffer, cancellationToken);
+            capture(buffer[..n]);
+            return n;
+        }
+        protected override void Dispose(bool disposing) { if (disposing) owner.Dispose(); base.Dispose(disposing); }
+        public override void Flush() => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }
