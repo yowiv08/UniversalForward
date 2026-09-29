@@ -7,7 +7,7 @@ namespace UniversalForward.Tests;
 public sealed class ClientProfilesTests
 {
     [TestMethod]
-    public void CodexLegacyTemplateGetsFreshCompleteIdentityAndNativeBody()
+    public void CodexLegacyTemplateGetsFreshCompleteIdentityAndLightweightBody()
     {
         var config = new JsonObject { ["Originator"] = "codex_exec", ["Authorization"] = "Bearer {api_key}" };
         var headers = HeaderOverrides.Resolve(config, new Dictionary<string, string>(), "secret", true);
@@ -24,8 +24,8 @@ public sealed class ClientProfilesTests
         Assert.IsTrue(body["stream"]!.GetValue<bool>());
         Assert.IsFalse(body["store"]!.GetValue<bool>());
         Assert.IsNull(body["max_output_tokens"]);
-        Assert.AreEqual(7, body["input"]!.AsArray().Count);
-        Assert.IsTrue(body["input"]!.ToJsonString().Contains("additional_tools", StringComparison.Ordinal));
+        Assert.AreEqual(1, body["input"]!.AsArray().Count);
+        Assert.IsFalse(body["input"]!.ToJsonString().Contains("additional_tools", StringComparison.Ordinal));
         Assert.AreEqual(headers["Session-Id"], body["prompt_cache_key"]!.ToString());
         Assert.AreEqual(headers["X-Codex-Turn-Metadata"], body["client_metadata"]!["x-codex-turn-metadata"]!.ToString());
         body["model"] = "test";
@@ -73,5 +73,136 @@ public sealed class ClientProfilesTests
         Assert.AreEqual("custom", headers["session-id"]);
         Assert.Throws<FormatException>(() => HeaderOverrides.Resolve(config,
             new Dictionary<string, string> { ["x-codex-turn-metadata"] = "bad\r\nInjected: yes" }, "key"));
+    }
+
+    [TestMethod]
+    public void CodexCompletionPreservesConversationToolsAndExplicitOptions()
+    {
+        var original = JsonNode.Parse("""
+            {"model":"model","stream":false,"instructions":"Keep {{SESSION_ID}} verbatim.",
+             "input":[{"role":"user","content":[{"type":"input_text","text":"my question"},{"type":"input_image","image_url":"data:image/png;base64,AA=="}]},
+                      {"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":1}"},
+                      {"type":"function_call_output","call_id":"call_1","output":"result"}],
+             "tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],
+             "tool_choice":"required","parallel_tool_calls":true,"reasoning":{"effort":"high"},
+             "max_output_tokens":128,"text":{"format":{"type":"json_object"}},
+             "include":["message.output_text.logprobs"],"prompt_cache_key":"existing-cache",
+             "client_metadata":{"custom":"preserved"},"unknown":{"x":1}}
+            """)!.AsObject();
+        var snapshot = original.ToJsonString();
+        var headers = HeaderOverrides.Resolve(new JsonObject { ["Originator"] = "codex_exec" }, new Dictionary<string, string>(), "key",
+            variables: ClientProfiles.Variables(original));
+        var body = ClientProfiles.PrepareCodexRequest(original, headers);
+        foreach (var name in new[] { "model", "stream", "instructions", "input", "tools", "tool_choice", "parallel_tool_calls",
+            "reasoning", "max_output_tokens", "text", "prompt_cache_key", "unknown" })
+            Assert.IsTrue(JsonNode.DeepEquals(original[name], body[name]), name);
+        Assert.AreEqual("preserved", body["client_metadata"]!["custom"]!.ToString());
+        Assert.AreEqual(headers["Session-Id"], body["client_metadata"]!["session_id"]!.ToString());
+        Assert.AreEqual(headers["X-Codex-Turn-Metadata"], body["client_metadata"]!["x-codex-turn-metadata"]!.ToString());
+        Assert.AreEqual(2, body["include"]!.AsArray().Count);
+        Assert.IsTrue(JsonNode.DeepEquals(body, ClientProfiles.PrepareCodexRequest(body, headers)));
+        Assert.AreEqual(snapshot, original.ToJsonString());
+    }
+
+    [TestMethod]
+    public void CodexCompletionNormalizesStringInputAndEmptyInclude()
+    {
+        var original = new JsonObject { ["input"] = "Actual request {api_key}", ["include"] = new JsonArray() };
+        var headers = HeaderOverrides.Resolve(new JsonObject { ["Originator"] = "codex_exec" }, new Dictionary<string, string>(), "key");
+        var body = ClientProfiles.PrepareCodexRequest(original, headers);
+        Assert.AreEqual("Actual request {api_key}", body["input"]![0]!["content"]![0]!["text"]!.ToString());
+        Assert.AreEqual("reasoning.encrypted_content", body["include"]![0]!.ToString());
+        Assert.IsFalse(body["stream"]!.GetValue<bool>());
+        Assert.IsNull(body["tools"]);
+        Assert.IsNull(body["instructions"]);
+        Assert.AreEqual("Actual request {api_key}", original["input"]!.ToString());
+    }
+
+    [TestMethod]
+    public void ProbeAndOrdinaryRequestsUseSameCodexCompletion()
+    {
+        var original = new JsonObject
+        {
+            ["model"] = "model", ["stream"] = true, ["instructions"] = "Reply only OK. Do not call tools.",
+            ["input"] = new JsonArray(new JsonObject
+            {
+                ["role"] = "user", ["content"] = new JsonArray(new JsonObject { ["type"] = "input_text", ["text"] = "Reply only OK." })
+            })
+        };
+        var headers = HeaderOverrides.Resolve(new JsonObject { ["Originator"] = "codex_exec" }, new Dictionary<string, string>(), "key");
+        Assert.IsTrue(JsonNode.DeepEquals(ClientProfiles.TestBody("codex", "model", headers),
+            ClientProfiles.PrepareCodexRequest(original, headers)));
+    }
+
+    [TestMethod]
+    public void ClaudeCompletionPreservesNativeIdentitySystemAndTools()
+    {
+        var original = JsonNode.Parse("""
+            {"model":"vendor/future-model","stream":false,"max_tokens":123,
+             "system":[{"type":"text","text":"You are Claude Code, a coding assistant."},{"type":"text","text":"My system prompt","cache_control":{"type":"ephemeral"}}],
+             "messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"result"}]}],
+             "tools":[{"name":"lookup","input_schema":{"type":"object"}}],"tool_choice":{"type":"any"},
+             "thinking":{"type":"adaptive"},"output_config":{"effort":"high"},
+             "metadata":{"custom":"keep","user_id":"{\"device_id\":\"existing-device\",\"session_id\":\"existing-session\",\"account_uuid\":\"existing-account\",\"other\":1}"}}
+            """)!.AsObject();
+        var snapshot = original.ToJsonString();
+        var config = new JsonObject { ["x-app"] = "cli", ["anthropic-beta"] = "claude-code-20250219" };
+        var headers = HeaderOverrides.Resolve(config, new Dictionary<string, string>(), "key", variables: ClientProfiles.Variables(original));
+        var body = ClientProfiles.PrepareClaudeRequest(original, headers);
+        Assert.IsTrue(JsonNode.DeepEquals(original, body));
+        Assert.AreEqual("existing-session", headers["x-claude-code-session-id"]);
+        Assert.IsTrue(JsonNode.DeepEquals(body, ClientProfiles.PrepareClaudeRequest(body, headers)));
+        Assert.AreEqual(snapshot, original.ToJsonString());
+    }
+
+    [TestMethod]
+    public void ClaudeCompletionAddsIdentityWithoutReplacingUserInstructions()
+    {
+        var original = JsonNode.Parse("""
+            {"model":"any-new-model","system":"My {{instructions}}","stream":true,"max_tokens":17,
+             "messages":[{"role":"user","content":"My question"}],"metadata":{"user_id":"app-user"}}
+            """)!.AsObject();
+        var headers = HeaderOverrides.Resolve(new JsonObject { ["x-app"] = "cli", ["anthropic-beta"] = "claude-code-20250219" },
+            new Dictionary<string, string>(), "key");
+        var body = ClientProfiles.PrepareClaudeRequest(original, headers);
+        Assert.AreEqual("any-new-model", body["model"]!.ToString());
+        Assert.AreEqual("My {{instructions}}", body["system"]![1]!["text"]!.ToString());
+        Assert.AreEqual("My question", body["messages"]![0]!["content"]![0]!["text"]!.ToString());
+        Assert.AreEqual(17, body["max_tokens"]!.GetValue<int>());
+        Assert.IsNull(body["tools"]);
+        Assert.IsNull(body["thinking"]);
+        var identity = JsonNode.Parse(body["metadata"]!["user_id"]!.ToString())!;
+        Assert.AreEqual("app-user", identity["user_id"]!.ToString());
+        Assert.AreEqual(headers["x-claude-code-session-id"], identity["session_id"]!.ToString());
+        Assert.IsTrue(JsonNode.DeepEquals(body, ClientProfiles.PrepareClaudeRequest(body, headers)));
+    }
+
+    [TestMethod]
+    public void ClaudeOneMillionSuffixWorksForAnyModelInProbeAndNormalRequest()
+    {
+        var headers = HeaderOverrides.Resolve(new JsonObject { ["x-app"] = "cli", ["anthropic-beta"] = "claude-code-20250219" },
+            new Dictionary<string, string>(), "key");
+        var body = ClientProfiles.PrepareClaudeRequest(new JsonObject { ["model"] = "vendor/future[1M]" }, headers);
+        Assert.AreEqual("vendor/future", body["model"]!.ToString());
+        Assert.AreEqual("claude-code-20250219,context-1m-2025-08-07", headers["anthropic-beta"]);
+        var probe = ClientProfiles.TestBody("claude", "another-future[1m]", headers);
+        Assert.AreEqual("another-future", probe["model"]!.ToString());
+        Assert.AreEqual("claude-code-20250219,context-1m-2025-08-07", headers["anthropic-beta"]);
+    }
+
+    [TestMethod]
+    [DataRow("codex")]
+    [DataRow("claude")]
+    public void ProfilesDoNotDependOnModelNames(string profile)
+    {
+        var model = "vendor/" + Guid.NewGuid().ToString("N");
+        var config = profile == "codex" ? new JsonObject { ["Originator"] = "codex_exec" }
+            : new JsonObject { ["x-app"] = "cli", ["anthropic-beta"] = "claude-code-20250219" };
+        var headers = HeaderOverrides.Resolve(config, new Dictionary<string, string>(), "key");
+        Assert.AreEqual(model, ClientProfiles.TestBody(profile, model, headers)["model"]!.ToString());
+        var original = new JsonObject { ["model"] = model };
+        var body = profile == "codex" ? ClientProfiles.PrepareCodexRequest(original, headers)
+            : ClientProfiles.PrepareClaudeRequest(original, headers);
+        Assert.AreEqual(model, body["model"]!.ToString());
     }
 }

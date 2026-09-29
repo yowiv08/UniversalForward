@@ -35,13 +35,14 @@
       'Content-Type': 'application/json', 'User-Agent': 'claude-cli/2.1.161 (external, cli)',
       Accept: 'application/json', 'anthropic-version': '2023-06-01', 'x-app': 'cli',
       'x-claude-code-session-id': '{session_id}', 'anthropic-dangerous-direct-browser-access': 'true',
-      'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01'
+      'anthropic-beta': 'claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01'
     }
   };
   let accounts = [], candidates = [], keyDraft = [], deletedKeyIds = [], keyRevision = 0, keySequence = 0;
   let modelProtocolDraft = {}, extraParams = {}, savedAccount = null, editorEpoch = 0;
   let headerMode = 'visual', mappingMode = 'visual', headerRows = [], mappingRows = [];
   let confirmResolve = null, loading = false, saving = false;
+  const switchingChannels = new Set();
   const button = (text, work, cls = 'secondary') => {
     const b = el('button', text, cls); b.type = 'button'; b.addEventListener('click', work); return b;
   };
@@ -110,7 +111,7 @@
       const title = el('div', undefined, 'channel-title');
       title.append(el('h3', a.label));
       top.append(title,
-        el('span', a.enabled ? '已启用' : '已停用', 'badge' + (a.enabled ? '' : ' off')));
+        el('span', a.enabled ? '已启用' : '已禁用', 'badge' + (a.enabled ? '' : ' off')));
       const address = el('p', a.baseUrl, 'channel-url');
       address.title = a.baseUrl;
       const meta = el('div', undefined, 'channel-meta');
@@ -127,15 +128,31 @@
       modelHeading.append(el('h4', '已配置模型'), el('strong', `${a.models?.length || 0} 个`));
       if (!a.models?.length) tags.append(el('span', '暂无模型', 'muted'));
       const actions = el('div', undefined, 'actions');
+      const toggle = button(switchingChannels.has(a.id) ? '处理中…' : a.enabled ? '禁用' : '启用', () => setChannelEnabled(a));
+      toggle.setAttribute('aria-label', `${a.enabled ? '禁用' : '启用'}渠道「${a.label}」`);
+      toggle.setAttribute('aria-busy', String(switchingChannels.has(a.id)));
       actions.append(button('编辑', () => open(a)), button('测试连接', () => openTests(a)),
         button('模型', () => { open(a); selectTab('models'); }),
+        toggle,
         button('删除', async () => {
           if (!await ask(`删除渠道「${a.label}」及其配置？`, '删除渠道')) return;
           try { await api('POST', 'accounts/delete', { id: a.id }); await load(); message('渠道已删除'); }
           catch (e) { message(e.message, true); }
         }, 'text-button danger'));
+      if (switchingChannels.has(a.id)) for (const control of actions.querySelectorAll('button')) control.disabled = true;
       card.append(top, address, meta, endpoints, modelHeading, tags, actions); root.append(card);
     }
+  }
+  async function setChannelEnabled(account) {
+    if (switchingChannels.has(account.id)) return;
+    const enabled = !account.enabled;
+    switchingChannels.add(account.id); render();
+    try {
+      const data = await api('POST', 'accounts/enabled', { id: account.id, enabled });
+      accounts = accounts.map(a => a.id === account.id ? data.account : a);
+      message(`渠道「${account.label}」已${enabled ? '启用' : '禁用'}`);
+    } catch (e) { message(e.message, true); }
+    finally { switchingChannels.delete(account.id); render(); }
   }
   async function load() {
     if (loading) return;
@@ -365,13 +382,12 @@
       remove.setAttribute('aria-label', `删除请求头 ${index + 1}`); line.append(name, value, remove); root.append(line);
     });
   }
-  const statusLabels = { 200: '成功', 201: '已创建', 202: '已接受', 204: '无内容', 301: '永久重定向', 302: '临时重定向', 304: '未修改',
-    400: '请求错误', 401: '认证失败', 403: '访问受限', 404: '未找到', 408: '请求超时', 409: '冲突', 413: '请求过大',
-    422: '无法处理', 429: '频率限制', 500: '内部错误', 502: '网关错误', 503: '服务不可用', 504: '网关超时' };
   function readMapping() {
     const result = mappingMode === 'json' ? objectJson($('statusCodeMapping').value, '状态码映射') : Object.create(null);
     if (mappingMode === 'visual') for (const row of mappingRows) {
-      if (!row.from || !row.to) throw Error('请选择原始状态码和目标状态码');
+      if (!row.from || !row.to) throw Error('请输入原始状态码和目标状态码');
+      if (!/^[2-5]\d{2}$/.test(row.from) || !/^[2-5]\d{2}$/.test(row.to))
+        throw Error('状态码必须为200–599的三位整数');
       if (Object.hasOwn(result, row.from)) throw Error('原始状态码重复：' + row.from);
       result[row.from] = Number(row.to);
     }
@@ -381,22 +397,18 @@
     }
     return result;
   }
-  function statusSelect(value, target, index) {
-    const select = el('select'); select.setAttribute('aria-label', `映射 ${index + 1} ${target ? '目标' : '原始'}状态码`);
-    select.append(option('', target ? '目标状态码' : '原始状态码'));
-    const codes = [...new Set([...Object.keys(statusLabels).map(Number), ...Array.from({ length: 400 }, (_, i) => i + 200)])];
-    for (const code of codes) {
-      if (target && [204, 205, 304].includes(code)) continue;
-      select.append(option(String(code), `${code}${statusLabels[code] ? ' · ' + statusLabels[code] : ''}`));
-    }
-    select.value = String(value); return select;
+  function statusInput(value, target, index) {
+    const input = el('input'); input.type = 'text'; input.inputMode = 'numeric';
+    input.setAttribute('aria-label', `映射 ${index + 1} ${target ? '目标' : '原始'}状态码`);
+    input.placeholder = target ? '目标状态码' : '原始状态码';
+    input.value = String(value); return input;
   }
   function renderMappings() {
     const root = $('mappingRows'); root.replaceChildren();
     if (!mappingRows.length) root.append(el('div', '保持上游状态码，或添加映射规则', 'empty'));
     mappingRows.forEach((row, index) => {
-      const line = el('div', undefined, 'mapping-row'), from = statusSelect(row.from, false, index), to = statusSelect(row.to, true, index);
-      from.onchange = () => row.from = from.value; to.onchange = () => row.to = to.value;
+      const line = el('div', undefined, 'mapping-row'), from = statusInput(row.from, false, index), to = statusInput(row.to, true, index);
+      from.oninput = () => row.from = from.value; to.oninput = () => row.to = to.value;
       const remove = button('×', () => { mappingRows.splice(index, 1); renderMappings(); }, 'icon-button danger');
       remove.setAttribute('aria-label', `删除映射 ${index + 1}`); line.append(from, el('span', '→', 'arrow'), to, remove); root.append(line);
     });

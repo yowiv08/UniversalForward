@@ -228,6 +228,33 @@ public sealed partial class UniversalForwardTerminal
             return context.Json(502, new { error = SanitizeMessage(exception.Message, settings) });
         }
     }
+    [PluginEndpoint("POST", "accounts/enabled")]
+    public async Task<PluginResult> SetAccountEnabledAsync(PluginHttpContext context)
+    {
+        if (!TryReadBody<AccountSaveInput>(context.Body, out var input)
+            || string.IsNullOrWhiteSpace(input.Id) || input.Enabled is null)
+            return context.BadRequest("请指定渠道 ID 和启用状态");
+        var existing = await _host.Accounts.GetAsync(input.Id, context.CancellationToken);
+        if (existing is null) return context.Json(404, new { error = "账号不存在" });
+        if (!TryReadSettings(existing, out _) || existing.Credential is not CustomCredential custom)
+            return context.BadRequest("渠道配置无效");
+        var fields = new Dictionary<string, string?>(custom.Fields, StringComparer.Ordinal);
+        if (JsonNode.Parse(fields["settings"]!) is not JsonObject settings)
+            return context.BadRequest("渠道配置无效");
+        foreach (var name in settings.Select(x => x.Key).Where(x => x.Equals("enabled", StringComparison.OrdinalIgnoreCase)).ToArray())
+            settings.Remove(name);
+        settings["enabled"] = input.Enabled.Value;
+        fields["settings"] = settings.ToJsonString();
+        var saved = await _host.Accounts.CompareExchangeCredentialAsync(existing.Id, existing.CredentialVersion,
+            new CustomCredential(fields), context.CancellationToken);
+        if (saved is null) return context.Json(409, new { error = "渠道配置已变化，请刷新后重试" });
+        await RebuildAccountModelSnapshotAsync(context.PluginKey, context.CancellationToken);
+        _host.Models.Invalidate(ForwardApiPlatform);
+        await TryLogAsync("account.enabled", $"渠道“{saved.Label ?? saved.Id}”已{(input.Enabled.Value ? "启用" : "禁用")}",
+            accountId: saved.Id, details: new { enabled = input.Enabled.Value });
+        return context.Ok(new { account = ToAccountCard(saved) });
+    }
+
     [PluginEndpoint("POST", "accounts/delete")]
     public async Task<PluginResult> DeleteAccountAsync(PluginHttpContext context)
     {

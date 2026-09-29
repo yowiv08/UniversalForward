@@ -72,14 +72,18 @@ public sealed partial class UniversalForwardTerminal
             {
                 resolvedHeaders["Accept"] = "text/event-stream";
                 var testModel = UpstreamModel(context.Request.Model);
-                if (profile == "claude" && testModel.EndsWith("[1m]", StringComparison.OrdinalIgnoreCase))
-                {
-                    testModel = testModel[..^4];
-                    if (!resolvedHeaders["anthropic-beta"].Split(',').Contains("context-1m-2025-08-07"))
-                        resolvedHeaders["anthropic-beta"] += ",context-1m-2025-08-07";
-                }
                 var testBody = ClientProfiles.TestBody(profile, testModel, resolvedHeaders);
                 payload = JsonSerializer.SerializeToUtf8Bytes(testBody, JsonOptions);
+            }
+            else if (profile == "codex" && upstreamEndpoint == "/v1/responses")
+            {
+                var body = ClientProfiles.PrepareCodexRequest(JsonNode.Parse(payload)!.AsObject(), resolvedHeaders);
+                payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
+            }
+            else if (profile == "claude" && upstreamEndpoint == "/v1/messages")
+            {
+                var body = ClientProfiles.PrepareClaudeRequest(JsonNode.Parse(payload)!.AsObject(), resolvedHeaders);
+                payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
             }
             var targetEndpoint = profile == "claude" && upstreamEndpoint == "/v1/messages"
                 ? upstreamEndpoint + "?beta=true" : upstreamEndpoint;

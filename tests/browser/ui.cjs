@@ -12,6 +12,9 @@ function hostMock() {
   window.emptyDiscovery = false;
   window.holdDiscovery = false;
   window.pendingDiscovery = [];
+  window.failToggle = false;
+  window.holdToggle = false;
+  window.pendingToggle = [];
   window.accounts = [
     { id: 'primary', label: '主力推理渠道', baseUrl: 'https://api.example.test/v1', weight: 100, enabled: true,
       models: ['gpt-5', 'claude-sonnet'], endpoints: ['/v1/chat/completions', '/v1/responses', '/v1/messages'],
@@ -36,6 +39,13 @@ function hostMock() {
     } else if (route === 'accounts/save') {
       result = { account: { ...body, id: body.id || 'new-channel', keys: body.keys.map((k, i) => ({ id: k.id || 'new-' + i, name: k.name, enabled: k.enabled, masked: '••••test' })) } };
       window.accounts = [...window.accounts.filter(a => a.id !== result.account.id), result.account];
+    } else if (route === 'accounts/enabled') {
+      if (window.failToggle) error = '渠道配置已变化，请刷新后重试';
+      else {
+        const account = window.accounts.find(a => a.id === body.id);
+        result = { account: { ...account, enabled: body.enabled } };
+        window.accounts = window.accounts.map(a => a.id === body.id ? result.account : a);
+      }
     } else if (route === 'accounts/delete') {
       window.accounts = window.accounts.filter(a => a.id !== body.id); result = {};
     } else if (route === 'tests/start') {
@@ -45,6 +55,7 @@ function hostMock() {
     else error = 'Unexpected route: ' + route;
     const respond = () => event.source.postMessage({ type: 'router2api-response', id, ok: !error, body: result, error }, '*');
     if (window.holdDiscovery && route === 'models/discover') window.pendingDiscovery.push(respond);
+    else if (window.holdToggle && route === 'accounts/enabled') window.pendingToggle.push(respond);
     else respond();
   });
 }
@@ -75,6 +86,34 @@ function hostMock() {
     assert.match(await frame.locator('.channel-model-heading').innerText(), /已配置模型.*2 个/s);
     await page.screenshot({ path: path.join(output, 'ui-channel-card-desktop.png') });
     await frame.locator('#filter').fill('');
+    const primary = frame.locator('.channel-card').filter({ hasText: '主力推理渠道' });
+    await page.evaluate(() => { window.holdToggle = true; });
+    await primary.getByRole('button', { name: '禁用渠道「主力推理渠道」', exact: true }).click();
+    await primary.getByRole('button', { name: '禁用渠道「主力推理渠道」', exact: true }).filter({ hasText: '处理中' }).waitFor();
+    assert.equal(await primary.getByRole('button', { name: '编辑', exact: true }).isDisabled(), true);
+    await page.evaluate(() => { window.holdToggle = false; window.pendingToggle.splice(0).forEach(f => f()); });
+    await primary.getByRole('button', { name: '启用渠道「主力推理渠道」', exact: true }).waitFor();
+    assert.equal(await primary.locator('.badge').innerText(), '已禁用');
+    assert.equal(await frame.locator('#metricEnabled').innerText(), '1');
+    assert.equal(await frame.locator('#editor').isVisible(), false);
+    const toggleCalls = await page.evaluate(() => window.calls.filter(c => c.route === 'accounts/enabled'));
+    assert.equal(toggleCalls.length, 1);
+    assert.deepEqual(toggleCalls[0].body, { id: 'primary', enabled: false });
+    await frame.locator('#statusFilter').selectOption('enabled');
+    assert.equal(await primary.count(), 0);
+    await frame.locator('#statusFilter').selectOption('disabled');
+    assert.equal(await primary.count(), 1);
+    await page.screenshot({ path: path.join(output, 'ui-channel-disabled.png') });
+    await page.evaluate(() => { window.failToggle = true; });
+    await primary.getByRole('button', { name: '启用渠道「主力推理渠道」', exact: true }).click();
+    await frame.locator('#message').filter({ hasText: '配置已变化' }).waitFor();
+    assert.equal(await primary.locator('.badge').innerText(), '已禁用');
+    await page.evaluate(() => { window.failToggle = false; });
+    await primary.getByRole('button', { name: '启用渠道「主力推理渠道」', exact: true }).click();
+    await frame.locator('#message').filter({ hasText: '已启用' }).waitFor();
+    assert.equal(await primary.count(), 0);
+    assert.equal(await frame.locator('#metricEnabled').innerText(), '2');
+    await frame.locator('#statusFilter').selectOption('all');
     await frame.locator('#add').click();
     await frame.locator('#tab-policy').click();
     await frame.locator('#save').click();
@@ -118,6 +157,7 @@ function hostMock() {
     assert.equal(headers['x-claude-code-session-id'], '{session_id}');
     assert.equal(headers['anthropic-dangerous-direct-browser-access'], 'true');
     assert.ok(headers['anthropic-beta'].includes('claude-code-20250219'));
+    assert.ok(headers['anthropic-beta'].includes('context-1m-2025-08-07'));
     await frame.locator('#headerOverride').fill('{broken');
     await frame.locator('#headerVisual').click();
     assert.equal(await frame.locator('#headerJson').getAttribute('aria-pressed'), 'true');
@@ -158,16 +198,25 @@ function hostMock() {
     await frame.locator('#tab-policy').click();
     assert.equal(await frame.locator('#mappingVisual').getAttribute('aria-pressed'), 'true');
     await frame.locator('#mappingAdd').click();
-    await frame.getByLabel('映射 1 原始状态码').selectOption('429');
-    await frame.getByLabel('映射 1 目标状态码').selectOption('503');
+    assert.equal(await frame.locator('#mappingRows select').count(), 0);
+    assert.equal(await frame.getByLabel('映射 1 原始状态码').getAttribute('inputmode'), 'numeric');
+    await frame.locator('#mappingJson').click();
+    assert.match(await frame.locator('#mappingStatus').innerText(), /请输入/);
+    await frame.getByLabel('映射 1 原始状态码').fill('429');
+    for (const invalid of ['abc', '199', '600', '503.0', '5e2']) {
+      await frame.getByLabel('映射 1 目标状态码').fill(invalid);
+      await frame.locator('#mappingJson').click();
+      assert.match(await frame.locator('#mappingStatus').innerText(), /三位整数/);
+    }
+    await frame.getByLabel('映射 1 目标状态码').fill('503');
     await frame.locator('#mappingJson').click();
     assert.deepEqual(JSON.parse(await frame.locator('#statusCodeMapping').inputValue()), { 429: 503 });
     await frame.locator('#statusCodeMapping').fill('{"418":502,"429":503}');
     await frame.locator('#mappingVisual').click();
     assert.equal(await frame.locator('#mappingRows .mapping-row').count(), 2);
     await frame.locator('#mappingAdd').click();
-    await frame.getByLabel('映射 3 原始状态码').selectOption('429');
-    await frame.getByLabel('映射 3 目标状态码').selectOption('500');
+    await frame.getByLabel('映射 3 原始状态码').fill('429');
+    await frame.getByLabel('映射 3 目标状态码').fill('500');
     await frame.locator('#mappingJson').click();
     assert.match(await frame.locator('#mappingStatus').innerText(), /重复/);
     await frame.getByLabel('删除映射 3', { exact: true }).click();

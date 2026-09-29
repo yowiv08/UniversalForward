@@ -12,6 +12,39 @@ public sealed class UniversalForwardRequestHeadersTests
 {
     private static readonly string[] ModelIds = ["model-a"];
     [TestMethod]
+    public async Task NormalRequestAddsConfiguredCodexHeadersWithoutClientHeaders()
+    {
+        const string userAgent = "Codex Desktop/0.146.0-alpha.9.2 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.727.51351)";
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var context = CreateContext("{}", "/v1/responses", inspect: request =>
+        {
+            Assert.AreEqual(userAgent, request.Headers.NonValidated["User-Agent"].Single());
+            Assert.AreEqual("codex_exec", request.Headers.GetValues("Originator").Single());
+            Assert.AreEqual("remote_compaction_v2", request.Headers.GetValues("X-Codex-Beta-Features").Single());
+            Assert.AreEqual("true", request.Headers.GetValues("X-OpenAI-Internal-Codex-Responses-Lite").Single());
+            Assert.AreEqual("text/event-stream", request.Headers.GetValues("Accept").Single());
+            Assert.AreEqual("Bearer secret-upstream-key", request.Headers.GetValues("Authorization").Single());
+            Assert.IsTrue(Guid.TryParse(request.Headers.GetValues("Session-Id").Single(), out _));
+            Assert.IsTrue(request.Headers.Contains("X-Codex-Turn-Metadata"));
+            Assert.AreEqual("application/json", request.Content!.Headers.ContentType!.MediaType);
+        });
+        context.Request.RequestHeaders.Clear();
+        var fields = ((CustomCredential)context.Account.Credential).Fields;
+        var settings = System.Text.Json.Nodes.JsonNode.Parse(fields["settings"]!)!.AsObject();
+        settings["headerOverride"] = JsonSerializer.SerializeToNode(new Dictionary<string, string>
+        {
+            ["Content-Type"] = "application/json", ["Accept"] = "text/event-stream", ["User-Agent"] = userAgent,
+            ["Originator"] = "codex_exec", ["X-Codex-Beta-Features"] = "remote_compaction_v2",
+            ["X-OpenAI-Internal-Codex-Responses-Lite"] = "true"
+        });
+        context.Account.Credential = new CustomCredential(new Dictionary<string, string?>(fields)
+            { ["settings"] = settings.ToJsonString() });
+        Assert.IsTrue((await terminal.InvokeAsync(context)).Response.IsSuccess);
+        Assert.AreEqual(1, Mock.Get(context.HttpClient).Invocations.Count);
+        Assert.AreEqual(0, context.Request.RequestHeaders.Count);
+    }
+
+    [TestMethod]
     [DataRow("/v1/chat/completions", false)]
     [DataRow("/v1/chat/completions", true)]
     [DataRow("/v1/completions", false)]

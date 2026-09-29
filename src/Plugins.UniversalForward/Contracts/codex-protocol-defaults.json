@@ -1,0 +1,9 @@
+{
+  "body": {
+    "tool_choice": "auto",
+    "parallel_tool_calls": false,
+    "reasoning": { "effort": "low", "context": "all_turns" },
+    "store": false,
+    "text": { "verbosity": "low" }
+  }
+}

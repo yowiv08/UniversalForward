@@ -1,7 +1,5 @@
-using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 
 namespace Plugins.UniversalForward;
 
@@ -12,7 +10,7 @@ internal static class ClientProfiles
     private static readonly Lazy<JsonObject> Codex = new(() =>
     {
         using var stream = typeof(ClientProfiles).Assembly.GetManifestResourceStream(
-            "Plugins.UniversalForward.Contracts.codex-cli-0.155.1-request.json")!;
+            "Plugins.UniversalForward.Contracts.codex-protocol-defaults.json")!;
         return JsonNode.Parse(stream)!.AsObject();
     });
 
@@ -87,10 +85,96 @@ internal static class ClientProfiles
         return result;
     }
 
-    internal static JsonObject TestBody(string profile, string model, IReadOnlyDictionary<string, string> headers)
+    internal static JsonObject PrepareCodexRequest(JsonObject original, IReadOnlyDictionary<string, string> headers)
+    {
+        var body = (JsonObject)original.DeepClone();
+        foreach (var name in new[] { "tool_choice", "parallel_tool_calls", "reasoning", "store", "text" })
+            if (body[name] is null) body[name] = Codex.Value["body"]![name]!.DeepClone();
+        if (body["stream"] is null) body["stream"] = false;
+        if (body["input"] is JsonValue input && input.TryGetValue<string>(out var text))
+            body["input"] = new JsonArray(new JsonObject
+            {
+                ["role"] = "user", ["content"] = new JsonArray(new JsonObject { ["type"] = "input_text", ["text"] = text })
+            });
+        if (body["include"] is not null and not JsonArray)
+            throw new FormatException("Codex include 必须为数组");
+        var include = body["include"] as JsonArray ?? new JsonArray();
+        if (!include.Any(x => x is JsonValue value && value.TryGetValue<string>(out var name) && name == "reasoning.encrypted_content"))
+            include.Add("reasoning.encrypted_content");
+        if (body["include"] is null) body["include"] = include;
+        if (body["prompt_cache_key"] is null) body["prompt_cache_key"] = headers["Session-Id"];
+        if (body["client_metadata"] is not null and not JsonObject)
+            throw new FormatException("Codex client_metadata 必须为对象");
+        var client = body["client_metadata"] as JsonObject ?? new JsonObject();
+        if (body["client_metadata"] is null) body["client_metadata"] = client;
+        var metadata = JsonNode.Parse(headers["X-Codex-Turn-Metadata"]) as JsonObject
+            ?? throw new FormatException("Codex 回合元数据必须为对象");
+        client["session_id"] = headers["Session-Id"];
+        client["thread_id"] = headers["Thread-Id"];
+        client["x-codex-window-id"] = headers["X-Codex-Window-Id"];
+        client["x-codex-turn-metadata"] = headers["X-Codex-Turn-Metadata"];
+        foreach (var (target, source) in new[]
+        {
+            ("turn_id", "turn_id"), ("root_turn_id", "root_turn_id"), ("x-codex-installation-id", "installation_id")
+        })
+            if (client[target] is null && metadata[source] is { } value) client[target] = value.DeepClone();
+        return body;
+    }
+
+    internal static JsonObject PrepareClaudeRequest(JsonObject original, Dictionary<string, string> headers)
+    {
+        const string identityText = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+        var body = (JsonObject)original.DeepClone();
+        if (body["model"] is JsonValue modelValue && modelValue.TryGetValue<string>(out var model)
+            && model.EndsWith("[1m]", StringComparison.OrdinalIgnoreCase))
+        {
+            body["model"] = model[..^4];
+            var beta = headers.GetValueOrDefault("anthropic-beta", "");
+            if (!beta.Split(',', StringSplitOptions.TrimEntries).Contains("context-1m-2025-08-07"))
+                headers["anthropic-beta"] = string.IsNullOrEmpty(beta) ? "context-1m-2025-08-07" : beta + ",context-1m-2025-08-07";
+        }
+        if (body["stream"] is null) body["stream"] = false;
+        var system = body["system"] switch
+        {
+            null => new JsonArray(),
+            JsonArray array => (JsonArray)array.DeepClone(),
+            JsonValue value when value.TryGetValue<string>(out var text) =>
+                new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
+            _ => throw new FormatException("Claude system 必须为字符串或数组")
+        };
+        if (!system.OfType<JsonObject>().Any(x => x["text"] is JsonValue text && text.TryGetValue<string>(out var value)
+            && (value.StartsWith(identityText, StringComparison.Ordinal) || value.StartsWith("You are Claude Code,", StringComparison.Ordinal))))
+            system.Insert(0, new JsonObject { ["type"] = "text", ["text"] = identityText });
+        body["system"] = system;
+        if (body["messages"] is JsonArray messages)
+            foreach (var message in messages.OfType<JsonObject>())
+                if (message["content"] is JsonValue content && content.TryGetValue<string>(out var text))
+                    message["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text });
+        if (body["metadata"] is not null and not JsonObject)
+            throw new FormatException("Claude metadata 必须为对象");
+        var metadata = body["metadata"] as JsonObject ?? new JsonObject();
+        if (body["metadata"] is null) body["metadata"] = metadata;
+        JsonObject? identity = null;
+        if (metadata["user_id"] is { } userId)
+        {
+            if (userId is not JsonValue value || !value.TryGetValue<string>(out var text))
+                throw new FormatException("Claude metadata.user_id 必须为字符串");
+            try { identity = JsonNode.Parse(text) as JsonObject; }
+            catch (System.Text.Json.JsonException) { }
+            identity ??= new JsonObject { ["user_id"] = text };
+        }
+        identity ??= new JsonObject();
+        identity["device_id"] ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        identity["account_uuid"] ??= "";
+        identity["session_id"] = headers["x-claude-code-session-id"];
+        metadata["user_id"] = identity.ToJsonString();
+        return body;
+    }
+
+    internal static JsonObject TestBody(string profile, string model, Dictionary<string, string> headers)
     {
         if (profile == "claude")
-            return new JsonObject
+            return PrepareClaudeRequest(new JsonObject
             {
                 ["model"] = model,
                 ["messages"] = new JsonArray(new JsonObject
@@ -99,54 +183,18 @@ internal static class ClientProfiles
                 }),
                 ["system"] = new JsonArray(new JsonObject
                 {
-                    ["type"] = "text", ["text"] = "You are a Claude agent, built on Anthropic's Claude Agent SDK. Reply only OK."
+                    ["type"] = "text", ["text"] = "Reply only OK."
                 }),
-                ["metadata"] = new JsonObject
-                {
-                    ["user_id"] = new JsonObject
-                    {
-                        ["device_id"] = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant(),
-                        ["account_uuid"] = "", ["session_id"] = headers["x-claude-code-session-id"]
-                    }.ToJsonString()
-                },
                 ["max_tokens"] = 32, ["stream"] = true
-            };
+            }, headers);
 
-        var metadata = JsonNode.Parse(headers["X-Codex-Turn-Metadata"])!.AsObject();
-        var slots = new Dictionary<string, string>(StringComparer.Ordinal)
+        return PrepareCodexRequest(new JsonObject
         {
-            ["MODEL"] = model, ["PROMPT"] = "Reply only OK. Do not call tools.",
-            ["SESSION_ID"] = headers["Session-Id"],
-            ["TURN_ID"] = metadata["turn_id"]!.ToString(),
-            ["INSTALLATION_ID"] = metadata["installation_id"]!.ToString(),
-            ["CONTEXT_WINDOW_ID"] = metadata["context_window_id"]!.ToString(),
-            ["CURRENT_DATE"] = DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
-        };
-        foreach (var name in new[] { "TOOLS_ITEM_ID", "BASE_MESSAGE_ID", "CONTEXT_MESSAGE_ID",
-            "COLLABORATION_MESSAGE_ID", "MODE_MESSAGE_ID", "ENVIRONMENT_MESSAGE_ID", "USER_MESSAGE_ID" })
-            slots[name] = Id();
-        var body = Expand(Codex.Value["body"], slots)!.AsObject();
-        body["stream"] = true;
-        var client = body["client_metadata"]!.AsObject();
-        client["x-codex-turn-metadata"] = headers["X-Codex-Turn-Metadata"];
-        client["thread_id"] = headers["Thread-Id"];
-        client["x-codex-window-id"] = headers["X-Codex-Window-Id"];
-        var lastDeveloper = body["input"]!.AsArray().Last(x => x?["role"]?.ToString() == "developer")!;
-        lastDeveloper["content"]!.AsArray().Add(new JsonObject
-        {
-            ["type"] = "input_text",
-            ["text"] = "This is a connection test without tool execution. Reply only OK. Do not call tools."
-        });
-        return body;
+            ["model"] = model, ["stream"] = true, ["instructions"] = "Reply only OK. Do not call tools.",
+            ["input"] = new JsonArray(new JsonObject
+            {
+                ["role"] = "user", ["content"] = new JsonArray(new JsonObject { ["type"] = "input_text", ["text"] = "Reply only OK." })
+            })
+        }, headers);
     }
-
-    private static JsonNode? Expand(JsonNode? node, Dictionary<string, string> slots) => node switch
-    {
-        JsonObject obj => new JsonObject(obj.Select(p => KeyValuePair.Create(p.Key, Expand(p.Value, slots)))),
-        JsonArray array => new JsonArray(array.Select(p => Expand(p, slots)).ToArray()),
-        JsonValue value when value.TryGetValue<string>(out var text) =>
-            JsonValue.Create(Regex.Replace(text, @"\{\{([A-Z_]+)\}\}", m =>
-                slots.TryGetValue(m.Groups[1].Value, out var replacement) ? replacement : m.Value)),
-        _ => node?.DeepClone()
-    };
 }
