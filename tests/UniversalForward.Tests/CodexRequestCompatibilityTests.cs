@@ -40,7 +40,8 @@ public sealed class ClientRequestCompatibilityTests
                     request.Headers.GetValues(endpoint == "/v1/messages" ? "x-api-key" : "Authorization").Single());
                 Assert.AreEqual(original["instructions"]!.ToString(), body["instructions"]!.ToString());
                 Assert.IsTrue(JsonNode.DeepEquals(original["tools"], body["tools"]));
-                Assert.IsFalse(body["stream"]!.GetValue<bool>());
+                Assert.AreEqual(profile == "codex" && endpoint == "/v1/responses" || profile == "claude" && endpoint == "/v1/messages",
+                    body["stream"]!.GetValue<bool>());
                 Assert.AreEqual(32, body["max_output_tokens"]!.GetValue<int>());
                 if (profile == "codex")
                 {

@@ -67,6 +67,8 @@ public sealed partial class UniversalForwardTerminal
                     isTest ? null : JsonNode.Parse(context.Request.OriginalBody!.Value.GetRawText()),
                     isTest ? null : context.Request.RequestHeaders));
             var profile = ClientProfiles.Profile(settings.HeaderOverride);
+            var nativeStream = profile == "codex" && upstreamEndpoint == "/v1/responses"
+                || profile == "claude" && upstreamEndpoint == "/v1/messages";
             if (isTest && (profile == "codex" && upstreamEndpoint == "/v1/responses"
                 || profile == "claude" && upstreamEndpoint == "/v1/messages"))
             {
@@ -83,6 +85,12 @@ public sealed partial class UniversalForwardTerminal
             else if (profile == "claude" && upstreamEndpoint == "/v1/messages")
             {
                 var body = ClientProfiles.PrepareClaudeRequest(JsonNode.Parse(payload)!.AsObject(), resolvedHeaders);
+                payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
+            }
+            if (nativeStream)
+            {
+                var body = JsonNode.Parse(payload)!.AsObject();
+                body["stream"] = true;
                 payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
             }
             var targetEndpoint = profile == "claude" && upstreamEndpoint == "/v1/messages"
@@ -118,6 +126,8 @@ public sealed partial class UniversalForwardTerminal
                     await TryLogAsync("request.retry", $"HTTP {originalCode}，重试同一上游", traceId: context.TraceId,
                         accountId: context.Account.Id, model: context.Request.Model, statusCode: originalCode,
                         details: new { keyId = selectedKey.Id, keyName = selectedKey.Name, strategy = settings.KeySelectionMode, attempt, retryNumber = attempt + 1 });
+                    if (originalCode == 520)
+                        await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(2000, 250 * (1 << Math.Min(attempt, 3)))), total.Token);
                     continue;
                 }
                 var mappedCode = policy.Map(originalCode);
@@ -125,7 +135,23 @@ public sealed partial class UniversalForwardTerminal
                 await TryLogAsync("request.response", $"HTTP {originalCode} → {mappedCode}", traceId: context.TraceId,
                     accountId: context.Account.Id, model: context.Request.Model, statusCode: originalCode,
                     durationMs: (int)watch.ElapsedMilliseconds, details: new { keyId = selectedKey.Id, keyName = selectedKey.Name, strategy = settings.KeySelectionMode, originalCode, mappedCode, retries = attempt,
-                        incomingEndpoint = context.Request.Endpoint, upstreamEndpoint });
+                        incomingEndpoint = context.Request.Endpoint, upstreamEndpoint,
+                        downstreamStream = context.Request.Stream, upstreamStream = nativeStream || context.Request.Stream,
+                        upstreamRequestId = ResponseHeader(response, "x-request-id"), upstreamTraceId = ResponseHeader(response, "x-trace-id"),
+                        gatewayRay = ResponseHeader(response, "cf-ray") });
+                if (nativeStream && !context.Request.Stream && response.IsSuccessStatusCode
+                    && contentType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase))
+                {
+                    await using var lifetime = new ForwardResponseLifetime(response, total);
+                    transferred = true; response = null;
+                    var collected = await ForwardStreamCollector.CollectAsync(
+                        ReadBudgetedStreamAsync(lifetime, policy.StreamIdleTimeoutSeconds), upstreamEndpoint, context.CancellationToken);
+                    return Completed(new AdapterResponse
+                    {
+                        StatusCode = mappedCode, RawContent = collected, ContentType = "application/json",
+                        IsRawPassthrough = true, Usage = TryReadUsage(collected)
+                    }, originalCode);
+                }
                 if (response.IsSuccessStatusCode && (context.Request.Stream || contentType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase)))
                 {
                     var lifetime = new ForwardResponseLifetime(response, total);
@@ -139,6 +165,17 @@ public sealed partial class UniversalForwardTerminal
                     return Completed(result, originalCode);
                 }
                 var bytes = await response.Content.ReadAsByteArrayAsync(total.Token);
+                if (!response.IsSuccessStatusCode && bytes.Length == 0)
+                {
+                    bytes = JsonSerializer.SerializeToUtf8Bytes(new { error = new
+                    {
+                        message = $"上游返回 HTTP {originalCode}，响应体为空",
+                        type = "upstream_error", code = "empty_upstream_response", upstream_status = originalCode,
+                        trace_id = context.TraceId, upstream_request_id = ResponseHeader(response, "x-request-id"),
+                        upstream_trace_id = ResponseHeader(response, "x-trace-id"), gateway_ray = ResponseHeader(response, "cf-ray")
+                    } });
+                    contentType = "application/json";
+                }
                 var output = new AdapterResponse
                 {
                     StatusCode = mappedCode, RawContent = bytes, ContentType = contentType,
@@ -156,6 +193,15 @@ public sealed partial class UniversalForwardTerminal
         {
             return Completed(RawResponse(504, JsonSerializer.SerializeToUtf8Bytes(new { error = "请求总时限已耗尽" }), "application/json"), 0);
         }
+        catch (Exception error) when (error is IOException or HttpRequestException or DecoderFallbackException)
+        {
+            await TryLogAsync("request.body.failed", error.Message, "Error", context.TraceId, context.Account.Id,
+                context.Request.Model, 502);
+            return Completed(RawResponse(502, JsonSerializer.SerializeToUtf8Bytes(new { error = new
+            {
+                message = error.Message, type = "upstream_error", code = "invalid_upstream_response", trace_id = context.TraceId
+            } }), "application/json"), 502);
+        }
         catch (Exception error) when (error is FormatException or JsonException or InvalidOperationException)
         { return LocalFailure(error.Message); }
         finally
@@ -163,6 +209,13 @@ public sealed partial class UniversalForwardTerminal
             response?.Dispose();
             if (!transferred) total.Dispose();
         }
+    }
+
+    private static string? ResponseHeader(HttpResponseMessage response, string name)
+    {
+        if (!response.Headers.TryGetValues(name, out var values)) return null;
+        var value = string.Join(", ", values).ReplaceLineEndings(" ");
+        return value[..Math.Min(256, value.Length)];
     }
 
     private static PluginInvocationResult LocalFailure(string error)

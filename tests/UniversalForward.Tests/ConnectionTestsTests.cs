@@ -224,8 +224,8 @@ public sealed class ConnectionTestsTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(profile == "codex"
-                    ? "data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.completed\"}\n\n"
-                    : "data: {\"type\":\"message_start\"}\n\ndata: {\"type\":\"message_stop\"}\n\n",
+                    ? "data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\"}]}}\n\n"
+                    : "data: {\"type\":\"message_start\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"OK\"}]}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n",
                     Encoding.UTF8, "text/event-stream")
             };
         });
