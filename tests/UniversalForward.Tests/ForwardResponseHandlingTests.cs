@@ -136,7 +136,7 @@ public sealed class ForwardResponseHandlingTests
     }
 
     [TestMethod]
-    public async Task StreamingRateLimitEventReachesClientUnchangedWithoutReplay()
+    public async Task PreOutputRateLimitWithoutRetryReturnsJsonError()
     {
         const string frames = "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"token rate limit\",\"code\":\"rate_limit_exceeded\"}}\n\n";
         var client = Client(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
@@ -145,26 +145,26 @@ public sealed class ForwardResponseHandlingTests
         }));
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(Context(client.Object, "codex", true, 2));
-        using var bytes = new MemoryStream();
-        await foreach (var chunk in result.Response.RawStream!) await bytes.WriteAsync(chunk);
-        Assert.AreEqual(frames, Encoding.UTF8.GetString(bytes.ToArray()));
+        Assert.AreEqual(429, result.Response.StatusCode);
+        Assert.AreEqual("application/json", result.Response.ContentType);
+        Assert.AreEqual("rate_limit_exceeded", JsonNode.Parse(result.Response.RawContent!)!["error"]!["code"]!.ToString());
         Assert.AreEqual(1, client.Invocations.Count);
     }
 
     [TestMethod]
-    [DataRow("data: {\"type\":\"response.created\"}\n\n", 502)]
-    [DataRow("data: {\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}\n\n", 502)]
-    [DataRow("", 502)]
-    public async Task AggregationRejectsBrokenStreamsWithoutReplaying(string frames, int expected)
+    [DataRow("data: {\"type\":\"response.created\"}\n\n", "missing_terminal")]
+    [DataRow("data: {\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}\n\n", "upstream_error")]
+    [DataRow("", "empty_response")]
+    public async Task AggregationRejectsBrokenStreamsWithoutReplaying(string frames, string code)
     {
         using var content = new TrackedContent(frames, "text/event-stream");
         var client = Client(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content }));
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(Context(client.Object, "codex", false, 2));
-        Assert.AreEqual(expected, result.Response.StatusCode);
+        Assert.AreEqual(502, result.Response.StatusCode);
         Assert.IsTrue(content.Disposed);
         Assert.AreEqual(1, client.Invocations.Count);
-        Assert.AreEqual("invalid_upstream_response", JsonNode.Parse(result.Response.RawContent!)!["error"]!["code"]!.ToString());
+        Assert.AreEqual(code, JsonNode.Parse(result.Response.RawContent!)!["error"]!["code"]!.ToString());
     }
 
     [TestMethod]

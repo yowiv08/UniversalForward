@@ -123,6 +123,8 @@ function hostMock() {
     assert.equal(await frame.locator('#responseRetrySettings').isVisible(), true);
     assert.match(await frame.locator('#responseRetrySettings').innerText(), /开始输出后实时透传/);
     assert.match(await frame.locator('#responseRetrySettings').innerText(), /不再重放请求/);
+    assert.match(await frame.locator('#responseRetrySettings').innerText(), /429 JSON/);
+    assert.match(await frame.locator('#panel-policy').innerText(), /到期会中断已开始的流/);
     assert.doesNotMatch(await frame.locator('#responseRetrySettings').innerText(), /启用后不实时输出/);
     assert.equal(await frame.locator('#responseMaxRetries').inputValue(), '3');
     assert.equal(await frame.locator('#responseRetryIntervalSeconds').inputValue(), '5');

@@ -13,6 +13,11 @@ internal sealed class ForwardResponseAnalysis
     internal bool Terminal { get; private set; }
     internal string State { get; private set; } = "missing_terminal";
     internal string IncompleteReason { get; private set; } = "";
+    internal JsonElement? ErrorPayload { get; private set; }
+    internal string ErrorCode => ErrorPayload is { } error ? Text(error, "code") : "";
+    internal string ErrorType => ErrorPayload is { } error ? Text(error, "type") : "";
+    internal string ErrorMessage => ErrorPayload is { } error
+        ? error.ValueKind == JsonValueKind.String ? error.GetString()! : Text(error, "message") : "";
 
     internal static ForwardResponseAnalysis Read(byte[] bytes, bool sse, bool interrupted)
     {
@@ -63,37 +68,45 @@ internal sealed class ForwardResponseAnalysis
         catch (JsonException ex) { throw new IOException("上游事件内容无效", ex); }
     }
 
-    private void Error(JsonElement e)
+    private void Error(JsonElement e, bool nested = false)
     {
         HasError = true;
+        Terminal = true;
+        State = "failed";
+        if ((nested || ErrorPayload is null) && (e.ValueKind == JsonValueKind.String
+            || Text(e, "message").Length > 0 || Text(e, "code").Length > 0
+            || Text(e, "type") is "too_many_requests" or "rate_limit_error"))
+            ErrorPayload = e.Clone();
         var text = e.ValueKind == JsonValueKind.String ? e.GetString()! :
             $"{Text(e, "code")} {Text(e, "type")} {Text(e, "message")}";
         string[] permanent = ["insufficient_quota", "insufficient_balance", "credit balance", "account_deactivated",
             "account_disabled", "billing_hard_limit", "billing_not_active", "exceeded your current quota",
             "quota_exhausted", "余额不足", "账号停用", "quota exhausted"];
-        string[] limited = ["rate_limit", "rate limit", "too many requests", "限流"];
+        string[] limited = ["rate_limit", "rate limit", "too many requests", "too_many_requests", "限流"];
         PermanentError |= permanent.Any(x => text.Contains(x, StringComparison.OrdinalIgnoreCase));
         RateLimited |= limited.Any(x => text.Contains(x, StringComparison.OrdinalIgnoreCase));
     }
 
-    private void Observe(JsonElement e, string eventType = "")
+    private void Observe(JsonElement e, string eventType = "", bool outcome = true)
     {
         if (e.ValueKind != JsonValueKind.Object) throw new IOException("上游响应必须为 JSON 对象");
         var type = Text(e, "type");
         if (type.Length == 0) type = eventType;
         var status = Text(e, "status");
         if (e.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object) HasUsage = true;
-        if (e.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null) Error(error);
-        if (type is "error" or "response.error" or "response.failed" || status == "failed")
-        { Error(e); Terminal = true; State = "failed"; }
-        if (type is "response.incomplete" or "response.cancelled" or "response.canceled" || status is "incomplete" or "cancelled")
-        { HasError = true; Terminal = true; State = "incomplete"; }
-        if (e.TryGetProperty("incomplete_details", out var incomplete))
-            IncompleteReason = Text(incomplete, "reason");
-        if (type is "response.completed" or "response.done" or "message_stop" || status == "completed")
-        { Terminal = true; if (!HasError) State = "completed"; }
-        if (e.TryGetProperty("response", out var response) && response.ValueKind == JsonValueKind.Object) Observe(response);
-        if (e.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object) Observe(message);
+        if (outcome)
+        {
+            if (e.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null) Error(error, nested: true);
+            if (type is "error" or "response.error" or "response.failed" || status == "failed") Error(e);
+            if (type is "response.incomplete" or "response.cancelled" or "response.canceled" || status is "incomplete" or "cancelled" or "canceled")
+            { HasError = true; Terminal = true; State = "incomplete"; }
+            if (e.TryGetProperty("incomplete_details", out var incomplete))
+                IncompleteReason = Text(incomplete, "reason");
+            if (type is "response.completed" or "response.done" or "message_stop" || status == "completed")
+            { Terminal = true; if (!HasError) State = "completed"; }
+        }
+        if (e.TryGetProperty("response", out var response) && response.ValueKind == JsonValueKind.Object) Observe(response, outcome: outcome);
+        if (e.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object) Observe(message, outcome: false);
         if (e.TryGetProperty("delta", out var delta))
         {
             if (delta.ValueKind == JsonValueKind.String && delta.GetString()!.Length > 0) HasOutput = true;
@@ -110,9 +123,9 @@ internal sealed class ForwardResponseAnalysis
         foreach (var key in new[] { "output", "content", "summary" })
             if (e.TryGetProperty(key, out var items) && items.ValueKind == JsonValueKind.Array)
                 foreach (var item in items.EnumerateArray())
-                    if (item.ValueKind == JsonValueKind.Object) Observe(item);
-        foreach (var key in new[] { "item", "content_block" })
-            if (e.TryGetProperty(key, out var item) && item.ValueKind == JsonValueKind.Object) Observe(item);
+                    if (item.ValueKind == JsonValueKind.Object) Observe(item, outcome: false);
+        foreach (var key in new[] { "item", "content_block", "part" })
+            if (e.TryGetProperty(key, out var item) && item.ValueKind == JsonValueKind.Object) Observe(item, outcome: false);
     }
 
     private void Output(JsonElement e)

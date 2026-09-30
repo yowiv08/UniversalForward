@@ -12,8 +12,9 @@ internal sealed class ForwardStreamProbe : IDisposable
     private string _eventType = "";
     private bool _afterCr;
     private bool _firstLine = true;
+    internal ForwardResponseAnalysis Analysis => _analysis;
 
-    internal bool Observe(ReadOnlySpan<byte> bytes)
+    internal bool Observe(ReadOnlySpan<byte> bytes, bool stopOnOutput = true)
     {
         while (!bytes.IsEmpty)
         {
@@ -23,6 +24,8 @@ internal sealed class ForwardStreamProbe : IDisposable
                 if (bytes[0] == (byte)'\n') { bytes = bytes[1..]; continue; }
             }
             var end = bytes.IndexOfAny((byte)'\r', (byte)'\n');
+            if (_line.Length + (end < 0 ? bytes.Length : end) > 32 * 1024 * 1024)
+                throw new InvalidDataException("上游 SSE 行超过 32 MiB");
             if (end < 0) { _line.Write(bytes); break; }
             _line.Write(bytes[..end]);
             _afterCr = bytes[end] == (byte)'\r';
@@ -36,17 +39,27 @@ internal sealed class ForwardStreamProbe : IDisposable
                     _analysis.ReadEvent(_data.ToString(), _eventType);
                 _data.Clear();
                 _eventType = "";
-                if (_analysis.HasOutput && !_analysis.HasError) return true;
+                if (stopOnOutput && _analysis.HasOutput && !_analysis.HasError) return true;
             }
             else if (line.StartsWith("data:", StringComparison.Ordinal))
             {
                 if (_data.Length != 0) _data.Append('\n');
                 _data.Append(line.AsSpan(5).TrimStart(' '));
+                if (_data.Length > 32 * 1024 * 1024)
+                    throw new InvalidDataException("上游 SSE 事件超过 32 MiB");
             }
             else if (line.StartsWith("event:", StringComparison.Ordinal))
                 _eventType = line[6..].Trim();
         }
         return false;
+    }
+
+    internal void Complete()
+    {
+        if (_line.Length != 0 || _data.Length != 0)
+            throw new IOException("upstream_stream_incomplete: 上游 SSE 事件未完整结束");
+        if (!_analysis.Terminal)
+            throw new IOException("missing_terminal: 上游流缺少结束事件");
     }
 
     public void Dispose() => _line.Dispose();

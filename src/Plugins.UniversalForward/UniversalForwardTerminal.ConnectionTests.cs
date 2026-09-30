@@ -185,7 +185,19 @@ public sealed partial class UniversalForwardTerminal
                     else
                     {
                         valid = IsTestCompletion(result.Response.RawContent, endpoint);
-                        if (!valid) error = "上游响应未正常完成，请查看原始响应";
+                        if (!valid)
+                        {
+                            if (result.Response.RawContent is { Length: > 0 } bytes)
+                            {
+                                try
+                                {
+                                    using var document = JsonDocument.Parse(bytes);
+                                    error = ReadStreamError(document.RootElement);
+                                }
+                                catch (JsonException) { }
+                            }
+                            error ??= "上游响应未正常完成，请查看原始响应";
+                        }
                     }
                 }
                 finally { if (result.Response.Lifetime is { } lifetime) await lifetime.DisposeAsync(); }

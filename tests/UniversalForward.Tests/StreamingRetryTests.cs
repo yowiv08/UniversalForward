@@ -139,7 +139,12 @@ public sealed class StreamingRetryTests
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true, policy: policy));
         Assert.AreEqual(201, result.Response.StatusCode);
         Assert.IsTrue(result.Response.IsStreaming);
-        Assert.AreEqual(output + Limit, await ReadAll(result.Response.RawStream!));
+        using var received = new MemoryStream();
+        await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            await foreach (var chunk in result.Response.RawStream!) received.Write(chunk.Span);
+        });
+        Assert.AreEqual(output + Limit, Encoding.UTF8.GetString(received.ToArray()));
         Assert.AreEqual(1, client.Invocations.Count);
         Assert.IsTrue(body.Disposed);
     }
@@ -166,14 +171,17 @@ public sealed class StreamingRetryTests
     }
 
     [TestMethod]
-    public async Task InvalidBytesAfterOutputArePassedThroughNotReanalyzed()
+    public async Task InvalidBytesAfterOutputArePreservedButCannotEndSuccessfully()
     {
         var bytes = Encoding.UTF8.GetBytes(Text).Concat(new byte[] { 0xff, 0xfe }).ToArray();
         var client = Client(_ => Task.FromResult(Reply(new MemoryStream(bytes))));
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true, policy: Policy()));
         using var output = new MemoryStream();
-        await foreach (var chunk in result.Response.RawStream!) await output.WriteAsync(chunk);
+        await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            await foreach (var chunk in result.Response.RawStream!) await output.WriteAsync(chunk);
+        });
         CollectionAssert.AreEqual(bytes, output.ToArray());
         Assert.AreEqual(1, client.Invocations.Count);
     }
@@ -194,7 +202,8 @@ public sealed class StreamingRetryTests
     [TestMethod]
     public async Task OutputAfterCommitIsNotLimitedByPreOutputBufferSize()
     {
-        var suffix = new string('x', 32 * 1024 * 1024 + 1);
+        var frame = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"" + new string('x', 32768) + "\"}\n\n";
+        var suffix = string.Concat(Enumerable.Repeat(frame, 1025)) + Done;
         using var body = new GatedStream(Text, suffix);
         body.Release.TrySetResult();
         var client = Client(_ => Task.FromResult(Reply(body)));
@@ -220,7 +229,8 @@ public sealed class StreamingRetryTests
         var policy = Policy();
         if (kind == "idle") policy.StreamIdleTimeoutSeconds = 1;
         if (kind == "total") policy.TotalTimeoutSeconds = 1;
-        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var host = PluginTestHost.Create("universalforward");
+        using var terminal = new UniversalForwardTerminal(host);
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true,
             policy: policy, cancellation: kind == "request" ? cancellation.Token : default));
         await using var output = result.Response.RawStream!.GetAsyncEnumerator(kind == "reader" ? cancellation.Token : default);
@@ -231,6 +241,36 @@ public sealed class StreamingRetryTests
         if (kind is "request" or "reader") cancellation.Cancel();
         await Assert.ThrowsAsync<OperationCanceledException>(async () => await next.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.IsTrue(body.Disposed);
+        Assert.AreEqual(1, client.Invocations.Count);
+        var log = Mock.Get(host.Services.Log).Invocations.Select(x => x.Arguments[0])
+            .OfType<PluginLog>().Single(x => x.EventType == "request.stream.failed");
+        StringAssert.Contains(log.DetailsJson!, kind is "request" or "reader" ? "request_cancelled"
+            : kind == "total" ? "total_timeout" : "stream_idle_timeout");
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task PreOutputErrorDoesNotWaitForUpstreamConnectionToClose(bool stream)
+    {
+        using var body = new GatedStream(ResponseErrorEvidenceTests.TokenLimit, "");
+        var client = Client(_ => Task.FromResult(Reply(body)));
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", stream))
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.AreEqual(429, result.Response.StatusCode);
+        Assert.IsFalse(body.Waiting.Task.IsCompleted);
+        Assert.IsTrue(body.Disposed);
+        Assert.AreEqual(1, client.Invocations.Count);
+    }
+
+    [TestMethod]
+    public async Task NonstreamRateLimitAfterGeneratedOutputIsNotReplayed()
+    {
+        var client = Client(_ => Task.FromResult(Reply(new MemoryStream(Encoding.UTF8.GetBytes(Text + Limit)))));
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", false, policy: Policy()));
+        Assert.AreEqual(429, result.Response.StatusCode);
         Assert.AreEqual(1, client.Invocations.Count);
     }
 

@@ -85,7 +85,8 @@ public sealed class ForwardRetryTests
     [TestMethod]
     public async Task UnconsumedStreamCanBeReleased()
     {
-        var content = new StringContent("data: [DONE]\n\n");
+        var content = new StringContent("data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\ndata: [DONE]\n\n",
+            Encoding.UTF8, "text/event-stream");
         var client = new Mock<IPluginHttpClient>();
         client.Setup(x => x.SendAsync(It.IsAny<HttpRequestMessage>(), false,
             HttpCompletionOption.ResponseHeadersRead, It.IsAny<CancellationToken>()))
@@ -137,6 +138,7 @@ public sealed class ForwardRetryTests
     {
         using var stream = new WaitingStream();
         var content = new StreamContent(stream);
+        content.Headers.ContentType = new("text/event-stream");
         var client = new Mock<IPluginHttpClient>();
         client.Setup(x => x.SendAsync(It.IsAny<HttpRequestMessage>(), false,
             HttpCompletionOption.ResponseHeadersRead, It.IsAny<CancellationToken>()))
@@ -156,6 +158,7 @@ public sealed class ForwardRetryTests
 
     private sealed class WaitingStream : System.IO.Stream
     {
+        private bool _started;
         public bool Disposed { get; private set; }
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -169,6 +172,13 @@ public sealed class ForwardRetryTests
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
+            if (!_started)
+            {
+                _started = true;
+                var prefix = Encoding.UTF8.GetBytes("data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n");
+                prefix.CopyTo(buffer);
+                return prefix.Length;
+            }
             await Task.Delay(Timeout.Infinite, cancellationToken);
             return 0;
         }

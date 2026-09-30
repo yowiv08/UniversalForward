@@ -129,7 +129,7 @@ public sealed partial class UniversalForwardTerminal
                 var originalCode = (int)response.StatusCode;
                 var skipOrdinaryRetry = false;
                 byte[]? streamPrefix = null;
-                if (inspectResponses)
+                if (inspectResponses || response.IsSuccessStatusCode)
                 {
                     var originalContentType = response.Content.Headers.ContentType?.ToString();
                     var type = originalContentType ?? "application/json";
@@ -152,11 +152,11 @@ public sealed partial class UniversalForwardTerminal
                         var limited = !analysis.PermanentError && (originalCode == 429 || analysis.RateLimited);
                         var empty = !analysis.HasError && response.IsSuccessStatusCode
                             && (blank || sse && !analysis.Terminal || buffered.Interrupted);
-                        var retryKind = limited && policy.RateLimitRetryEnabled ? "rate_limit"
+                        var retryKind = limited && !analysis.HasOutput && policy.RateLimitRetryEnabled ? "rate_limit"
                             : empty && !analysis.HasOutput && policy.EmptyResponseRetryEnabled ? "empty_response" : null;
                         skipOrdinaryRetry = analysis.PermanentError || retryKind != null;
-                        if (limited && policy.RateLimitRetryEnabled && !buffered.Interrupted)
-                            lastRateLimit = RawResponse(originalCode, bytesRead, originalContentType);
+                        if (limited && !analysis.HasOutput && policy.RateLimitRetryEnabled && !buffered.Interrupted)
+                            lastRateLimit = AnalyzedErrorResponse(analysis, originalCode, bytesRead, originalContentType, context.TraceId, settings);
                         total.Token.ThrowIfCancellationRequested();
                         if (retryKind != null)
                         {
@@ -166,12 +166,16 @@ public sealed partial class UniversalForwardTerminal
                             await TryLogAsync("request.response.retry", retryKind, traceId: context.TraceId,
                                 accountId: context.Account.Id, model: context.Request.Model, statusCode: originalCode,
                                 details: new { kind = retryKind, analysis.State, analysis.IncompleteReason, analysis.HasOutput, analysis.HasUsage,
+                                    analysis.ErrorCode, analysis.ErrorType, errorMessage = SanitizeMessage(analysis.ErrorMessage, settings),
                                     retryNumber = anomalyRetries, waitSeconds = delay.TotalSeconds,
                                     reason = retry ? "retry" : anomalyRetries >= policy.ResponseMaxRetries ? "exhausted" : "deadline" });
                             if (!retry)
                             {
                                 if (limited && lastRateLimit != null)
+                                {
+                                    await LogAnalyzedErrorAsync(context, analysis, originalCode, lastRateLimit.StatusCode, settings);
                                     return Completed(lastRateLimit, lastRateLimit.StatusCode);
+                                }
                                 return ResponseAnomalyFailure(buffered.Interrupted ? "stream_interrupted"
                                     : blank ? "empty_response" : "missing_terminal");
                             }
@@ -180,6 +184,13 @@ public sealed partial class UniversalForwardTerminal
                             await Task.Delay(delay, total.Token);
                             continue;
                         }
+                        if (analysis.HasError && response.IsSuccessStatusCode
+                            && (analysis.ErrorPayload is not null || !analysis.HasOutput))
+                        {
+                            var failure = AnalyzedErrorResponse(analysis, originalCode, bytesRead, originalContentType, context.TraceId, settings);
+                            await LogAnalyzedErrorAsync(context, analysis, originalCode, failure.StatusCode, settings);
+                            return Completed(failure, failure.StatusCode);
+                        }
                         if (buffered.Interrupted || empty && analysis.HasOutput)
                             return ResponseAnomalyFailure("stream_interrupted");
                         if (empty)
@@ -187,9 +198,8 @@ public sealed partial class UniversalForwardTerminal
                         await TryLogAsync("request.response.analyzed", analysis.State, traceId: context.TraceId,
                             accountId: context.Account.Id, model: context.Request.Model, statusCode: originalCode,
                             details: new { analysis.State, analysis.IncompleteReason, analysis.HasOutput, analysis.HasUsage,
+                                analysis.ErrorCode, analysis.ErrorType, errorMessage = SanitizeMessage(analysis.ErrorMessage, settings),
                                 analysis.HasError, analysis.RateLimited, retries = anomalyRetries });
-                        if (analysis.HasError && response.IsSuccessStatusCode)
-                            return Completed(RawResponse(policy.Map(originalCode), bytesRead, type), originalCode);
                         var replacement = new ByteArrayContent(bytesRead);
                         foreach (var header in response.Content.Headers)
                             replacement.Headers.TryAddWithoutValidation(header.Key, header.Value);
@@ -224,7 +234,7 @@ public sealed partial class UniversalForwardTerminal
                     await using var lifetime = new ForwardResponseLifetime(response, total);
                     transferred = true; response = null;
                     var collected = await ForwardStreamCollector.CollectAsync(
-                        ReadBudgetedStreamAsync(lifetime, policy.StreamIdleTimeoutSeconds), upstreamEndpoint, context.CancellationToken);
+                        ReadBudgetedStreamAsync(lifetime, policy.StreamIdleTimeoutSeconds, context, settings), upstreamEndpoint, context.CancellationToken);
                     return Completed(new AdapterResponse
                     {
                         StatusCode = mappedCode, RawContent = collected, ContentType = "application/json",
@@ -238,7 +248,8 @@ public sealed partial class UniversalForwardTerminal
                     {
                         StatusCode = mappedCode, ContentType = contentType, IsStreaming = true,
                         IsRawPassthrough = true, Lifetime = lifetime,
-                        RawStream = ReadBudgetedStreamAsync(lifetime, policy.StreamIdleTimeoutSeconds, streamPrefix ?? [])
+                        RawStream = ReadBudgetedStreamAsync(lifetime, policy.StreamIdleTimeoutSeconds, context, settings,
+                            streamPrefix ?? [], contentType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase))
                     };
                     transferred = true; response = null;
                     return Completed(result, originalCode);
@@ -271,7 +282,15 @@ public sealed partial class UniversalForwardTerminal
         }
         catch (OperationCanceledException) when (!context.CancellationToken.IsCancellationRequested)
         {
-            if (lastRateLimit != null) return Completed(lastRateLimit, lastRateLimit.StatusCode);
+            if (lastRateLimit != null)
+            {
+                await TryLogAsync("request.response.failed", "限流重试达到请求总时限", "Error", context.TraceId,
+                    context.Account.Id, context.Request.Model, lastRateLimit.StatusCode,
+                    details: new { reason = "total_timeout", retries = anomalyRetries });
+                return Completed(lastRateLimit, lastRateLimit.StatusCode);
+            }
+            await TryLogAsync("request.timeout", "请求总时限已耗尽", "Error", context.TraceId,
+                context.Account.Id, context.Request.Model, 504, details: new { reason = "total_timeout" });
             return Completed(RawResponse(504, JsonSerializer.SerializeToUtf8Bytes(new { error = "请求总时限已耗尽" }), "application/json"), 0);
         }
         catch (Exception error) when (error is IOException or HttpRequestException or DecoderFallbackException or InvalidDataException)
@@ -290,6 +309,31 @@ public sealed partial class UniversalForwardTerminal
             response?.Dispose();
             if (!transferred) total.Dispose();
         }
+    }
+
+    private Task LogAnalyzedErrorAsync(PluginAttemptContext context, ForwardResponseAnalysis analysis,
+        int originalCode, int statusCode, ForwardApiSettings settings)
+        => TryLogAsync("request.response.failed", SanitizeMessage(analysis.ErrorMessage, settings), "Error",
+            context.TraceId, context.Account.Id, context.Request.Model, statusCode,
+            details: new { originalCode, statusCode, analysis.ErrorCode, analysis.ErrorType, analysis.State,
+                analysis.HasOutput, analysis.IncompleteReason });
+
+    private static AdapterResponse AnalyzedErrorResponse(ForwardResponseAnalysis analysis, int originalCode,
+        byte[] bytes, string? contentType, string? traceId, ForwardApiSettings settings)
+    {
+        if (originalCode is < 200 or >= 300)
+            return RawResponse(originalCode, bytes, IsJsonError(bytes) ? "application/json" : contentType);
+        var limited = analysis.RateLimited && !analysis.PermanentError;
+        var error = analysis.ErrorPayload is { ValueKind: JsonValueKind.Object } payload
+            ? JsonNode.Parse(payload.GetRawText())!.AsObject() : new JsonObject();
+        error["type"] ??= limited ? "rate_limit_error" : "upstream_error";
+        error["code"] ??= limited ? "rate_limit_exceeded" : analysis.State == "incomplete" ? "incomplete_response" : "upstream_error";
+        error["message"] = SanitizeMessage(analysis.ErrorMessage.Length > 0 ? analysis.ErrorMessage
+            : analysis.IncompleteReason.Length > 0 ? "上游响应未完成：" + analysis.IncompleteReason : "上游报告请求失败", settings);
+        return RawResponse(limited ? 429 : 502, JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            error, upstream_status = originalCode, trace_id = traceId
+        }, JsonOptions), "application/json");
     }
 
     private static PluginInvocationResult ResponseAnomalyFailure(string code)
@@ -324,7 +368,8 @@ public sealed partial class UniversalForwardTerminal
         HttpResponseMessage response, int idleSeconds, CancellationToken token, bool probeStream = false)
     {
         using var output = new MemoryStream();
-        using var probe = probeStream ? new ForwardStreamProbe() : null;
+        using var probe = response.Content.Headers.ContentType?.MediaType?.Equals("text/event-stream", StringComparison.OrdinalIgnoreCase) == true
+            ? new ForwardStreamProbe() : null;
         try
         {
             var stream = await response.Content.ReadAsStreamAsync(token);
@@ -338,8 +383,10 @@ public sealed partial class UniversalForwardTerminal
                 if (output.Length + count > 32 * 1024 * 1024)
                     throw new InvalidDataException("上游响应超过 32 MiB");
                 output.Write(buffer, 0, count);
-                if (probe?.Observe(buffer.AsSpan(0, count)) == true)
+                if (probe?.Observe(buffer.AsSpan(0, count), stopOnOutput: probeStream) == true)
                     return (output.ToArray(), false, true);
+                if (probe?.Analysis.HasError == true)
+                    return (output.ToArray(), false, false);
             }
         }
         catch (InvalidDataException) { throw; }
@@ -383,24 +430,63 @@ public sealed partial class UniversalForwardTerminal
     private static string UpstreamModel(string model)
         => model.StartsWith(ForwardApiPlatform + "/", StringComparison.Ordinal)
             ? model[(ForwardApiPlatform.Length + 1)..] : model;
-    private static async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadBudgetedStreamAsync(
-        ForwardResponseLifetime lifetime, int idleSeconds, ReadOnlyMemory<byte> prefix = default,
+    private async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadBudgetedStreamAsync(
+        ForwardResponseLifetime lifetime, int idleSeconds, PluginAttemptContext context, ForwardApiSettings settings,
+        ReadOnlyMemory<byte> prefix = default, bool verifySse = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         await using (lifetime)
         using (var linked = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token, cancellationToken))
+        using (var probe = verifySse ? new ForwardStreamProbe() : null)
         {
             var stream = await lifetime.Response.Content.ReadAsStreamAsync(linked.Token);
             var buffer = new byte[16384];
             linked.Token.ThrowIfCancellationRequested();
             if (!prefix.IsEmpty) yield return prefix;
+            if (!prefix.IsEmpty) await ObserveAsync(prefix, false);
             while (true)
             {
                 using var idle = CancellationTokenSource.CreateLinkedTokenSource(linked.Token);
                 idle.CancelAfter(TimeSpan.FromSeconds(idleSeconds));
-                var count = await stream.ReadAsync(buffer, idle.Token);
-                if (count == 0) yield break;
+                int count;
+                try { count = await stream.ReadAsync(buffer, idle.Token); }
+                catch (Exception error) when (error is OperationCanceledException or IOException or HttpRequestException)
+                {
+                    var reason = context.CancellationToken.IsCancellationRequested || cancellationToken.IsCancellationRequested
+                        ? "request_cancelled" : lifetime.Token.IsCancellationRequested ? "total_timeout"
+                        : idle.IsCancellationRequested ? "stream_idle_timeout" : "stream_interrupted";
+                    await TryLogAsync("request.stream.failed", reason, "Error", context.TraceId,
+                        context.Account.Id, context.Request.Model, (int)lifetime.Response.StatusCode,
+                        details: new { reason, idleSeconds, totalSeconds = settings.RequestPolicy.TotalTimeoutSeconds });
+                    throw;
+                }
+                if (count == 0)
+                {
+                    await ObserveAsync(default, true);
+                    yield break;
+                }
                 yield return buffer.AsMemory(0, count).ToArray();
+                await ObserveAsync(buffer.AsMemory(0, count), false);
+            }
+
+            async Task ObserveAsync(ReadOnlyMemory<byte> bytes, bool end)
+            {
+                if (probe is null) return;
+                try
+                {
+                    if (end) probe.Complete();
+                    else probe.Observe(bytes.Span, stopOnOutput: false);
+                    if (probe.Analysis.HasError)
+                        throw new IOException("upstream_stream_error: " + SanitizeMessage(probe.Analysis.ErrorMessage, settings));
+                }
+                catch (Exception error) when (error is IOException or DecoderFallbackException or InvalidDataException)
+                {
+                    await TryLogAsync("request.stream.failed", SanitizeMessage(error.Message, settings), "Error",
+                        context.TraceId, context.Account.Id, context.Request.Model, (int)lifetime.Response.StatusCode,
+                        details: new { reason = end ? "missing_terminal" : "upstream_stream_error",
+                            probe.Analysis.ErrorCode, probe.Analysis.ErrorType, probe.Analysis.State });
+                    throw new IOException(error.Message, error);
+                }
             }
         }
     }
@@ -609,6 +695,12 @@ public sealed partial class UniversalForwardTerminal
     private static string SanitizeMessage(string? message, ForwardApiSettings? settings)
     {
         var safe = message ?? "未知错误";
+        if (settings is not null)
+        {
+            if (!string.IsNullOrEmpty(settings.ApiKey)) safe = safe.Replace(settings.ApiKey, "[REDACTED]", StringComparison.Ordinal);
+            foreach (var key in settings.Keys ?? [])
+                if (!string.IsNullOrEmpty(key.Secret)) safe = safe.Replace(key.Secret, "[REDACTED]", StringComparison.Ordinal);
+        }
         return safe.Length <= 1200 ? safe : safe[..1200];
     }
     private static bool IsSafeCustomHeader(string name)

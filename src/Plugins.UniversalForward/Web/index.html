@@ -72,6 +72,7 @@
           <section id="panel-policy" role="tabpanel" aria-labelledby="tab-policy" hidden>
             <div class="section-heading"><h3>重试与映射</h3><p>设置请求时限、重试条件和返回状态</p></div>
             <div class="field-row"><div class="field"><label for="maxRetries">重试次数</label><input id="maxRetries" name="maxRetries" type="number" min="0" max="10" value="0" required><small>0–10次</small></div><div class="field"><label for="headerTimeoutSeconds">响应头超时</label><div class="input-unit"><input id="headerTimeoutSeconds" name="headerTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div></div><div class="field"><label for="totalTimeoutSeconds">总时限</label><div class="input-unit"><input id="totalTimeoutSeconds" name="totalTimeoutSeconds" type="number" min="1" max="3600" value="180" required><span>秒</span></div></div><div class="field"><label for="streamIdleTimeoutSeconds">流空闲超时</label><div class="input-unit"><input id="streamIdleTimeoutSeconds" name="streamIdleTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div></div></div>
+            <p class="field-hint">总时限包含等待、重试和完整流式输出，到期会中断已开始的流；流空闲超时只限制连续无数据的时间。</p>
             <div class="field"><label for="retryStatusCodes">自动重试状态码</label><input id="retryStatusCodes" name="retryStatusCodes" placeholder="例如 429,500-503"><small>用逗号分隔状态码或区间</small></div>
             <section class="response-retry-card" aria-labelledby="responseRetryTitle">
               <div class="section-heading"><h4 id="responseRetryTitle">响应异常重试</h4><p>首次有效输出前重试，开始输出后实时透传</p></div>
@@ -83,7 +84,7 @@
                   <div class="field"><label for="responseMaxRetries">最大重试次数</label><input id="responseMaxRetries" name="responseMaxRetries" type="number" min="0" max="10" value="3" required><small>0–10 次，限流与空回共享次数</small></div>
                   <div class="field"><label for="responseRetryIntervalSeconds">重试间隔</label><div class="input-unit"><input id="responseRetryIntervalSeconds" name="responseRetryIntervalSeconds" type="number" min="1" max="3600" value="5" required><span>秒</span></div></div>
                 </div>
-                <p class="response-retry-note">每个请求独立计数，重试使用同一 Key。流式请求在首次有效输出前允许重试；开始输出后实时透传，后续限流或断流不再重放请求。等待与重试计入总时限，输出前限流次数耗尽返回上游原文。非流式请求仍等待完整结果。</p>
+                <p class="response-retry-note">每个请求独立计数，重试使用同一 Key。首次有效输出前允许重试；开始输出后实时透传，异常不再重放请求。输出前的 HTTP 2xx 限流错误返回 429 JSON，其他错误返回 502 JSON，保留上游错误详情。非流式请求仍等待完整结果。</p>
               </div>
             </section>
             <div class="between editor-toolbar"><h4>状态码映射</h4><div class="segmented" role="group" aria-label="状态码映射编辑模式"><button type="button" id="mappingVisual" aria-pressed="true">可视化</button><button type="button" id="mappingJson" aria-pressed="false">JSON</button></div></div>
