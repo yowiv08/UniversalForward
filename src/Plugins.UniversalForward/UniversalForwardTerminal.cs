@@ -214,8 +214,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
             if (settings.RequestPolicy is null || settings.Endpoints is null) return false;
             settings.RequestPolicy.Validate();
             ChannelKeys.Validate(ReadKeys(settings), settings.KeySelectionMode);
-            if (settings.HeaderOverride is null) return false;
-            HeaderOverrides.Validate(settings.HeaderOverride);
+            HeaderOverrides.ValidateConfiguration(settings.HeaderOverrideMode, settings.HeaderOverride, settings.EndpointHeaderOverrides);
             if (settings.ModelProtocols is null) return false;
             foreach (var options in settings.ModelProtocols.Values)
             { if (options is null) return false; options.Validate(); }
@@ -293,6 +292,8 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         public string ExtraParams { get; set; } = "{}";
         public ForwardRequestPolicy RequestPolicy { get; set; } = new();
         public System.Text.Json.Nodes.JsonObject HeaderOverride { get; set; } = new();
+        public string HeaderOverrideMode { get; set; } = "shared";
+        public Dictionary<string, EndpointHeaderOverride> EndpointHeaderOverrides { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, ModelProtocolOptions> ModelProtocols { get; set; } = new(StringComparer.Ordinal);
     }
     private sealed record AccountModelPolicy(bool Enabled, int Weight, string[] Endpoints, string[] Models);

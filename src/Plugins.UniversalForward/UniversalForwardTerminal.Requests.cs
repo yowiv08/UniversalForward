@@ -67,11 +67,13 @@ public sealed partial class UniversalForwardTerminal
         try
         {
             var isTest = context.HttpClient is ConnectionTestClient;
-            var resolvedHeaders = HeaderOverrides.Resolve(settings.HeaderOverride, context.Request.RequestHeaders,
+            var headerConfig = HeaderOverrides.Select(settings.HeaderOverrideMode, settings.HeaderOverride,
+                settings.EndpointHeaderOverrides, upstreamEndpoint);
+            var resolvedHeaders = HeaderOverrides.Resolve(headerConfig, context.Request.RequestHeaders,
                 settings.ApiKey, isTest, ClientProfiles.Variables(
                     isTest ? null : JsonNode.Parse(context.Request.OriginalBody!.Value.GetRawText()),
                     isTest ? null : context.Request.RequestHeaders));
-            var profile = ClientProfiles.Profile(settings.HeaderOverride);
+            var profile = ClientProfiles.Profile(headerConfig);
             var nativeStream = profile == "codex" && upstreamEndpoint == "/v1/responses"
                 || profile == "claude" && upstreamEndpoint == "/v1/messages";
             if (isTest && (profile == "codex" && upstreamEndpoint == "/v1/responses"

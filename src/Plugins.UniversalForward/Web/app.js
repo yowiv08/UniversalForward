@@ -46,6 +46,8 @@
   let accounts = [], candidates = [], keyDraft = [], deletedKeyIds = [], keyRevision = 0, keySequence = 0;
   let modelProtocolDraft = {}, extraParams = {}, savedAccount = null, editorEpoch = 0;
   let headerMode = 'visual', mappingMode = 'visual', headerRows = [], mappingRows = [];
+  let headerPolicyMode = 'shared', headerScope = 'common', commonHeaderDraft = {};
+  let endpointHeaderDraft = Object.create(null);
   let confirmResolve = null, loading = false, saving = false;
   const switchingChannels = new Set();
   const button = (text, work, cls = 'secondary') => {
@@ -184,8 +186,10 @@
     for (const [name, fallback] of Object.entries(defaults)) form.elements[name].value = account?.requestPolicy?.[name] ?? fallback;
     for (const name of ['rateLimitRetryEnabled', 'emptyResponseRetryEnabled']) form.elements[name].checked = account?.requestPolicy?.[name] ?? false;
     updateResponseRetry();
-    headerRows = Object.entries(account?.headerOverride || {}).map(([name, value]) => ({ name, value }));
-    headerMode = 'visual'; $('headerOverride').value = JSON.stringify(account?.headerOverride || {}, null, 2);
+    headerPolicyMode = account?.headerOverrideMode || 'shared'; headerScope = 'common'; headerMode = 'visual';
+    commonHeaderDraft = structuredClone(account?.headerOverride || {});
+    endpointHeaderDraft = Object.assign(Object.create(null), structuredClone(account?.endpointHeaderOverrides || {}));
+    loadHeaderScope();
     mappingRows = Object.entries(account?.requestPolicy?.statusCodeMapping || {}).map(([from, to]) => ({ from, to: String(to) }));
     mappingMode = 'visual'; $('statusCodeMapping').value = JSON.stringify(account?.requestPolicy?.statusCodeMapping || {}, null, 2);
     const selected = new Set(account?.endpoints || paths), root = $('endpoints'); root.replaceChildren();
@@ -296,7 +300,8 @@
         route = 'models/refresh'; body = { id: savedAccount.id, keyId: key.id };
       } else {
         route = 'models/discover';
-        body = { id: savedAccount?.id || null, baseUrl, headerOverride: readHeaders(), extraParams };
+        commitHeaderDraft();
+        body = { id: savedAccount?.id || null, baseUrl, headerOverride: commonHeaderDraft, extraParams };
         if (key.secret.trim()) body.apiKey = key.secret.trim(); else body.keyId = key.id;
       }
       const data = await api('POST', route, body);
@@ -356,6 +361,66 @@
     return result;
   }
   const isHeaderRule = name => name === '*' || /^(re|regex):/i.test(name);
+  const headerInherited = () => headerScope !== 'common' && endpointHeaderDraft[headerScope]?.useCommon !== false;
+  function commitHeaderDraft() {
+    const headers = readHeaders();
+    if (headerScope === 'common') commonHeaderDraft = headers;
+    else if (!headerInherited()) endpointHeaderDraft[headerScope].headers = headers;
+  }
+  function updateHeaderControls() {
+    const inherited = headerInherited();
+    $('headerShared').setAttribute('aria-pressed', String(headerPolicyMode === 'shared'));
+    $('headerPerEndpoint').setAttribute('aria-pressed', String(headerPolicyMode === 'perEndpoint'));
+    $('headerScopes').hidden = headerPolicyMode !== 'perEndpoint';
+    for (const button of document.querySelectorAll('[data-header-scope]'))
+      button.setAttribute('aria-pressed', String(button.dataset.headerScope === headerScope));
+    $('headerInheritance').hidden = headerScope === 'common';
+    $('headerUseCommon').checked = inherited;
+    $('headerScopeTitle').textContent = headerScope === 'common' ? '通用配置'
+      : protocolLabels[headerScope === '/v1/responses' ? 'responses' : 'messages'];
+    $('headerScopeHint').textContent = headerScope === 'common'
+      ? headerPolicyMode === 'shared' ? '应用于所有接口及模型发现' : '应用于继承通用配置的接口及模型发现'
+      : `${headerScope} · ${inherited ? '使用通用配置，只读' : '独立配置，不叠加通用请求头'} · 按实际上游接口匹配`;
+    for (const id of ['templateCodex', 'templateClaude', 'headerClear', 'headerAdd', 'headerFormat'])
+      $(id).disabled = inherited;
+    $('headerOverride').readOnly = inherited;
+  }
+  function loadHeaderScope() {
+    const headers = headerScope === 'common' || headerInherited()
+      ? commonHeaderDraft : endpointHeaderDraft[headerScope].headers;
+    headerRows = Object.entries(headers).map(([name, value]) => ({ name, value }));
+    $('headerOverride').value = JSON.stringify(headers, null, 2);
+    renderHeaders(); updateModes();
+  }
+  function selectHeaderScope(mode, scope) {
+    try {
+      commitHeaderDraft();
+      headerPolicyMode = mode; headerScope = mode === 'shared' ? 'common' : scope;
+      loadHeaderScope(); feedback('headerStatus');
+    } catch (e) { feedback('headerStatus', e.message, true); }
+  }
+  $('headerShared').onclick = () => selectHeaderScope('shared', 'common');
+  $('headerPerEndpoint').onclick = () => selectHeaderScope('perEndpoint', 'common');
+  for (const button of document.querySelectorAll('[data-header-scope]')) {
+    button.onclick = () => selectHeaderScope('perEndpoint', button.dataset.headerScope);
+    button.onkeydown = event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const buttons = [...document.querySelectorAll('[data-header-scope]')], index = buttons.indexOf(button);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+      selectHeaderScope('perEndpoint', buttons[next].dataset.headerScope);
+      if (headerScope === buttons[next].dataset.headerScope) buttons[next].focus();
+    };
+  }
+  $('headerUseCommon').onchange = () => {
+    try {
+      commitHeaderDraft();
+      endpointHeaderDraft[headerScope] ??= { useCommon: true, headers: structuredClone(commonHeaderDraft) };
+      endpointHeaderDraft[headerScope].useCommon = $('headerUseCommon').checked;
+      loadHeaderScope(); feedback('headerStatus');
+    } catch (e) { updateHeaderControls(); feedback('headerStatus', e.message, true); }
+  };
   function readHeaders() {
     const result = headerMode === 'json' ? objectJson($('headerOverride').value, '请求头') : Object.create(null);
     if (headerMode === 'visual') {
@@ -376,16 +441,20 @@
     return result;
   }
   function renderHeaders() {
+    updateHeaderControls();
+    const inherited = headerInherited();
     const root = $('headerRows'); root.replaceChildren();
     if (!headerRows.length) root.append(el('div', '使用模板快速配置，或添加自定义请求头', 'empty'));
     headerRows.forEach((row, index) => {
       const line = el('div', undefined, 'header-row'), name = el('input'), value = el('input');
       name.value = row.name; name.placeholder = '请求头名称'; name.setAttribute('aria-label', `请求头 ${index + 1} 名称`);
       value.value = typeof row.value === 'string' ? row.value : JSON.stringify(row.value);
+      name.readOnly = inherited; value.readOnly = inherited;
       value.placeholder = '值'; value.setAttribute('aria-label', `请求头 ${index + 1} 值`);
       name.oninput = () => row.name = name.value;
       value.oninput = () => { row.value = value.value; };
       const remove = button('×', () => { headerRows.splice(index, 1); renderHeaders(); }, 'icon-button danger');
+      remove.disabled = inherited;
       remove.setAttribute('aria-label', `删除请求头 ${index + 1}`); line.append(name, value, remove); root.append(line);
     });
   }
@@ -443,19 +512,25 @@
   }
   $('headerVisual').onclick = () => setMode('header', 'visual'); $('headerJson').onclick = () => setMode('header', 'json');
   $('mappingVisual').onclick = () => setMode('mapping', 'visual'); $('mappingJson').onclick = () => setMode('mapping', 'json');
-  $('headerAdd').onclick = () => { headerRows.push({ name: '', value: '' }); renderHeaders(); $('headerRows').lastElementChild.querySelector('input').focus(); };
+  $('headerAdd').onclick = () => { if (headerInherited()) return; headerRows.push({ name: '', value: '' }); renderHeaders(); $('headerRows').lastElementChild.querySelector('input').focus(); };
   $('mappingAdd').onclick = () => { mappingRows.push({ from: '', to: '' }); renderMappings(); };
   $('headerFormat').onclick = () => setMode('header', 'json'); $('mappingFormat').onclick = () => setMode('mapping', 'json');
   async function setTemplate(name) {
+    if (headerInherited()) return;
+    const epoch = editorEpoch, scope = headerScope, mode = headerPolicyMode;
     if ((headerRows.length || $('headerOverride').value.trim() !== '{}') && !await ask('用所选模板替换当前请求头？', '应用模板')) return;
+    if (epoch !== editorEpoch || scope !== headerScope || mode !== headerPolicyMode || headerInherited()) return;
     headerRows = Object.entries(templates[name]).map(([name, value]) => ({ name, value }));
     $('headerOverride').value = JSON.stringify(templates[name], null, 2);
-    renderHeaders(); feedback('headerStatus', `已应用 ${name === 'codex' ? 'Codex' : 'Claude Code'} 模板`);
+    commitHeaderDraft(); renderHeaders(); feedback('headerStatus', `已应用 ${name === 'codex' ? 'Codex' : 'Claude Code'} 模板`);
   }
   $('templateCodex').onclick = () => setTemplate('codex'); $('templateClaude').onclick = () => setTemplate('claude');
   $('headerClear').onclick = async () => {
+    if (headerInherited()) return;
+    const epoch = editorEpoch, scope = headerScope, mode = headerPolicyMode;
     if (!await ask('清空当前请求头覆盖配置？', '清空请求头')) return;
-    headerRows = []; $('headerOverride').value = '{}'; renderHeaders(); feedback('headerStatus', '请求头已清空');
+    if (epoch !== editorEpoch || scope !== headerScope || mode !== headerPolicyMode || headerInherited()) return;
+    headerRows = []; $('headerOverride').value = '{}'; commitHeaderDraft(); renderHeaders(); feedback('headerStatus', '请求头已清空');
   };
   $('headerCopy').onclick = async () => {
     try {
@@ -476,7 +551,7 @@
       if (!models.length) fail('请填写或选择允许模型', 'models', 'models');
       const modelProtocols = readProtocols();
       let headerOverride, statusCodeMapping;
-      try { headerOverride = readHeaders(); } catch (e) { fail(e.message, 'headers'); }
+      try { commitHeaderDraft(); headerOverride = commonHeaderDraft; } catch (e) { fail(e.message, 'headers'); }
       try { statusCodeMapping = readMapping(); } catch (e) { fail(e.message, 'policy'); }
       const requestPolicy = { statusCodeMapping };
       for (const name of ['rateLimitRetryEnabled', 'emptyResponseRetryEnabled']) requestPolicy[name] = form.elements[name].checked;
@@ -485,7 +560,8 @@
       const saved = await api('POST', 'accounts/save', {
         id: form.elements.id.value || null, label: form.elements.label.value.trim(), baseUrl: form.elements.baseUrl.value.trim(),
         keys, deletedKeyIds, keyRevision, keySelectionMode: $('keySelectionMode').value, weight: Number(form.elements.weight.value),
-        enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, requestPolicy, headerOverride, extraParams
+        enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, requestPolicy, headerOverride,
+        headerOverrideMode: headerPolicyMode, endpointHeaderOverrides: endpointHeaderDraft, extraParams
       });
       editorEpoch++; dialog.close(); await load(); message(saved.warning || '渠道已保存', !!saved.warning);
     } catch (e) { feedback('formError', e.message, true); }

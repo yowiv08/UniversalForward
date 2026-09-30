@@ -31,3 +31,9 @@ dialog{border:1px solid #dfe6f2;border-radius:16px;padding:0;color:inherit;backg
 :root .response-retry-card { border: 1px solid var(--border, #dce2eb); border-radius: 12px; padding: 16px; margin: 16px 0; }
 .response-retry-toggle { display: inline-flex; align-items: center; gap: 8px; margin: 8px 24px 8px 0; }
 .response-retry-note { font-size: 12px; line-height: 1.7; color: var(--muted, #64748b); }
+.header-routing-mode{margin-bottom:14px}.header-routing-mode button{flex:1;padding:9px}
+.header-scopes{margin-bottom:18px;flex-wrap:wrap}.header-scopes button{flex:1;padding:8px 10px}
+.header-scope-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.header-scope-hint{font-size:12px;color:var(--muted);margin:7px 0 18px;overflow-wrap:anywhere}
+.header-row input[readonly],#headerOverride[readonly]{background:#f3f5f9;color:#758095}
+@media(max-width:560px){.header-scopes button{font-size:10px;padding:7px 5px}.header-scope-heading h4{font-size:13px}}

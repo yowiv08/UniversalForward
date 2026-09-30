@@ -78,10 +78,15 @@ public sealed partial class UniversalForwardTerminal
         var policy = input.RequestPolicy ?? previous.RequestPolicy;
         try { policy.Validate(); } catch (FormatException error) { return context.BadRequest(error.Message); }
         var headerOverride = input.HeaderOverride ?? previous.HeaderOverride;
-        try { HeaderOverrides.Validate(headerOverride); } catch (FormatException error) { return context.BadRequest(error.Message); }
+        var headerOverrideMode = input.HeaderOverrideMode ?? previous.HeaderOverrideMode;
+        var endpointHeaderOverrides = input.EndpointHeaderOverrides ?? previous.EndpointHeaderOverrides;
+        try { HeaderOverrides.ValidateConfiguration(headerOverrideMode, headerOverride, endpointHeaderOverrides); }
+        catch (FormatException error) { return context.BadRequest(error.Message); }
         var settings = new ForwardApiSettings
         {
             HeaderOverride = headerOverride,
+            HeaderOverrideMode = headerOverrideMode,
+            EndpointHeaderOverrides = endpointHeaderOverrides,
             ModelProtocols = input.ModelProtocols ?? previous.ModelProtocols,
             RequestPolicy = policy,
             BaseUrl = baseUrl,
@@ -355,6 +360,8 @@ public sealed partial class UniversalForwardTerminal
             extraParams = settings.ExtraParams,
             requestPolicy = settings.RequestPolicy,
             headerOverride = settings.HeaderOverride,
+            headerOverrideMode = settings.HeaderOverrideMode,
+            endpointHeaderOverrides = settings.EndpointHeaderOverrides,
             modelProtocols = settings.ModelProtocols,
             models = ReadModels(account),
             availableModels = ReadAvailableModels(account),
@@ -479,6 +486,8 @@ public sealed partial class UniversalForwardTerminal
         public JsonElement? ExtraParams { get; init; }
         public ForwardRequestPolicy? RequestPolicy { get; init; }
         public JsonObject? HeaderOverride { get; init; }
+        public string? HeaderOverrideMode { get; init; }
+        public Dictionary<string, EndpointHeaderOverride>? EndpointHeaderOverrides { get; init; }
         public Dictionary<string, ModelProtocolOptions>? ModelProtocols { get; init; }
     }
     private sealed class ModelDiscoveryInput

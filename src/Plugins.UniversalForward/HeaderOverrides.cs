@@ -6,6 +6,32 @@ namespace Plugins.UniversalForward;
 /// <summary>请求头覆盖、变量替换和名称匹配。</summary>
 internal static class HeaderOverrides
 {
+    internal static void ValidateConfiguration(string mode, JsonObject common,
+        Dictionary<string, EndpointHeaderOverride> endpoints)
+    {
+        if (mode is not ("shared" or "perEndpoint"))
+            throw new FormatException("请求头配置模式必须是 shared 或 perEndpoint。");
+        if (common is null || endpoints is null)
+            throw new FormatException("请求头配置不能为 null。");
+        Validate(common);
+        foreach (var (endpoint, config) in endpoints)
+        {
+            if (!UniversalForwardTerminal.SupportedEndpoints.Contains(endpoint, StringComparer.Ordinal))
+                throw new FormatException("请求头接口必须是 /v1/responses 或 /v1/messages。");
+            if (config?.Headers is null) throw new FormatException("接口请求头配置不能为 null。");
+            Validate(config.Headers);
+        }
+    }
+
+    internal static JsonObject Select(string mode, JsonObject common,
+        Dictionary<string, EndpointHeaderOverride> endpoints, string endpoint)
+    {
+        var query = endpoint.IndexOf('?', StringComparison.Ordinal);
+        var path = query < 0 ? endpoint : endpoint[..query];
+        return mode == "perEndpoint" && endpoints.TryGetValue(path, out var config) && !config.UseCommon
+            ? config.Headers : common;
+    }
+
     private const string ClientPrefix = "{client_header:";
     private static bool Rule(string name) => name == "*" || name.StartsWith("re:", StringComparison.OrdinalIgnoreCase)
         || name.StartsWith("regex:", StringComparison.OrdinalIgnoreCase);

@@ -223,9 +223,11 @@ public sealed class ConnectionTestsTests
     }
 
     [TestMethod]
-    [DataRow("codex", "/v1/responses")]
-    [DataRow("claude", "/v1/messages")]
-    public async Task ClientProfileTestsSendMatchingBodiesAndPinIdentityAcrossRetries(string profile, string endpoint)
+    [DataRow("codex", "/v1/responses", false)]
+    [DataRow("claude", "/v1/messages", false)]
+    [DataRow("codex", "/v1/responses", true)]
+    [DataRow("claude", "/v1/messages", true)]
+    public async Task ClientProfileTestsSendMatchingBodiesAndPinIdentityAcrossRetries(string profile, string endpoint, bool scoped)
     {
         var host = Host();
         var account = await host.Services.Accounts.GetAsync("account", CancellationToken.None);
@@ -236,6 +238,16 @@ public sealed class ConnectionTestsTests
             ? """{"Originator":"codex_exec","User-Agent":"Codex Desktop/0.146.0-alpha.9.2 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.727.51351)"}"""
             : """{"x-app":"cli","anthropic-beta":"claude-code-20250219","User-Agent":"claude-cli/2.1.161 (external, cli)"}""");
         settings["requestPolicy"] = System.Text.Json.Nodes.JsonNode.Parse("""{"maxRetries":1}""");
+        if (scoped)
+        {
+            settings["headerOverrideMode"] = "perEndpoint";
+            settings["endpointHeaderOverrides"] = new System.Text.Json.Nodes.JsonObject
+            {
+                [endpoint] = new System.Text.Json.Nodes.JsonObject
+                { ["useCommon"] = false, ["headers"] = settings["headerOverride"]!.DeepClone() }
+            };
+            settings["headerOverride"] = new System.Text.Json.Nodes.JsonObject { ["X-Common-Only"] = "unused" };
+        }
         account.Credential = new CustomCredential(new Dictionary<string, string?>(fields)
             { ["settings"] = settings.ToJsonString() });
         var bodies = new List<string>();
@@ -244,6 +256,7 @@ public sealed class ConnectionTestsTests
         {
             var text = await request.Content!.ReadAsStringAsync();
             bodies.Add(text);
+            Assert.IsFalse(request.Headers.Contains("X-Common-Only"));
             var body = System.Text.Json.Nodes.JsonNode.Parse(text)!;
             var session = request.Headers.GetValues(profile == "codex" ? "Session-Id" : "x-claude-code-session-id").Single();
             sessions.Add(session);

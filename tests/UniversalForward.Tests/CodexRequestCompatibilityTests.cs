@@ -12,12 +12,18 @@ namespace UniversalForward.Tests;
 public sealed class ClientRequestCompatibilityTests
 {
     [TestMethod]
-    [DataRow("codex", "/v1/responses")]
-    [DataRow("", "/v1/responses")]
-    [DataRow("codex", "/v1/messages")]
-    [DataRow("claude", "/v1/messages")]
-    [DataRow("claude", "/v1/responses")]
-    public async Task NormalInvocationCompletesOnlyMatchingProfileAndPinsRetryBody(string profile, string endpoint)
+    [DataRow("codex", "/v1/responses", false)]
+    [DataRow("", "/v1/responses", false)]
+    [DataRow("codex", "/v1/messages", false)]
+    [DataRow("claude", "/v1/messages", false)]
+    [DataRow("claude", "/v1/responses", false)]
+    [DataRow("codex", "/v1/responses", true)]
+    [DataRow("", "/v1/responses", true)]
+    [DataRow("", "/v1/messages", true)]
+    [DataRow("codex", "/v1/messages", true)]
+    [DataRow("claude", "/v1/messages", true)]
+    [DataRow("claude", "/v1/responses", true)]
+    public async Task NormalInvocationCompletesOnlyMatchingProfileAndPinsRetryBody(string profile, string endpoint, bool scoped)
     {
         var original = JsonNode.Parse("""
             {"model":"universalforward/model","stream":false,"input":"Keep my real question.",
@@ -35,6 +41,8 @@ public sealed class ClientRequestCompatibilityTests
                 var json = await request.Content!.ReadAsStringAsync(ct);
                 sent.Add(json);
                 var body = JsonNode.Parse(json)!;
+                Assert.AreEqual(endpoint, request.RequestUri!.AbsolutePath);
+                Assert.IsFalse(request.Headers.Contains("X-Common-Only"));
                 Assert.AreEqual("model", body["model"]!.ToString());
                 Assert.AreEqual(endpoint == "/v1/messages" ? "channel-key" : "Bearer channel-key",
                     request.Headers.GetValues(endpoint == "/v1/messages" ? "x-api-key" : "Authorization").Single());
@@ -90,6 +98,18 @@ public sealed class ClientRequestCompatibilityTests
                 ["models"] = """["model"]""", ["modelsConfigured"] = "true"
             })
         };
+        if (scoped) EndpointHeaderOverrideTests.Edit(account, settings =>
+        {
+            var selected = settings["headerOverride"]!.DeepClone();
+            settings["headerOverrideMode"] = "perEndpoint";
+            settings["endpointHeaderOverrides"] = new JsonObject
+            {
+                [endpoint] = new JsonObject { ["useCommon"] = false, ["headers"] = selected }
+            };
+            settings["headerOverride"] = JsonNode.Parse(profile == "codex"
+                ? """{"x-app":"cli","anthropic-beta":"claude-code-test","X-Common-Only":"unused"}"""
+                : """{"Originator":"codex_exec","X-Common-Only":"unused"}""");
+        });
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(new PluginAttemptContext
         {
