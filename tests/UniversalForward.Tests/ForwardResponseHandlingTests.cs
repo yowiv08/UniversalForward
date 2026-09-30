@@ -16,11 +16,15 @@ public sealed class ForwardResponseHandlingTests
     private const string Messages = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"OK\"}],\"usage\":{\"input_tokens\":3}}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":2}}\n\ndata: {\"type\":\"message_stop\"}\n\n";
 
     [TestMethod]
-    [DataRow("codex", false)]
-    [DataRow("codex", true)]
-    [DataRow("claude", false)]
-    [DataRow("claude", true)]
-    public async Task TemplatesUseUpstreamStreamingButHonorDownstreamMode(string profile, bool stream)
+    [DataRow("codex", false, false)]
+    [DataRow("codex", true, false)]
+    [DataRow("claude", false, false)]
+    [DataRow("claude", true, false)]
+    [DataRow("codex", false, true)]
+    [DataRow("codex", true, true)]
+    [DataRow("claude", false, true)]
+    [DataRow("claude", true, true)]
+    public async Task TemplatesUseUpstreamStreamingButHonorDownstreamMode(string profile, bool stream, bool retry)
     {
         using var content = new TrackedContent(profile == "codex" ? Responses : Messages, "text/event-stream");
         var client = Client(async request =>
@@ -32,7 +36,10 @@ public sealed class ForwardResponseHandlingTests
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         });
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
-        var result = await terminal.InvokeAsync(Context(client.Object, profile, stream));
+        var result = await terminal.InvokeAsync(Context(client.Object, profile, stream, policy: new()
+        {
+            RateLimitRetryEnabled = retry, EmptyResponseRetryEnabled = retry
+        }));
         Assert.AreEqual(200, result.Response.StatusCode);
         Assert.AreEqual(stream, result.Response.IsStreaming);
         if (stream)

@@ -121,6 +121,9 @@ function hostMock() {
     assert.equal(await frame.locator('#responseRetrySettings').isVisible(), false);
     await frame.locator('#rateLimitRetryEnabled').check();
     assert.equal(await frame.locator('#responseRetrySettings').isVisible(), true);
+    assert.match(await frame.locator('#responseRetrySettings').innerText(), /开始输出后实时透传/);
+    assert.match(await frame.locator('#responseRetrySettings').innerText(), /不再重放请求/);
+    assert.doesNotMatch(await frame.locator('#responseRetrySettings').innerText(), /启用后不实时输出/);
     assert.equal(await frame.locator('#responseMaxRetries').inputValue(), '3');
     assert.equal(await frame.locator('#responseRetryIntervalSeconds').inputValue(), '5');
     await frame.locator('#rateLimitRetryEnabled').uncheck();

@@ -17,11 +17,11 @@ internal sealed class ForwardResponseAnalysis
     internal static ForwardResponseAnalysis Read(byte[] bytes, bool sse, bool interrupted)
     {
         var result = new ForwardResponseAnalysis();
-        var text = new UTF8Encoding(false, true).GetString(bytes);
+        var text = new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
         if (string.IsNullOrWhiteSpace(text)) return result;
         if (!sse || text.TrimStart().StartsWith('{'))
         {
-            result.Parse(text);
+            result.ReadEvent(text);
             if (!sse) result.Terminal = true;
             return result;
         }
@@ -31,7 +31,7 @@ internal sealed class ForwardResponseAnalysis
         {
             if (line.Length == 0)
             {
-                if (data.Count > 0) result.Parse(string.Join("\n", data), eventType);
+                if (data.Count > 0) result.ReadEvent(string.Join("\n", data), eventType);
                 data.Clear();
                 eventType = "";
             }
@@ -42,7 +42,7 @@ internal sealed class ForwardResponseAnalysis
         }
         if (data.Count > 0)
         {
-            try { result.Parse(string.Join("\n", data), eventType); }
+            try { result.ReadEvent(string.Join("\n", data), eventType); }
             catch (IOException) when (interrupted) { result.HasOutput = true; }
         }
         return result;
@@ -52,7 +52,7 @@ internal sealed class ForwardResponseAnalysis
         => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString()! : "";
 
-    private void Parse(string text, string eventType = "")
+    internal void ReadEvent(string text, string eventType = "")
     {
         if (text.Trim() == "[DONE]") { Terminal = true; if (!HasError) State = "completed"; return; }
         try
@@ -107,7 +107,7 @@ internal sealed class ForwardResponseAnalysis
                 if (choice.TryGetProperty("finish_reason", out var finish) && finish.ValueKind != JsonValueKind.Null)
                 { Terminal = true; if (!HasError) State = "completed"; }
             }
-        foreach (var key in new[] { "output", "content" })
+        foreach (var key in new[] { "output", "content", "summary" })
             if (e.TryGetProperty(key, out var items) && items.ValueKind == JsonValueKind.Array)
                 foreach (var item in items.EnumerateArray())
                     if (item.ValueKind == JsonValueKind.Object) Observe(item);
@@ -117,9 +117,10 @@ internal sealed class ForwardResponseAnalysis
 
     private void Output(JsonElement e)
     {
-        foreach (var key in new[] { "text", "content", "thinking", "reasoning", "reasoning_content", "refusal", "partial_json", "arguments" })
+        foreach (var key in new[] { "text", "content", "thinking", "reasoning", "reasoning_content", "refusal", "partial_json", "arguments", "encrypted_content" })
             if (Text(e, key).Length > 0) HasOutput = true;
-        if (Text(e, "type") is "tool_use" or "function_call" or "reasoning" or "web_search_call" or "file_search_call")
+        var type = Text(e, "type");
+        if (type == "tool_use" || type.EndsWith("_call", StringComparison.Ordinal))
             HasOutput = true;
         foreach (var key in new[] { "tool_calls", "function_call" })
             if (e.TryGetProperty(key, out var value) && value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)

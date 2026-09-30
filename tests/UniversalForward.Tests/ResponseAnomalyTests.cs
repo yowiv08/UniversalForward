@@ -15,10 +15,16 @@ public sealed class ResponseAnomalyTests
     [TestMethod]
     [DataRow("data: {\"type\":\"response.output_text.delta\",\"delta\":\"rate limit exceeded\"}\n\ndata: [DONE]\n\n", false, true, true)]
     [DataRow(Limit, true, false, true)]
+    [DataRow("\uFEFF" + Limit, true, false, true)]
     [DataRow("data: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"busy\"}}\n\n", true, false, true)]
     [DataRow("data: {\"type\":\"message_start\",\"message\":{\"content\":[],\"usage\":{\"input_tokens\":10}}}\n\n", false, false, false)]
     [DataRow("data: {\"type\":\"content_block_delta\",\"delta\":{\"thinking\":\"thinking\"}}\n\n", false, true, false)]
     [DataRow("data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"id\"}}\n\n", false, true, false)]
+    [DataRow("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\",\"summary\":[]}}\n\n", false, false, false)]
+    [DataRow("data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"thinking\"}\n\n", false, true, false)]
+    [DataRow("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"encrypted_content\":\"encrypted\"}}\n\n", false, true, false)]
+    [DataRow("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"thinking\"}]}}\n\n", false, true, false)]
+    [DataRow("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"custom_tool_call\",\"id\":\"id\"}}\n\n", false, true, false)]
     [DataRow("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"id\"}]},\"finish_reason\":null}]}\n\n", false, true, false)]
     [DataRow("data: {\"choices\":[{\"text\":\"text\",\"finish_reason\":\"stop\"}]}\n\n", false, true, true)]
     [DataRow(Done, false, false, true)]
@@ -81,8 +87,6 @@ public sealed class ResponseAnomalyTests
     [TestMethod]
     [DataRow("", 2, "empty_response")]
     [DataRow("data: {\"type\":\"response.created\",\"response\":{}}\n\n", 2, "missing_terminal")]
-    [DataRow("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n", 1, "stream_interrupted")]
-    [DataRow("data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\"}}\n\n", 1, "stream_interrupted")]
     public async Task EmptyOnlyRetriesBeforeOutput(string body, int callsExpected, string code)
     {
         var calls = 0;
@@ -92,6 +96,21 @@ public sealed class ResponseAnomalyTests
         Assert.AreEqual(callsExpected, calls);
         Assert.AreEqual(502, result.Response.StatusCode);
         StringAssert.Contains(Encoding.UTF8.GetString(result.Response.RawContent!), code);
+    }
+
+    [TestMethod]
+    [DataRow("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n")]
+    [DataRow("data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\"}}\n\n")]
+    public async Task MissingTerminalAfterOutputIsPassedThroughWithoutReplay(string body)
+    {
+        var client = Client(_ => Reply(body));
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true, policy: Policy(1)));
+        Assert.AreEqual(200, result.Response.StatusCode);
+        using var output = new MemoryStream();
+        await foreach (var chunk in result.Response.RawStream!) await output.WriteAsync(chunk);
+        Assert.AreEqual(body, Encoding.UTF8.GetString(output.ToArray()));
+        Assert.AreEqual(1, client.Invocations.Count);
     }
 
     [TestMethod]
@@ -178,20 +197,25 @@ public sealed class ResponseAnomalyTests
     }
 
     [TestMethod]
-    public async Task NoOutputEscapesBeforeEntireBodyIsRead()
+    public async Task FirstOutputEscapesBeforeEntireBodyIsRead()
     {
-        using var body = new ControlledStream(Done, wait: true);
+        const string first = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n";
+        using var body = new ControlledStream(first, wait: true);
         var client = StreamClient(body);
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var task = terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true, policy: Policy(0)));
+        var result = await task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.IsFalse(body.Waiting.Task.IsCompleted);
+        Assert.IsFalse(body.Disposed);
+        await using var output = result.Response.RawStream!.GetAsyncEnumerator();
+        Assert.IsTrue(await output.MoveNextAsync());
+        Assert.AreEqual(first, Encoding.UTF8.GetString(output.Current.Span));
+        var next = output.MoveNextAsync().AsTask();
         await body.Waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.IsFalse(task.IsCompleted);
+        Assert.IsFalse(next.IsCompleted);
         body.Release.TrySetResult();
-        var result = await task;
+        Assert.IsFalse(await next.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.IsTrue(body.Disposed);
-        using var output = new MemoryStream();
-        await foreach (var chunk in result.Response.RawStream!) await output.WriteAsync(chunk);
-        Assert.AreEqual(Done, Encoding.UTF8.GetString(output.ToArray()));
     }
 
     [TestMethod]
@@ -212,7 +236,16 @@ public sealed class ResponseAnomalyTests
         });
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true, policy: Policy(1)));
-        Assert.AreEqual(502, result.Response.StatusCode);
+        Assert.AreEqual(hasOutput ? 200 : 502, result.Response.StatusCode);
+        if (hasOutput)
+        {
+            using var output = new MemoryStream();
+            await Assert.ThrowsAsync<IOException>(async () =>
+            {
+                await foreach (var chunk in result.Response.RawStream!) await output.WriteAsync(chunk);
+            });
+            StringAssert.Contains(Encoding.UTF8.GetString(output.ToArray()), "partial");
+        }
         Assert.AreEqual(hasOutput ? 1 : 2, calls);
         Assert.IsTrue(streams.All(x => x.Disposed));
     }
