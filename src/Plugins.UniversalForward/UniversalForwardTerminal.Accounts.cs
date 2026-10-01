@@ -221,7 +221,11 @@ public sealed partial class UniversalForwardTerminal
         {
             var result = await FetchModelsAsync(settings, context.CancellationToken);
             if (result.Error is not null)
+            {
+                await TryLogAsync("models.discover.failed", result.Error, "Error",
+                    statusCode: result.StatusCode, details: new { response = result.Error });
                 return context.Json(result.StatusCode, new { error = result.Error });
+            }
             return context.Ok(new { models = result.Models, count = result.Models!.Length, updatedAt = DateTimeOffset.UtcNow });
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
@@ -302,7 +306,8 @@ public sealed partial class UniversalForwardTerminal
                     "Error",
                     accountId: account.Id,
                     statusCode: result.StatusCode,
-                    durationMs: (int)stopwatch.ElapsedMilliseconds);
+                    durationMs: (int)stopwatch.ElapsedMilliseconds,
+                    details: new { response = result.Error });
                 return context.Json(result.StatusCode, new { error = result.Error });
             }
 
@@ -380,27 +385,39 @@ public sealed partial class UniversalForwardTerminal
         ApplyApiKeyHeader(request, settings);
         ApplyReplaceHeaders(request, replaceHeaders);
         ApplyReplaceHeaders(request, HeaderOverrides.Resolve(settings.HeaderOverride, new Dictionary<string, string>(), settings.ApiKey, channelTest: true));
-        using var response = await client.SendAsync(
-            request,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
-        var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            return (null, (int)response.StatusCode, DescribeResponseError(response.StatusCode, responseText, settings));
-
-        string[] models;
+        HttpResponseMessage? response = null;
         try
         {
-            models = ParseModelIds(responseText);
-        }
-        catch (JsonException)
-        {
-            return (null, 502, "上游模型列表不是有效的 JSON");
-        }
+            response = await client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+                return (null, (int)response.StatusCode, ModelResponseDiagnostic(settings, request, response, responseText));
 
-        return models.Length == 0
-            ? (null, 502, "上游返回成功，但响应中没有可用模型（data[].id）")
-            : (models, (int)response.StatusCode, null);
+            string[] models;
+            try
+            {
+                models = ParseModelIds(responseText);
+            }
+            catch (JsonException)
+            {
+                return (null, 502, ModelResponseDiagnostic(settings, request, response, responseText));
+            }
+
+            return models.Length == 0
+                ? (null, 502, ModelResponseDiagnostic(settings, request, response, responseText,
+                    "响应中没有可用模型（data[].id 或 models[].id/name）"))
+                : (models, (int)response.StatusCode, null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception)
+        {
+            return (null, 502, ModelResponseDiagnostic(settings, request, response, null,
+                $"{exception.GetType().Name}: {exception.Message}"));
+        }
+        finally { response?.Dispose(); }
     }
     private static string MaskSecret(string value)
         => string.IsNullOrWhiteSpace(value)

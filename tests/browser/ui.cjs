@@ -143,7 +143,7 @@ function hostMock() {
     await frame.locator('#syncProtocols').click();
     await frame.locator('#protocolStatus').filter({ hasText: '请先填写' }).waitFor();
     await frame.locator('#discover').click();
-    await frame.locator('#discoveryStatus').filter({ hasText: '请先在 Key 管理' }).waitFor();
+    await frame.locator('#discoveryResponse').filter({ hasText: '请先在 Key 管理' }).waitFor();
     await frame.locator('#tab-keys').click();
     await frame.locator('#keyBatch').fill('draft-test-key');
     await frame.locator('#keyAdd').click();
@@ -206,7 +206,7 @@ function hostMock() {
     await frame.locator('#modelProtocols').getByLabel('discovered-a 首选协议').selectOption('messages');
     await page.evaluate(() => { window.failDiscovery = true; });
     await frame.locator('#discover').click();
-    await frame.locator('#discoveryStatus').filter({ hasText: '上游返回 401' }).waitFor();
+    await frame.locator('#discoveryResponse').filter({ hasText: '上游返回 401' }).waitFor();
     await page.evaluate(() => { window.failDiscovery = false; window.emptyDiscovery = true; });
     await frame.locator('#discover').click();
     await frame.locator('#discoveryStatus').filter({ hasText: '空模型列表' }).waitFor();

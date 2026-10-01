@@ -51,6 +51,7 @@
           <section id="panel-models" role="tabpanel" aria-labelledby="tab-models" hidden>
             <div class="section-heading"><h3>模型与协议</h3><p>选择可用模型并设置上游协议</p></div>
             <div class="discovery-box"><div class="field"><label for="discoveryKey">获取模型使用的 Key</label><select id="discoveryKey"></select></div><div class="actions"><button id="discover" type="button" class="primary">获取候选模型</button><button id="refreshModels" type="button" class="secondary">刷新候选</button></div><div id="discoveryStatus" class="feedback" role="status" hidden></div><div id="candidates" class="candidates"></div></div>
+            <details id="discoveryDetails" hidden><summary>模型请求失败：响应详情</summary><button id="copyDiscoveryResponse" type="button" class="secondary">复制响应详情</button><pre id="discoveryResponse" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:28rem;overflow:auto" tabindex="0"></pre></details>
             <div class="field"><label for="models">允许模型</label><textarea id="models" name="models" rows="4" placeholder="每行一个模型名称" required spellcheck="false"></textarea></div>
             <div class="between"><h4>上游协议 <span id="protocolCount" class="count">0</span></h4><button id="syncProtocols" type="button" class="text-button">同步当前模型</button></div>
             <div id="protocolStatus" class="feedback" role="status" hidden></div>

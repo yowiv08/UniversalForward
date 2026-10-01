@@ -171,6 +171,8 @@
   function open(account) {
     editorEpoch++; savedAccount = account; form.reset(); saving = false;
     $('discover').disabled = false;
+    $('discoveryDetails').hidden = true;
+    $('discoveryResponse').textContent = '';
     for (const id of ['formError', 'discoveryStatus', 'protocolStatus', 'headerStatus', 'mappingStatus']) feedback(id);
     $('formTitle').textContent = account ? '编辑渠道' : '添加渠道';
     for (const name of ['id', 'label', 'baseUrl']) form.elements[name].value = account?.[name] || '';
@@ -286,7 +288,10 @@
     const epoch = editorEpoch;
     $('discover').disabled = true; $('refreshModels').disabled = true;
     feedback('discoveryStatus', '正在获取候选模型…');
+    $('discoveryDetails').hidden = true;
+    $('discoveryResponse').textContent = '';
     try {
+      commitHeaderDraft();
       const keyId = $('discoveryKey').value;
       const key = keyId ? keyDraft.find(k => (k.id || k.uiId) === keyId && k.enabled) : keyDraft.find(k => k.enabled);
       if (!key) throw Error('请先在 Key 管理中添加并启用 Key');
@@ -297,10 +302,16 @@
         if (!savedAccount) throw Error('刷新候选需要先保存渠道');
         if (!key.id || key.secret.trim() || baseUrl.replace(/\/+$/, '') !== savedAccount.baseUrl.replace(/\/+$/, ''))
           throw Error('当前连接配置尚未保存，请使用获取候选模型');
+        const canonical = value => JSON.stringify(Object.keys(value || {}).sort().map(k =>
+          [k, value[k] && typeof value[k] === 'object' ? canonical(value[k]) : value[k]]));
+        const savedExtra = typeof savedAccount.extraParams === 'string'
+          ? objectJson(savedAccount.extraParams, '高级参数') : savedAccount.extraParams || {};
+        if (canonical(commonHeaderDraft) !== canonical(savedAccount.headerOverride || {}) ||
+            canonical(extraParams) !== canonical(savedExtra))
+          throw Error('通用请求头或高级参数尚未保存，请使用获取候选模型或先保存渠道');
         route = 'models/refresh'; body = { id: savedAccount.id, keyId: key.id };
       } else {
         route = 'models/discover';
-        commitHeaderDraft();
         body = { id: savedAccount?.id || null, baseUrl, headerOverride: commonHeaderDraft, extraParams };
         if (key.secret.trim()) body.apiKey = key.secret.trim(); else body.keyId = key.id;
       }
@@ -309,10 +320,23 @@
       candidates = [...new Set((data.models || []).filter(x => typeof x === 'string' && x.trim()))];
       showCandidates();
       feedback('discoveryStatus', candidates.length ? `已获取 ${candidates.length} 个候选模型，点击模型即可选择` : '上游返回了空模型列表，可直接手动填写');
-    } catch (e) { if (epoch === editorEpoch) feedback('discoveryStatus', e.message, true); }
+    } catch (e) {
+      if (epoch === editorEpoch && dialog.open) {
+        feedback('discoveryStatus', '', true);
+        $('discoveryDetails').hidden = false;
+        $('discoveryDetails').open = true;
+        $('discoveryResponse').textContent = e.message;
+      }
+    }
     finally { if (epoch === editorEpoch) { $('discover').disabled = false; $('refreshModels').disabled = !savedAccount; } }
   }
   $('discover').onclick = () => discover(false); $('refreshModels').onclick = () => discover(true);
+  $('copyDiscoveryResponse').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText($('discoveryResponse').textContent);
+      feedback('discoveryStatus', '已复制响应详情');
+    } catch { feedback('discoveryStatus', '复制失败，请选中响应详情手动复制', true); }
+  };
   $('models').oninput = () => { showCandidates(); renderProtocols(); summary(); };
   $('syncProtocols').onclick = () => {
     renderProtocols();
