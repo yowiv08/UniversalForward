@@ -30,20 +30,15 @@ public sealed class ResponseErrorEvidenceTests
     [DataRow(TokenLimit, false, true)]
     [DataRow(ThroughputLimit, true, false)]
     [DataRow(ThroughputLimit, true, true)]
-    public async Task Http200RateLimitIsAJsonFailureEvenWithoutRetry(string frame, bool stream, bool retriesEnabled)
+    public async Task Http200RateLimitPreservesRawResponseEvenWithoutRetry(string frame, bool stream, bool retriesEnabled)
     {
         var client = Client(frame);
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", stream,
             policy: new ForwardRequestPolicy { RateLimitRetryEnabled = retriesEnabled, ResponseMaxRetries = 0 }));
-        Assert.AreEqual(429, result.Response.StatusCode);
-        Assert.IsFalse(result.Response.IsStreaming);
-        Assert.AreEqual("application/json", result.Response.ContentType);
-        using var body = JsonDocument.Parse(result.Response.RawContent!);
-        var error = body.RootElement.GetProperty("error");
-        Assert.AreEqual("too_many_requests", error.GetProperty("type").GetString());
-        Assert.AreEqual(frame == TokenLimit ? "rate_limit_exceeded" : "rate_limit_reached", error.GetProperty("code").GetString());
-        Assert.IsTrue(error.TryGetProperty("headers", out _));
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual("text/event-stream; charset=utf-8", result.Response.ContentType);
+        Assert.AreEqual(frame, Encoding.UTF8.GetString(result.Response.RawContent!));
         Assert.AreEqual(1, client.Invocations.Count);
     }
 
@@ -78,22 +73,23 @@ public sealed class ResponseErrorEvidenceTests
     [TestMethod]
     [DataRow("application/json")]
     [DataRow("text/event-stream")]
-    public async Task JsonErrorWithHttp200DoesNotMasqueradeAsSuccessfulStream(string contentType)
+    public async Task JsonErrorWithHttp200PreservesOriginalContentTypeAndBytes(string contentType)
     {
         var client = Client("""{"error":{"type":"too_many_requests","message":"busy"}}""", contentType);
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "claude", true));
-        Assert.AreEqual(429, result.Response.StatusCode);
-        Assert.AreEqual("application/json", result.Response.ContentType);
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual(contentType + "; charset=utf-8", result.Response.ContentType);
+        Assert.AreEqual("""{"error":{"type":"too_many_requests","message":"busy"}}""", Encoding.UTF8.GetString(result.Response.RawContent!));
         Assert.IsNull(result.Response.RawStream);
         Assert.AreEqual(1, client.Invocations.Count);
     }
 
     [TestMethod]
-    [DataRow("invalid_request", "bad argument", 502)]
-    [DataRow("insufficient_quota", "quota exhausted", 502)]
-    [DataRow("rate_limit_exceeded", "token rate limit", 429)]
-    public async Task ErrorDetailsAreLoggedWithoutCredentialAndCannotMapBackToSuccess(string code, string message, int status)
+    [DataRow("invalid_request", "bad argument", 200)]
+    [DataRow("insufficient_quota", "quota exhausted", 200)]
+    [DataRow("rate_limit_exceeded", "token rate limit", 200)]
+    public async Task ErrorDetailsAreLoggedSafelyWhileResponseRemainsUnchanged(string code, string message, int status)
     {
         var frame = "event: error\ndata: " + JsonSerializer.Serialize(new
         {
@@ -114,7 +110,7 @@ public sealed class ResponseErrorEvidenceTests
         StringAssert.Contains(log.Message, message);
         StringAssert.Contains(log.DetailsJson!, code);
         Assert.IsFalse(log.Message.Contains("channel-secret", StringComparison.Ordinal));
-        Assert.IsFalse(Encoding.UTF8.GetString(result.Response.RawContent!).Contains("channel-secret", StringComparison.Ordinal));
+        Assert.AreEqual(frame, Encoding.UTF8.GetString(result.Response.RawContent!));
         Assert.AreEqual(1, client.Invocations.Count);
     }
 

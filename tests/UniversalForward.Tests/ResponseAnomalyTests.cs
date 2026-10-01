@@ -43,7 +43,7 @@ public sealed class ResponseAnomalyTests
     [DataRow(0)]
     [DataRow(1)]
     [DataRow(10)]
-    public async Task ExhaustionReturns429WithUpstreamErrorWithoutOrdinaryRetry(int max)
+    public async Task ExhaustionPreservesRawUpstreamErrorWithoutOrdinaryRetry(int max)
     {
         var calls = 0;
         var client = Client(_ =>
@@ -58,11 +58,9 @@ public sealed class ResponseAnomalyTests
         policy.StatusCodeMapping[200] = 502;
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true, policy: policy));
         Assert.AreEqual(max + 1, calls);
-        Assert.AreEqual(429, result.Response.StatusCode);
-        Assert.AreEqual("application/json", result.Response.ContentType);
-        using var error = JsonDocument.Parse(result.Response.RawContent!);
-        Assert.AreEqual("rate_limit_exceeded", error.RootElement.GetProperty("error").GetProperty("code").GetString());
-        Assert.AreEqual(200, error.RootElement.GetProperty("upstream_status").GetInt32());
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual("text/event-stream; charset=utf-8", result.Response.ContentType);
+        Assert.AreEqual(Limit, Encoding.UTF8.GetString(result.Response.RawContent!));
     }
 
     [TestMethod]
@@ -282,9 +280,8 @@ public sealed class ResponseAnomalyTests
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true, policy: policy));
         Assert.AreEqual(2, calls);
-        Assert.AreEqual(429, result.Response.StatusCode);
-        using var error = JsonDocument.Parse(result.Response.RawContent!);
-        Assert.AreEqual("rate_limit_exceeded", error.RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual(Limit, Encoding.UTF8.GetString(result.Response.RawContent!));
         Assert.IsTrue(body.Disposed);
     }
 
@@ -361,7 +358,7 @@ public sealed class ResponseAnomalyTests
         var client = Client(_ => Reply(body));
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true, policy: Policy(3)));
-        Assert.AreEqual(body == Done ? 200 : 502, result.Response.StatusCode);
+        Assert.AreEqual(200, result.Response.StatusCode);
         Assert.AreEqual(1, client.Invocations.Count);
         if (result.Response.RawStream is { } stream) await foreach (var _ in stream) { }
     }

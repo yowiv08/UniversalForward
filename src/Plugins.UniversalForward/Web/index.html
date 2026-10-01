@@ -84,7 +84,7 @@
                   <div class="field"><label for="responseMaxRetries">最大重试次数</label><input id="responseMaxRetries" name="responseMaxRetries" type="number" min="0" max="10" value="3" required><small>0–10 次，限流与空回共享次数</small></div>
                   <div class="field"><label for="responseRetryIntervalSeconds">重试间隔</label><div class="input-unit"><input id="responseRetryIntervalSeconds" name="responseRetryIntervalSeconds" type="number" min="1" max="3600" value="5" required><span>秒</span></div></div>
                 </div>
-                <p class="response-retry-note">每个请求独立计数，重试使用同一 Key。首次有效输出前允许重试；开始输出后实时透传，异常不再重放请求。输出前的 HTTP 2xx 限流错误返回 429 JSON，其他错误返回 502 JSON，保留上游错误详情。非流式请求仍等待完整结果。</p>
+                <p class="response-retry-note">每个请求独立计数，重试使用同一 Key。首次有效输出前允许重试；开始输出后实时透传，异常不再重放请求。输出前的错误保留上游原始状态码、Content-Type 和响应体，不转换为 JSON 错误。非流式请求仍等待完整结果。</p>
               </div>
             </section>
             <div class="between editor-toolbar"><h4>状态码映射</h4><div class="segmented" role="group" aria-label="状态码映射编辑模式"><button type="button" id="mappingVisual" aria-pressed="true">可视化</button><button type="button" id="mappingJson" aria-pressed="false">JSON</button></div></div>

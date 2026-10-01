@@ -156,7 +156,7 @@ public sealed partial class UniversalForwardTerminal
                             : empty && !analysis.HasOutput && policy.EmptyResponseRetryEnabled ? "empty_response" : null;
                         skipOrdinaryRetry = analysis.PermanentError || retryKind != null;
                         if (limited && !analysis.HasOutput && policy.RateLimitRetryEnabled && !buffered.Interrupted)
-                            lastRateLimit = AnalyzedErrorResponse(analysis, originalCode, bytesRead, originalContentType, context.TraceId, settings);
+                            lastRateLimit = RawResponse(originalCode, bytesRead, originalContentType);
                         total.Token.ThrowIfCancellationRequested();
                         if (retryKind != null)
                         {
@@ -187,7 +187,7 @@ public sealed partial class UniversalForwardTerminal
                         if (analysis.HasError && response.IsSuccessStatusCode
                             && (analysis.ErrorPayload is not null || !analysis.HasOutput))
                         {
-                            var failure = AnalyzedErrorResponse(analysis, originalCode, bytesRead, originalContentType, context.TraceId, settings);
+                            var failure = RawResponse(originalCode, bytesRead, originalContentType);
                             await LogAnalyzedErrorAsync(context, analysis, originalCode, failure.StatusCode, settings);
                             return Completed(failure, failure.StatusCode);
                         }
@@ -318,24 +318,6 @@ public sealed partial class UniversalForwardTerminal
             details: new { originalCode, statusCode, analysis.ErrorCode, analysis.ErrorType, analysis.State,
                 analysis.HasOutput, analysis.IncompleteReason });
 
-    private static AdapterResponse AnalyzedErrorResponse(ForwardResponseAnalysis analysis, int originalCode,
-        byte[] bytes, string? contentType, string? traceId, ForwardApiSettings settings)
-    {
-        if (originalCode is < 200 or >= 300)
-            return RawResponse(originalCode, bytes, IsJsonError(bytes) ? "application/json" : contentType);
-        var limited = analysis.RateLimited && !analysis.PermanentError;
-        var error = analysis.ErrorPayload is { ValueKind: JsonValueKind.Object } payload
-            ? JsonNode.Parse(payload.GetRawText())!.AsObject() : new JsonObject();
-        error["type"] ??= limited ? "rate_limit_error" : "upstream_error";
-        error["code"] ??= limited ? "rate_limit_exceeded" : analysis.State == "incomplete" ? "incomplete_response" : "upstream_error";
-        error["message"] = SanitizeMessage(analysis.ErrorMessage.Length > 0 ? analysis.ErrorMessage
-            : analysis.IncompleteReason.Length > 0 ? "上游响应未完成：" + analysis.IncompleteReason : "上游报告请求失败", settings);
-        return RawResponse(limited ? 429 : 502, JsonSerializer.SerializeToUtf8Bytes(new
-        {
-            error, upstream_status = originalCode, trace_id = traceId
-        }, JsonOptions), "application/json");
-    }
-
     private static PluginInvocationResult ResponseAnomalyFailure(string code)
         => Completed(RawResponse(502, JsonSerializer.SerializeToUtf8Bytes(new { error = new
         {
@@ -385,8 +367,6 @@ public sealed partial class UniversalForwardTerminal
                 output.Write(buffer, 0, count);
                 if (probe?.Observe(buffer.AsSpan(0, count), stopOnOutput: probeStream) == true)
                     return (output.ToArray(), false, true);
-                if (probe?.Analysis.HasError == true)
-                    return (output.ToArray(), false, false);
             }
         }
         catch (InvalidDataException) { throw; }

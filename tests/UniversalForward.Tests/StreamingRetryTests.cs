@@ -251,15 +251,16 @@ public sealed class StreamingRetryTests
     [TestMethod]
     [DataRow(true)]
     [DataRow(false)]
-    public async Task PreOutputErrorDoesNotWaitForUpstreamConnectionToClose(bool stream)
+    public async Task PreOutputErrorPreservesAllChunksUntilUpstreamCloses(bool stream)
     {
-        using var body = new GatedStream(ResponseErrorEvidenceTests.TokenLimit, "");
+        using var body = new GatedStream(ResponseErrorEvidenceTests.TokenLimit, ": trailing upstream bytes\n\n");
+        body.Release.TrySetResult();
         var client = Client(_ => Task.FromResult(Reply(body)));
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", stream))
             .WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.AreEqual(429, result.Response.StatusCode);
-        Assert.IsFalse(body.Waiting.Task.IsCompleted);
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual(ResponseErrorEvidenceTests.TokenLimit + ": trailing upstream bytes\n\n", Encoding.UTF8.GetString(result.Response.RawContent!));
         Assert.IsTrue(body.Disposed);
         Assert.AreEqual(1, client.Invocations.Count);
     }
@@ -270,7 +271,7 @@ public sealed class StreamingRetryTests
         var client = Client(_ => Task.FromResult(Reply(new MemoryStream(Encoding.UTF8.GetBytes(Text + Limit)))));
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", false, policy: Policy()));
-        Assert.AreEqual(429, result.Response.StatusCode);
+        Assert.AreEqual(200, result.Response.StatusCode);
         Assert.AreEqual(1, client.Invocations.Count);
     }
 
