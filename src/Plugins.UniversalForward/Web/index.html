@@ -39,6 +39,7 @@
             <div class="section-heading"><h3>连接到你的上游</h3><p>配置渠道名称、服务地址和访问入口</p></div>
             <div class="field"><label for="label">渠道名称</label><input id="label" name="label" placeholder="例如：主力推理渠道" required maxlength="120"></div>
             <div class="field"><label for="baseUrl">Base URL</label><input id="baseUrl" name="baseUrl" type="url" placeholder="https://api.example.com/v1" required></div>
+            <div class="field"><label for="networkMode">出站方式</label><select id="networkMode" name="networkMode"><option value="direct">直连</option><option value="proxyPool">代理池</option></select><small>代理池使用宿主全部启用订阅中的可用节点；无可用节点时报错，不回退直连。适用于转发、模型获取和连接测试。</small></div>
             <div class="field-row"><div class="field"><label for="weight">渠道权重</label><input id="weight" name="weight" type="number" min="0" max="1000" value="100" required><small>0–1000</small></div><div class="field"><label>渠道状态</label><label class="switch-card"><input name="enabled" type="checkbox" checked><span>启用渠道</span></label></div></div>
             <div class="field"><label>允许端点</label><div id="endpoints" class="endpoint-grid"></div></div>
           </section>

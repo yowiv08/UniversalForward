@@ -60,6 +60,7 @@ public sealed partial class UniversalForwardTerminal
         total.CancelAfter(TimeSpan.FromSeconds(policy.TotalTimeoutSeconds));
         var transferred = false;
         HttpResponseMessage? response = null;
+        HttpClient? networkClient = null;
         AdapterResponse? lastRateLimit = null;
         var anomalyRetries = 0;
         var inspectResponses = policy.RateLimitRetryEnabled || policy.EmptyResponseRetryEnabled;
@@ -67,6 +68,11 @@ public sealed partial class UniversalForwardTerminal
         try
         {
             var isTest = context.HttpClient is ConnectionTestClient;
+            if (settings.NetworkMode == "proxyPool" && !isTest)
+                networkClient = await CreateNetworkClientAsync(settings.NetworkMode, false, total.Token);
+            await TryLogAsync("request.network.selected", $"出站方式: {settings.NetworkMode}",
+                traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
+                details: new { networkMode = settings.NetworkMode });
             var headerConfig = HeaderOverrides.Select(settings.HeaderOverrideMode, settings.HeaderOverride,
                 settings.EndpointHeaderOverrides, upstreamEndpoint);
             var resolvedHeaders = HeaderOverrides.Resolve(headerConfig, context.Request.RequestHeaders,
@@ -114,17 +120,20 @@ public sealed partial class UniversalForwardTerminal
                 headerBudget.CancelAfter(TimeSpan.FromSeconds(policy.HeaderTimeoutSeconds));
                 try
                 {
-                    response = await context.HttpClient.SendAsync(request, false,
-                        HttpCompletionOption.ResponseHeadersRead, headerBudget.Token);
+                    response = networkClient is not null
+                        ? await networkClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headerBudget.Token)
+                        : await context.HttpClient.SendAsync(request, false,
+                            HttpCompletionOption.ResponseHeadersRead, headerBudget.Token);
                 }
                 catch (Exception error) when (error is HttpRequestException or OperationCanceledException)
                 {
                     total.Token.ThrowIfCancellationRequested();
                     await TryLogAsync("request.transport.failed", error.Message, "Error", context.TraceId,
-                        context.Account.Id, context.Request.Model, details: new { keyId = selectedKey.Id, keyName = selectedKey.Name, strategy = settings.KeySelectionMode, attempt, retry = attempt < policy.MaxRetries });
+                        context.Account.Id, context.Request.Model, details: new { keyId = selectedKey.Id, keyName = selectedKey.Name, strategy = settings.KeySelectionMode, networkMode = settings.NetworkMode, attempt, retry = attempt < policy.MaxRetries });
                     if (attempt < policy.MaxRetries) { attempt++; continue; }
                     return Completed(RawResponse(error is OperationCanceledException ? 504 : 502,
-                        JsonSerializer.SerializeToUtf8Bytes(new { error = error.Message }), "application/json"), 0);
+                        JsonSerializer.SerializeToUtf8Bytes(new { error = error.Message }), "application/json"), 0,
+                        settings.NetworkMode == "proxyPool" ? PluginFailureKind.Plugin : null);
                 }
                 var originalCode = (int)response.StatusCode;
                 var skipOrdinaryRetry = false;
@@ -224,14 +233,15 @@ public sealed partial class UniversalForwardTerminal
                     accountId: context.Account.Id, model: context.Request.Model, statusCode: originalCode,
                     durationMs: (int)watch.ElapsedMilliseconds, details: new { keyId = selectedKey.Id, keyName = selectedKey.Name, strategy = settings.KeySelectionMode, originalCode, mappedCode, retries = attempt,
                         responseRetries = anomalyRetries, streamStarted = streamPrefix != null,
-                        incomingEndpoint = context.Request.Endpoint, upstreamEndpoint,
+                        incomingEndpoint = context.Request.Endpoint, upstreamEndpoint, networkMode = settings.NetworkMode,
                         downstreamStream = context.Request.Stream, upstreamStream = nativeStream || context.Request.Stream,
                         upstreamRequestId = ResponseHeader(response, "x-request-id"), upstreamTraceId = ResponseHeader(response, "x-trace-id"),
                         gatewayRay = ResponseHeader(response, "cf-ray") });
                 if (nativeStream && !context.Request.Stream && response.IsSuccessStatusCode
                     && contentType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase))
                 {
-                    await using var lifetime = new ForwardResponseLifetime(response, total);
+                    await using var lifetime = new ForwardResponseLifetime(response, total, networkClient);
+                    networkClient = null;
                     transferred = true; response = null;
                     var collected = await ForwardStreamCollector.CollectAsync(
                         ReadBudgetedStreamAsync(lifetime, policy.StreamIdleTimeoutSeconds, context, settings), upstreamEndpoint, context.CancellationToken);
@@ -243,7 +253,8 @@ public sealed partial class UniversalForwardTerminal
                 }
                 if (response.IsSuccessStatusCode && (context.Request.Stream || contentType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase)))
                 {
-                    var lifetime = new ForwardResponseLifetime(response, total);
+                    var lifetime = new ForwardResponseLifetime(response, total, networkClient);
+                    networkClient = null;
                     var result = new AdapterResponse
                     {
                         StatusCode = mappedCode, ContentType = contentType, IsStreaming = true,
@@ -280,6 +291,14 @@ public sealed partial class UniversalForwardTerminal
                 return Completed(output, originalCode);
             }
         }
+        catch (ProxyPoolUnavailableException)
+        {
+            await TryLogAsync("request.network.failed", ProxyUnavailableMessage, "Error", context.TraceId,
+                context.Account.Id, context.Request.Model, 503,
+                details: new { networkMode = settings.NetworkMode, code = "proxy_pool_unavailable" });
+            return Completed(RawResponse(503, JsonSerializer.SerializeToUtf8Bytes(new
+            { error = new { message = ProxyUnavailableMessage, code = "proxy_pool_unavailable" } }), "application/json"), 0, PluginFailureKind.Plugin);
+        }
         catch (OperationCanceledException) when (!context.CancellationToken.IsCancellationRequested)
         {
             if (lastRateLimit != null)
@@ -307,6 +326,7 @@ public sealed partial class UniversalForwardTerminal
         finally
         {
             response?.Dispose();
+            networkClient?.Dispose();
             if (!transferred) total.Dispose();
         }
     }
@@ -398,11 +418,11 @@ public sealed partial class UniversalForwardTerminal
     private static PluginInvocationResult LocalFailure(string error)
         => Completed(AdapterResponse.BadRequest(error), 400);
 
-    private static PluginInvocationResult Completed(AdapterResponse response, int originalCode)
+    private static PluginInvocationResult Completed(AdapterResponse response, int originalCode, PluginFailureKind? failureKind = null)
         => new(response, new PluginAttemptDecision
         {
-            FailureKind = originalCode is >= 200 and < 300
-                ? PluginFailureKind.None : PluginFailureKind.Upstream,
+            FailureKind = failureKind ?? (originalCode is >= 200 and < 300
+                ? PluginFailureKind.None : PluginFailureKind.Upstream),
             Retry = PluginRetryAction.None, AccountAction = PluginAccountAction.None,
             ProxyAction = PluginProxyAction.None
         }.ToResult(originalCode == 0 ? null : originalCode));

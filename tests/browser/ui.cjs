@@ -207,6 +207,11 @@ function hostMock() {
     await page.evaluate(() => { window.failDiscovery = true; });
     await frame.locator('#discover').click();
     await frame.locator('#discoveryResponse').filter({ hasText: '上游返回 401' }).waitFor();
+    await frame.locator('#copyDiscoveryResponse').click();
+    await frame.locator('#copyDialog').waitFor({ state: 'visible' });
+    assert.equal(await frame.locator('#copyTitle').textContent(), '复制响应详情');
+    assert.equal(await frame.locator('#copyContent').inputValue(), '上游返回 401，请检查 Key');
+    await frame.locator('#copyClose').click();
     await page.evaluate(() => { window.failDiscovery = false; window.emptyDiscovery = true; });
     await frame.locator('#discover').click();
     await frame.locator('#discoveryStatus').filter({ hasText: '空模型列表' }).waitFor();

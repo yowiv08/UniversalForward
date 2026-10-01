@@ -36,7 +36,7 @@ public sealed partial class UniversalForwardTerminal
         }
         var original = BuildUri(settings.BaseUrl, "/v1/models");
         return Redact(
-            $"请求地址: {original}\n最终地址: {response?.RequestMessage?.RequestUri?.ToString() ?? request.RequestUri?.ToString()}\n" +
+            $"出站方式: {settings.NetworkMode}\n请求地址: {original}\n最终地址: {response?.RequestMessage?.RequestUri?.ToString() ?? request.RequestUri?.ToString()}\n" +
             $"HTTP: {(response is null ? "未收到响应" : $"{(int)response.StatusCode} {response.ReasonPhrase}")}\n" +
             $"Content-Type: {response?.Content.Headers.ContentType?.ToString() ?? "（无）"}\n" +
             $"Content-Encoding: {(response is null || response.Content.Headers.ContentEncoding.Count == 0 ? "（无，或已由 HTTP 客户端解压）" : string.Join(", ", response.Content.Headers.ContentEncoding))}\n" +

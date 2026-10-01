@@ -75,11 +75,22 @@ public sealed class ConnectionTestsTests
     }
 
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task BatchProducesProgressAndDoesNotTrustMappedSuccess(bool upstreamError)
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    [DataRow(true, true)]
+    public async Task BatchProducesProgressAndDoesNotTrustMappedSuccess(bool upstreamError, bool proxy)
     {
         var host = Host(upstreamError);
+        if (proxy)
+        {
+            var account = (await host.Services.Accounts.GetAsync("account", CancellationToken.None))!;
+            var fields = new Dictionary<string, string?>(((CustomCredential)account.Credential).Fields);
+            var settings = System.Text.Json.Nodes.JsonNode.Parse(fields["settings"]!)!;
+            settings["networkMode"] = "proxyPool";
+            fields["settings"] = settings.ToJsonString();
+            account.Credential = new CustomCredential(fields);
+        }
         var sent = 0;
         using var handler = new ReplyHandler(() =>
         {
@@ -89,6 +100,10 @@ public sealed class ConnectionTestsTests
         });
         Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
             .Returns(() => new HttpClient(handler, false));
+        var pool = new Mock<IProxyPoolHttpClientFactory>();
+        pool.Setup(x => x.CreateClientAsync(It.IsAny<ProxyPoolHttpClientOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new HttpClient(handler, false));
+        Mock.Get(host.Services.Http).SetupGet(x => x.Pool).Returns(pool.Object);
         using var terminal = new UniversalForwardTerminal(host);
         var registration = Registration(terminal);
         var progress = new List<JsonElement>();
@@ -96,12 +111,41 @@ public sealed class ConnectionTestsTests
             JsonSerializer.SerializeToElement(new { accountId = "account", models = Models, endpoint = "/v1/responses" }),
             value => progress.Add(value!.Value), CancellationToken.None));
         var rows = result!.Value.GetProperty("rows");
+        Assert.AreEqual(proxy ? "proxyPool" : "direct", rows[0].GetProperty("networkMode").GetString());
+        pool.Verify(x => x.CreateClientAsync(It.Is<ProxyPoolHttpClientOptions>(o => !o.AllowDirectFallback),
+            It.IsAny<CancellationToken>()), proxy ? Times.Exactly(2) : Times.Never());
+        if (proxy) Mock.Get(host.Services.Http).Verify(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()), Times.Never);
         Assert.AreEqual(2, sent);
         Assert.AreEqual(2, rows.GetArrayLength());
         Assert.AreEqual(!upstreamError, rows[0].GetProperty("success").GetBoolean());
         Assert.AreEqual(upstreamError ? 400 : 200, rows[0].GetProperty("originalStatus").GetInt32());
         Assert.AreEqual(200, rows[0].GetProperty("mappedStatus").GetInt32());
         Assert.AreEqual(2, progress[^1].GetProperty("completed").GetInt32());
+    }
+
+    [TestMethod]
+    public async Task EmptyProxyPoolProducesLocalFailureWithoutSending()
+    {
+        var host = Host();
+        var account = (await host.Services.Accounts.GetAsync("account", CancellationToken.None))!;
+        var fields = new Dictionary<string, string?>(((CustomCredential)account.Credential).Fields);
+        var settings = System.Text.Json.Nodes.JsonNode.Parse(fields["settings"]!)!;
+        settings["networkMode"] = "proxyPool";
+        fields["settings"] = settings.ToJsonString();
+        account.Credential = new CustomCredential(fields);
+        var pool = new Mock<IProxyPoolHttpClientFactory>();
+        pool.Setup(x => x.CreateClientAsync(It.IsAny<ProxyPoolHttpClientOptions>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ProxyPoolUnavailableException());
+        Mock.Get(host.Services.Http).SetupGet(x => x.Pool).Returns(pool.Object);
+        using var terminal = new UniversalForwardTerminal(host);
+        var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
+            JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel }),
+            _ => { }, CancellationToken.None));
+        var row = result!.Value.GetProperty("rows")[0];
+        Assert.AreEqual(503, row.GetProperty("mappedStatus").GetInt32());
+        Assert.AreEqual("proxy_pool_unavailable", row.GetProperty("code").GetString());
+        Assert.AreEqual("proxyPool", row.GetProperty("networkMode").GetString());
+        Mock.Get(host.Services.Http).Verify(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()), Times.Never);
     }
 
     [TestMethod]

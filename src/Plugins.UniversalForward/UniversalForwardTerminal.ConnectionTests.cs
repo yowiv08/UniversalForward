@@ -100,15 +100,17 @@ public sealed partial class UniversalForwardTerminal
             var keyId = requestedKeyId;
             string? keyName = null;
             ConnectionTestClient? captureClient = null;
+            string? networkMode = null;
             try
             {
                 var account = await _host.Accounts.GetAsync(input.AccountId, job.CancellationToken)
                     ?? throw new InvalidOperationException("渠道已删除");
                 if (!TryReadSettings(account, out var settings)) throw new InvalidOperationException("渠道配置无效");
+                networkMode = settings.NetworkMode;
                 var selectedKey = _keySelector.Select(account.Id, ReadKeys(settings), settings.KeySelectionMode, requestedKeyId);
                 keyId = selectedKey.Id; keyName = selectedKey.Name;
                 var endpoint = TestEndpoint(settings, model, input.Endpoint);
-                using var http = _host.Http.CreateDirectClient(new PluginHttpClientOptions { AllowAutoRedirect = false });
+                using var http = await CreateNetworkClientAsync(settings.NetworkMode, false, job.CancellationToken);
                 http.Timeout = Timeout.InfiniteTimeSpan;
                 using var client = new ConnectionTestClient(http, () => sends++, keyId);
                 captureClient = client;
@@ -204,7 +206,7 @@ public sealed partial class UniversalForwardTerminal
                 var status = result.Attempt.StatusCode ?? result.Response.StatusCode;
                 rows.Add(new
                 {
-                    model, keyId, keyName, endpoint, success = status is >= 200 and < 300 && valid,
+                    model, keyId, keyName, endpoint, networkMode, success = status is >= 200 and < 300 && valid,
                     originalStatus = status, mappedStatus = result.Response.StatusCode,
                     durationMs = watch.ElapsedMilliseconds, firstEventMs, retries = Math.Max(0, sends - 1), error,
                     response = client.RawBody, responseTruncated = client.Truncated
@@ -213,8 +215,11 @@ public sealed partial class UniversalForwardTerminal
             catch (OperationCanceledException) when (job.CancellationToken.IsCancellationRequested) { throw; }
             catch (Exception error)
             {
-                rows.Add(new { model, keyId, keyName, success = false, durationMs = watch.ElapsedMilliseconds,
-                    firstEventMs, retries = Math.Max(0, sends - 1), error = error.Message,
+                rows.Add(new { model, keyId, keyName, networkMode, success = false, durationMs = watch.ElapsedMilliseconds,
+                    firstEventMs, retries = Math.Max(0, sends - 1),
+                    mappedStatus = error is ProxyPoolUnavailableException ? 503 : (int?)null,
+                    code = error is ProxyPoolUnavailableException ? "proxy_pool_unavailable" : null,
+                    error = error is ProxyPoolUnavailableException ? ProxyUnavailableMessage : error.Message,
                     response = captureClient?.RawBody, responseTruncated = captureClient?.Truncated ?? false });
             }
             job.ReportProgress(JsonSerializer.SerializeToElement(new
@@ -319,7 +324,7 @@ public sealed partial class UniversalForwardTerminal
             => SendAsync(request, false, option, ct);
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, bool useProxyPool, HttpCompletionOption option, CancellationToken ct)
         {
-            if (useProxyPool) throw new InvalidOperationException("渠道测试只使用直连");
+            if (useProxyPool) throw new InvalidOperationException("渠道测试已绑定出站客户端");
             sent();
             _capture.SetLength(0);
             Truncated = false;

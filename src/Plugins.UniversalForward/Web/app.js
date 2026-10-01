@@ -75,6 +75,13 @@
   $('confirmNo').onclick = () => resolveConfirm(false);
   $('confirmDialog').addEventListener('cancel', e => { e.preventDefault(); resolveConfirm(false); });
   $('copyClose').onclick = () => $('copyDialog').close();
+  function showCopyDialog(title, text) {
+    $('copyTitle').textContent = title;
+    $('copyContent').value = text;
+    $('copyDialog').showModal();
+    $('copyContent').focus();
+    $('copyContent').select();
+  }
 
   function selectTab(name, focus = false) {
     for (const tab of document.querySelectorAll('[data-tab]')) {
@@ -176,6 +183,7 @@
     for (const id of ['formError', 'discoveryStatus', 'protocolStatus', 'headerStatus', 'mappingStatus']) feedback(id);
     $('formTitle').textContent = account ? '编辑渠道' : '添加渠道';
     for (const name of ['id', 'label', 'baseUrl']) form.elements[name].value = account?.[name] || '';
+    form.elements.networkMode.value = account?.networkMode || 'direct';
     form.elements.weight.value = account?.weight ?? 100;
     form.elements.enabled.checked = account?.enabled ?? true;
     form.elements.models.value = (account?.models || []).join('\n');
@@ -296,10 +304,13 @@
       const key = keyId ? keyDraft.find(k => (k.id || k.uiId) === keyId && k.enabled) : keyDraft.find(k => k.enabled);
       if (!key) throw Error('请先在 Key 管理中添加并启用 Key');
       const baseUrl = form.elements.baseUrl.value.trim();
+      const networkMode = form.elements.networkMode.value;
       if (!/^https?:\/\//i.test(baseUrl)) throw Error('请先填写有效的 Base URL');
       let body, route;
       if (refresh) {
         if (!savedAccount) throw Error('刷新候选需要先保存渠道');
+        if (networkMode !== (savedAccount.networkMode || 'direct'))
+          throw Error('出站方式尚未保存，请使用获取候选模型或先保存渠道');
         if (!key.id || key.secret.trim() || baseUrl.replace(/\/+$/, '') !== savedAccount.baseUrl.replace(/\/+$/, ''))
           throw Error('当前连接配置尚未保存，请使用获取候选模型');
         const canonical = value => JSON.stringify(Object.keys(value || {}).sort().map(k =>
@@ -312,7 +323,7 @@
         route = 'models/refresh'; body = { id: savedAccount.id, keyId: key.id };
       } else {
         route = 'models/discover';
-        body = { id: savedAccount?.id || null, baseUrl, headerOverride: commonHeaderDraft, extraParams };
+        body = { id: savedAccount?.id || null, baseUrl, networkMode, headerOverride: commonHeaderDraft, extraParams };
         if (key.secret.trim()) body.apiKey = key.secret.trim(); else body.keyId = key.id;
       }
       const data = await api('POST', route, body);
@@ -332,10 +343,15 @@
   }
   $('discover').onclick = () => discover(false); $('refreshModels').onclick = () => discover(true);
   $('copyDiscoveryResponse').onclick = async () => {
+    const epoch = editorEpoch, text = $('discoveryResponse').textContent;
     try {
-      await navigator.clipboard.writeText($('discoveryResponse').textContent);
-      feedback('discoveryStatus', '已复制响应详情');
-    } catch { feedback('discoveryStatus', '复制失败，请选中响应详情手动复制', true); }
+      await navigator.clipboard.writeText(text);
+      if (epoch === editorEpoch && dialog.open) feedback('discoveryStatus', '已复制响应详情');
+    } catch {
+      if (epoch !== editorEpoch || !dialog.open) return;
+      feedback('discoveryStatus');
+      showCopyDialog('复制响应详情', text);
+    }
   };
   $('models').oninput = () => { showCandidates(); renderProtocols(); summary(); };
   $('syncProtocols').onclick = () => {
@@ -560,7 +576,7 @@
     try {
       const text = JSON.stringify(readHeaders(), null, 2);
       try { await navigator.clipboard.writeText(text); feedback('headerStatus', '已复制请求头'); }
-      catch { $('copyContent').value = text; $('copyDialog').showModal(); $('copyContent').focus(); $('copyContent').select(); }
+      catch { showCopyDialog('复制请求头', text); }
     } catch (e) { feedback('headerStatus', e.message, true); }
   };
   form.addEventListener('submit', async event => {
@@ -583,6 +599,7 @@
       saving = true; $('save').disabled = true; $('save').textContent = '保存中…';
       const saved = await api('POST', 'accounts/save', {
         id: form.elements.id.value || null, label: form.elements.label.value.trim(), baseUrl: form.elements.baseUrl.value.trim(),
+        networkMode: form.elements.networkMode.value,
         keys, deletedKeyIds, keyRevision, keySelectionMode: $('keySelectionMode').value, weight: Number(form.elements.weight.value),
         enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, requestPolicy, headerOverride,
         headerOverrideMode: headerPolicyMode, endpointHeaderOverrides: endpointHeaderDraft, extraParams
@@ -617,7 +634,7 @@
       const ops = el('td'), run = button('测试', () => startTests([model])); run.disabled = testBusy(); ops.append(run);
       if (results.length) ops.append(button('详情', () => {
         $('testDetails').textContent = results.map(r =>
-          `${r.keyName || r.keyId || '按策略'}\n${r.response ?? r.error ?? '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
+          `${r.keyName || r.keyId || '按策略'} · 出站方式：${r.networkMode === 'proxyPool' ? '代理池' : '直连'}\n${r.response || r.error || '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
         ).join('\n\n'); $('testDetails').parentElement.open = true;
       }, 'text-button'));
       row.append(cell, el('td', model), el('td', state), summaryCell, ops); root.append(row);
@@ -625,6 +642,10 @@
     updateTestControls();
   }
   function openTests(account) {
+    if (dialog.open && savedAccount?.id === account.id &&
+        form.elements.networkMode.value !== (account.networkMode || 'direct')) {
+      feedback('formError', '出站方式尚未保存，请先保存渠道再测试', true); return;
+    }
     if (testBusy() && testState.account?.id !== account.id) { message('请先取消或等待当前渠道测试完成', true); return; }
     $('testTitle').textContent = '测试连接 · ' + account.label;
     if (!testBusy()) {

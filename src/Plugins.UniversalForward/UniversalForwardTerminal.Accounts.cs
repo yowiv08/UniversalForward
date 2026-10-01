@@ -76,6 +76,9 @@ public sealed partial class UniversalForwardTerminal
             return context.BadRequest(extraError);
 
         var policy = input.RequestPolicy ?? previous.RequestPolicy;
+        var networkMode = input.NetworkMode ?? previous.NetworkMode;
+        try { ValidateNetworkMode(networkMode); }
+        catch (FormatException error) { return context.BadRequest(error.Message); }
         try { policy.Validate(); } catch (FormatException error) { return context.BadRequest(error.Message); }
         var headerOverride = input.HeaderOverride ?? previous.HeaderOverride;
         var headerOverrideMode = input.HeaderOverrideMode ?? previous.HeaderOverrideMode;
@@ -85,6 +88,7 @@ public sealed partial class UniversalForwardTerminal
         var settings = new ForwardApiSettings
         {
             HeaderOverride = headerOverride,
+            NetworkMode = networkMode,
             HeaderOverrideMode = headerOverrideMode,
             EndpointHeaderOverrides = endpointHeaderOverrides,
             ModelProtocols = input.ModelProtocols ?? previous.ModelProtocols,
@@ -207,12 +211,16 @@ public sealed partial class UniversalForwardTerminal
             return context.BadRequest(extraError);
 
         var headerOverride = input.HeaderOverride ?? previous.HeaderOverride;
+        var networkMode = input.NetworkMode ?? previous.NetworkMode;
+        try { ValidateNetworkMode(networkMode); }
+        catch (FormatException error) { return context.BadRequest(error.Message); }
         try { HeaderOverrides.Validate(headerOverride); }
         catch (FormatException error) { return context.BadRequest(error.Message); }
         var settings = new ForwardApiSettings
         {
             BaseUrl = baseUrl,
             ApiKey = apiKey,
+            NetworkMode = networkMode,
             HeaderOverride = headerOverride,
             ExtraParams = extraParams
         };
@@ -226,11 +234,17 @@ public sealed partial class UniversalForwardTerminal
                     statusCode: result.StatusCode, details: new { response = result.Error });
                 return context.Json(result.StatusCode, new { error = result.Error });
             }
-            return context.Ok(new { models = result.Models, count = result.Models!.Length, updatedAt = DateTimeOffset.UtcNow });
+            return context.Ok(new { models = result.Models, count = result.Models!.Length, networkMode, updatedAt = DateTimeOffset.UtcNow });
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (ProxyPoolUnavailableException)
+        {
+            await TryLogAsync("models.discover.failed", ProxyUnavailableMessage, "Error", statusCode: 503,
+                details: new { networkMode, code = "proxy_pool_unavailable" });
+            return context.Json(503, new { error = ProxyUnavailableMessage, code = "proxy_pool_unavailable", networkMode });
         }
         catch (Exception exception)
         {
@@ -325,12 +339,18 @@ public sealed partial class UniversalForwardTerminal
                 accountId: account.Id,
                 statusCode: result.StatusCode,
                 durationMs: (int)stopwatch.ElapsedMilliseconds,
-                details: new { count = models.Length });
-            return context.Ok(new { models, count = models.Length });
+                details: new { count = models.Length, networkMode = settings.NetworkMode });
+            return context.Ok(new { models, count = models.Length, networkMode = settings.NetworkMode });
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (ProxyPoolUnavailableException)
+        {
+            await TryLogAsync("models.refresh.failed", ProxyUnavailableMessage, "Error", accountId: account.Id, statusCode: 503,
+                details: new { networkMode = settings.NetworkMode, code = "proxy_pool_unavailable" });
+            return context.Json(503, new { error = ProxyUnavailableMessage, code = "proxy_pool_unavailable", networkMode = settings.NetworkMode });
         }
         catch (Exception exception)
         {
@@ -366,6 +386,7 @@ public sealed partial class UniversalForwardTerminal
             requestPolicy = settings.RequestPolicy,
             headerOverride = settings.HeaderOverride,
             headerOverrideMode = settings.HeaderOverrideMode,
+            networkMode = settings.NetworkMode,
             endpointHeaderOverrides = settings.EndpointHeaderOverrides,
             modelProtocols = settings.ModelProtocols,
             models = ReadModels(account),
@@ -380,7 +401,8 @@ public sealed partial class UniversalForwardTerminal
     {
         if (!TryReadReplaceHeaders(ReadExtraParams(settings), out var replaceHeaders, out var error))
             return (null, 400, error);
-        using var client = _host.Http.CreateDirectClient(new PluginHttpClientOptions { AllowAutoRedirect = true });
+        using var client = await CreateNetworkClientAsync(settings.NetworkMode, true, cancellationToken);
+        client.Timeout = TimeSpan.FromSeconds(60);
         using var request = new HttpRequestMessage(HttpMethod.Get, BuildUri(settings.BaseUrl, "/v1/models"));
         ApplyApiKeyHeader(request, settings);
         ApplyReplaceHeaders(request, replaceHeaders);
@@ -486,6 +508,7 @@ public sealed partial class UniversalForwardTerminal
     private sealed class AccountSaveInput
     {
         public AccountSaveInput() { }
+        public string? NetworkMode { get; init; }
         public List<ChannelKey>? Keys { get; init; }
         public string[]? DeletedKeyIds { get; init; }
         public string? KeySelectionMode { get; init; }
@@ -510,6 +533,7 @@ public sealed partial class UniversalForwardTerminal
     private sealed class ModelDiscoveryInput
     {
         public ModelDiscoveryInput() { }
+        public string? NetworkMode { get; init; }
         public string? Id { get; init; }
         public string? BaseUrl { get; init; }
         public string? ApiKey { get; init; }
