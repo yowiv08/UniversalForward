@@ -37,3 +37,10 @@ dialog{border:1px solid #dfe6f2;border-radius:16px;padding:0;color:inherit;backg
 .header-scope-hint{font-size:12px;color:var(--muted);margin:7px 0 18px;overflow-wrap:anywhere}
 .header-row input[readonly],#headerOverride[readonly]{background:#f3f5f9;color:#758095}
 @media(max-width:560px){.header-scopes button{font-size:10px;padding:7px 5px}.header-scope-heading h4{font-size:13px}}
+.journal-dialog{width:min(1180px,96vw);max-height:94vh;border:0;border-radius:18px;padding:0;color:var(--text);background:#fff}
+.journal-content{padding:20px;overflow:auto;max-height:80vh}.journal-filters{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0;align-items:end}
+.journal-filters>input,.journal-filters>select,.journal-filters>label{flex:1 1 150px;min-width:0}.journal-filters label input{display:block;max-width:100%}
+.journal-table{overflow:auto;margin:16px 0}.journal-table table{width:100%;border-collapse:collapse;min-width:640px}.journal-table th,.journal-table td{text-align:left;padding:10px;border-bottom:1px solid #e7ebf2;vertical-align:top;max-width:280px;overflow-wrap:anywhere}
+.journal-pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:28rem;overflow:auto;background:#f6f8fb;padding:14px;border-radius:10px;font-size:12px}
+#journalPart{max-width:100%;width:100%}#journalStorage{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:560px){.journal-content{padding:12px}.journal-dialog .dialog-heading{padding:14px}.journal-filters>input,.journal-filters>select,.journal-filters>label{flex-basis:120px}}

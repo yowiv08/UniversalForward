@@ -74,13 +74,31 @@
   $('confirmYes').onclick = () => resolveConfirm(true);
   $('confirmNo').onclick = () => resolveConfirm(false);
   $('confirmDialog').addEventListener('cancel', e => { e.preventDefault(); resolveConfirm(false); });
-  $('copyClose').onclick = () => $('copyDialog').close();
-  function showCopyDialog(title, text) {
-    $('copyTitle').textContent = title;
-    $('copyContent').value = text;
-    $('copyDialog').showModal();
-    $('copyContent').focus();
-    $('copyContent').select();
+  async function copyText(text) {
+    const active = document.activeElement, selection = window.getSelection();
+    const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+    const inputSelection = active && /^(INPUT|TEXTAREA)$/.test(active.tagName)
+      ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
+    const input = el('textarea');
+    input.value = text; input.readOnly = true; input.tabIndex = -1;
+    input.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;font-size:16px';
+    (document.querySelector('dialog[open]') || document.body).append(input);
+    let copied = false;
+    try {
+      input.focus({ preventScroll: true }); input.select(); input.setSelectionRange(0, text.length);
+      copied = document.execCommand('copy');
+    } catch { copied = false; }
+    finally {
+      input.remove(); active?.focus({ preventScroll: true });
+      if (selection) { selection.removeAllRanges(); for (const range of ranges) selection.addRange(range); }
+      if (inputSelection?.[0] !== null && inputSelection?.[0] !== undefined)
+        active.setSelectionRange(...inputSelection);
+    }
+    if (copied) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw Error();
+      await navigator.clipboard.writeText(text);
+    } catch { throw Error('浏览器未允许复制，请检查剪贴板权限后重试'); }
   }
 
   function selectTab(name, focus = false) {
@@ -146,6 +164,7 @@
       toggle.setAttribute('aria-label', `${a.enabled ? '禁用' : '启用'}渠道「${a.label}」`);
       toggle.setAttribute('aria-busy', String(switchingChannels.has(a.id)));
       actions.append(button('编辑', () => open(a)), button('测试连接', () => openTests(a)),
+        button('日志', () => openJournal(a.id)),
         button('模型', () => { open(a); selectTab('models'); }),
         toggle,
         button('删除', async () => {
@@ -345,12 +364,11 @@
   $('copyDiscoveryResponse').onclick = async () => {
     const epoch = editorEpoch, text = $('discoveryResponse').textContent;
     try {
-      await navigator.clipboard.writeText(text);
+      await copyText(text);
       if (epoch === editorEpoch && dialog.open) feedback('discoveryStatus', '已复制响应详情');
-    } catch {
+    } catch (e) {
       if (epoch !== editorEpoch || !dialog.open) return;
-      feedback('discoveryStatus');
-      showCopyDialog('复制响应详情', text);
+      feedback('discoveryStatus', e.message, true);
     }
   };
   $('models').oninput = () => { showCandidates(); renderProtocols(); summary(); };
@@ -573,11 +591,12 @@
     headerRows = []; $('headerOverride').value = '{}'; commitHeaderDraft(); renderHeaders(); feedback('headerStatus', '请求头已清空');
   };
   $('headerCopy').onclick = async () => {
+    const epoch = editorEpoch;
     try {
       const text = JSON.stringify(readHeaders(), null, 2);
-      try { await navigator.clipboard.writeText(text); feedback('headerStatus', '已复制请求头'); }
-      catch { showCopyDialog('复制请求头', text); }
-    } catch (e) { feedback('headerStatus', e.message, true); }
+      await copyText(text);
+      if (epoch === editorEpoch && dialog.open) feedback('headerStatus', '已复制请求头');
+    } catch (e) { if (epoch === editorEpoch && dialog.open) feedback('headerStatus', e.message, true); }
   };
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (saving) return; feedback('formError');
@@ -726,5 +745,6 @@
       feedback('testProgress', '已申请取消，正在等待任务退出'); await pollTests(testState.epoch);
     } catch (e) { testState.cancelling = false; feedback('testError', e.message, true); updateTestControls(); }
   };
+  /*__JOURNAL__*/
   load();
 })();

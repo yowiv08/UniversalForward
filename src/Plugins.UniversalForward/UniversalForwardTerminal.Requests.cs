@@ -15,6 +15,25 @@ public sealed partial class UniversalForwardTerminal
     /// <summary>执行上游请求与重试。</summary>
     public async Task<PluginInvocationResult> InvokeAsync(PluginAttemptContext context)
     {
+        TryReadSettings(context.Account, out var settings);
+        var capture = BeginRequestLog(store => store.Begin(context.HttpClient is ConnectionTestClient ? "connection-test" : "forward",
+            context.Account.Id, context.Account.Label, context.Request.Model, context.Request.Endpoint,
+            settings.NetworkMode, context.TraceId,
+            context.Request.GetType().GetProperty("DownstreamRequestHeaders")?.GetValue(context.Request) ?? context.Request.RequestHeaders,
+            context.Request.OriginalBody?.GetRawText(), JsonSerializer.Serialize(context.Request.Extensions, JsonOptions)));
+        try
+        {
+            var result = await InvokeCoreAsync(context, capture);
+            return capture is null ? result : result with { Response = capture.Attach(result.Response) };
+        }
+        catch (Exception error)
+        {
+            capture?.Complete(error is OperationCanceledException ? "cancelled" : "failed", error: error.Message);
+            throw;
+        }
+    }
+    private async Task<PluginInvocationResult> InvokeCoreAsync(PluginAttemptContext context, RequestLogCapture? capture)
+    {
         context.CancellationToken.ThrowIfCancellationRequested();
         if (!TryReadSettings(context.Account, out var settings))
             return LocalFailure("账号配置无效");
@@ -116,6 +135,7 @@ public sealed partial class UniversalForwardTerminal
                 request.Content.Headers.ContentType = new("application/json");
                 ApplyRequestHeaders(request, context.Request, settings, ReadExtraParams(settings), headers, upstreamEndpoint);
                 ApplyReplaceHeaders(request, resolvedHeaders);
+                var logAttempt = capture?.Sending(request, payload) ?? 0;
                 using var headerBudget = CancellationTokenSource.CreateLinkedTokenSource(total.Token);
                 headerBudget.CancelAfter(TimeSpan.FromSeconds(policy.HeaderTimeoutSeconds));
                 try
@@ -124,13 +144,15 @@ public sealed partial class UniversalForwardTerminal
                         ? await networkClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headerBudget.Token)
                         : await context.HttpClient.SendAsync(request, false,
                             HttpCompletionOption.ResponseHeadersRead, headerBudget.Token);
+                    capture?.Received(logAttempt, response);
                 }
                 catch (Exception error) when (error is HttpRequestException or OperationCanceledException)
                 {
+                    capture?.SendError(logAttempt, error);
                     total.Token.ThrowIfCancellationRequested();
                     await TryLogAsync("request.transport.failed", error.Message, "Error", context.TraceId,
                         context.Account.Id, context.Request.Model, details: new { keyId = selectedKey.Id, keyName = selectedKey.Name, strategy = settings.KeySelectionMode, networkMode = settings.NetworkMode, attempt, retry = attempt < policy.MaxRetries });
-                    if (attempt < policy.MaxRetries) { attempt++; continue; }
+                    if (attempt < policy.MaxRetries) { capture?.Retry(error.GetType().Name + ": " + error.Message); attempt++; continue; }
                     return Completed(RawResponse(error is OperationCanceledException ? 504 : 502,
                         JsonSerializer.SerializeToUtf8Bytes(new { error = error.Message }), "application/json"), 0,
                         settings.NetworkMode == "proxyPool" ? PluginFailureKind.Plugin : null);
@@ -189,6 +211,7 @@ public sealed partial class UniversalForwardTerminal
                                     : blank ? "empty_response" : "missing_terminal");
                             }
                             anomalyRetries++;
+                            capture?.Retry(retryKind);
                             response.Dispose(); response = null;
                             await Task.Delay(delay, total.Token);
                             continue;
@@ -219,6 +242,7 @@ public sealed partial class UniversalForwardTerminal
                 if (!skipOrdinaryRetry && rules.Contains(originalCode) && attempt < policy.MaxRetries)
                 {
                     response.Dispose(); response = null;
+                    capture?.Retry($"HTTP {originalCode}");
                     await TryLogAsync("request.retry", $"HTTP {originalCode}，重试同一上游", traceId: context.TraceId,
                         accountId: context.Account.Id, model: context.Request.Model, statusCode: originalCode,
                         details: new { keyId = selectedKey.Id, keyName = selectedKey.Name, strategy = settings.KeySelectionMode, attempt, retryNumber = attempt + 1 });

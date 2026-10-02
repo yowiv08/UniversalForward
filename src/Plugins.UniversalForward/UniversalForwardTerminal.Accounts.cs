@@ -227,7 +227,7 @@ public sealed partial class UniversalForwardTerminal
 
         try
         {
-            var result = await FetchModelsAsync(settings, context.CancellationToken);
+            var result = await FetchModelsAsync(settings, "models-discover", existing?.Id, existing?.Label, context.CancellationToken);
             if (result.Error is not null)
             {
                 await TryLogAsync("models.discover.failed", result.Error, "Error",
@@ -311,7 +311,7 @@ public sealed partial class UniversalForwardTerminal
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            var result = await FetchModelsAsync(settings, context.CancellationToken);
+            var result = await FetchModelsAsync(settings, "models-refresh", account.Id, account.Label, context.CancellationToken);
             if (result.Error is not null)
             {
                 await TryLogAsync(
@@ -397,7 +397,23 @@ public sealed partial class UniversalForwardTerminal
     }
     private async Task<(string[]? Models, int StatusCode, string? Error)> FetchModelsAsync(
         ForwardApiSettings settings,
-        CancellationToken cancellationToken)
+        string kind, string? accountId, string? label, CancellationToken cancellationToken)
+    {
+        var capture = BeginRequestLog(store => store.Begin(kind, accountId, label, null, "/v1/models", settings.NetworkMode, null, null, null, null));
+        try
+        {
+            var result = await FetchModelsCoreAsync(settings, capture, cancellationToken);
+            capture?.Complete(result.Error is null ? "completed" : "failed", result.StatusCode, result.Error);
+            return result;
+        }
+        catch (Exception error)
+        {
+            capture?.Complete(error is OperationCanceledException ? "cancelled" : "failed", error: error.Message);
+            throw;
+        }
+    }
+    private async Task<(string[]? Models, int StatusCode, string? Error)> FetchModelsCoreAsync(
+        ForwardApiSettings settings, RequestLogCapture? capture, CancellationToken cancellationToken)
     {
         if (!TryReadReplaceHeaders(ReadExtraParams(settings), out var replaceHeaders, out var error))
             return (null, 400, error);
@@ -407,6 +423,7 @@ public sealed partial class UniversalForwardTerminal
         ApplyApiKeyHeader(request, settings);
         ApplyReplaceHeaders(request, replaceHeaders);
         ApplyReplaceHeaders(request, HeaderOverrides.Resolve(settings.HeaderOverride, new Dictionary<string, string>(), settings.ApiKey, channelTest: true));
+        var logAttempt = capture?.Sending(request, []) ?? 0;
         HttpResponseMessage? response = null;
         try
         {
@@ -414,6 +431,7 @@ public sealed partial class UniversalForwardTerminal
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
+            capture?.Received(logAttempt, response);
             var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
                 return (null, (int)response.StatusCode, ModelResponseDiagnostic(settings, request, response, responseText));
@@ -436,6 +454,7 @@ public sealed partial class UniversalForwardTerminal
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
+            capture?.SendError(logAttempt, exception);
             return (null, 502, ModelResponseDiagnostic(settings, request, response, null,
                 $"{exception.GetType().Name}: {exception.Message}"));
         }

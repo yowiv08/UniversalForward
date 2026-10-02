@@ -10,7 +10,7 @@
   <main class="workspace">
     <header class="page-heading">
       <div class="brand"><div class="brand-symbol" aria-hidden="true">U<span>↗</span></div><div><span class="eyebrow">UNIVERSAL FORWARD</span><h1>渠道管理</h1></div></div>
-      <div class="actions"><button id="reload" class="secondary">刷新</button><button id="add" class="primary">＋ 添加渠道</button></div>
+      <div class="actions"><button id="openJournal" class="secondary">请求日志</button><button id="reload" class="secondary">刷新</button><button id="add" class="primary">＋ 添加渠道</button></div>
     </header>
     <section class="metrics" aria-label="渠道概览">
       <div><span>全部渠道</span><strong id="metricChannels">—</strong></div>
@@ -22,6 +22,45 @@
     <div class="toolbar"><div><h2>上游渠道 <span id="channelCount" class="count">0</span></h2><p class="muted">管理连接、密钥和模型路由</p></div><div class="filters"><input id="filter" aria-label="搜索渠道" placeholder="搜索名称、地址或模型"><select id="statusFilter" aria-label="渠道状态"><option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已禁用</option></select></div></div>
     <section id="cards" class="channel-grid" aria-live="polite"></section>
   </main>
+  <dialog id="journal" class="journal-dialog" aria-labelledby="journalTitle">
+    <header class="dialog-heading"><h2 id="journalTitle">请求日志</h2><button id="journalClose" type="button" class="icon-button" aria-label="关闭日志">×</button></header>
+    <div class="journal-content">
+      <p class="muted">原文包含密钥及请求内容，仅供管理员查看。请求参数指插件收到及提交给 HTTP 客户端的内容，不代表网络抓包或模型内部计算强度。</p>
+      <div id="journalStatus" class="feedback" role="status" hidden></div>
+      <form id="journalFilters" class="journal-filters">
+        <input name="channel" aria-label="日志渠道 ID" placeholder="渠道 ID">
+        <input name="model" aria-label="日志模型" placeholder="模型">
+        <input name="trace" aria-label="Trace ID" placeholder="Trace ID">
+        <input name="status" type="number" aria-label="日志状态码" placeholder="状态码">
+        <select name="endpoint" aria-label="日志接口"><option value="">全部接口</option><option>/v1/responses</option><option>/v1/messages</option><option>/v1/models</option></select>
+        <select name="kind" aria-label="日志类型"><option value="">全部类型</option><option value="forward">转发</option><option value="connection-test">连接测试</option><option value="models-discover">获取模型</option><option value="models-refresh">刷新模型</option></select>
+        <select name="network" aria-label="日志出站方式"><option value="">全部出站方式</option><option value="direct">直连</option><option value="proxyPool">代理池</option></select>
+        <select name="state" aria-label="日志执行状态"><option value="">全部执行状态</option><option value="running">执行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option></select>
+        <label>开始时间<input name="from" type="datetime-local"></label><label>结束时间<input name="to" type="datetime-local"></label>
+        <button type="submit" class="primary">查询</button><button id="journalClear" type="button" class="secondary">清空已结束日志</button>
+      </form>
+      <div class="journal-table"><table><thead><tr><th>时间／渠道</th><th>模型／接口</th><th>结果</th><th>思考参数</th><th>操作</th></tr></thead><tbody id="journalRows"></tbody></table></div>
+      <div class="actions"><button id="journalPrevious" type="button" class="secondary">上一页</button><span id="journalPage"></span><button id="journalNext" type="button" class="secondary">下一页</button></div>
+      <section id="journalDetail" hidden>
+        <h3>请求详情</h3>
+        <div class="actions"><button id="journalExport" type="button" class="secondary">导出整条日志</button><button id="journalDelete" type="button" class="secondary">删除日志</button></div>
+        <pre id="journalMetadata" class="journal-pre" tabindex="0"></pre>
+        <label for="journalPart">原始内容</label><select id="journalPart"></select>
+        <div class="actions"><button id="journalRaw" type="button" class="secondary">原文</button><button id="journalJson" type="button" class="secondary">JSON</button><button id="journalCopy" type="button" class="secondary">复制原文</button></div>
+        <div id="journalPartStatus" class="muted"></div><pre id="journalBody" class="journal-pre" tabindex="0"></pre>
+      </section>
+      <details><summary>日志存储设置</summary>
+        <div id="journalStorage" class="muted"></div>
+        <form id="journalSettings" class="journal-filters">
+          <label><input name="enabled" type="checkbox" checked>采集请求日志</label>
+          <label>保留天数<input name="retentionDays" type="number" min="1" max="3650" value="7" required></label>
+          <label>正文总容量 · MiB<input name="capacityMiB" type="number" min="1" max="1048576" value="5120" required></label>
+          <label>单向正文上限 · MiB<input name="bodyMiB" type="number" min="1" max="128" value="32" required></label>
+          <button type="submit" class="primary">保存日志设置</button>
+        </form>
+      </details>
+    </div>
+  </dialog>
   <dialog id="editor" class="editor-dialog" aria-labelledby="formTitle">
     <form id="accountForm" novalidate>
       <header class="dialog-heading"><div><span class="eyebrow">CHANNEL SETTINGS</span><h2 id="formTitle">添加渠道</h2></div><button type="button" id="close" class="icon-button" aria-label="关闭编辑">×</button></header>
@@ -109,7 +148,6 @@
     </div>
   </dialog>
   <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmTitle"><h3 id="confirmTitle">确认操作</h3><p id="confirmText"></p><div class="actions"><button id="confirmNo" class="secondary">取消</button><button id="confirmYes" class="primary">确认</button></div></dialog>
-  <dialog id="copyDialog" class="confirm-dialog" aria-labelledby="copyTitle"><h3 id="copyTitle">复制请求头</h3><p class="muted">选中内容后按 Ctrl+C 或长按复制</p><textarea id="copyContent" class="code-editor" readonly rows="10"></textarea><div class="actions"><button id="copyClose" class="primary">关闭</button></div></dialog>
   <script>/*__SCRIPT__*/</script>
 </body>
 </html>

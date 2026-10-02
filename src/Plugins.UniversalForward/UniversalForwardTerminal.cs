@@ -81,6 +81,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
     }
     public async ValueTask StartAsync(PluginStartContext context, CancellationToken cancellationToken)
     {
+        InitializeRequestLogs();
         await RebuildAccountModelSnapshotAsync(context.PluginKey, cancellationToken);
     }
     public ValueTask StopAsync(CancellationToken cancellationToken)
@@ -88,7 +89,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         Dispose();
         return ValueTask.CompletedTask;
     }
-    public void Dispose() { _keySelector.Clear(); _snapshotRefreshGate.Dispose(); }
+    public void Dispose() { DisposeRequestLogs(); _keySelector.Clear(); _snapshotRefreshGate.Dispose(); }
 
     private readonly ChannelKeySelector _keySelector = new();
     private static List<ChannelKey> ReadKeys(ForwardApiSettings settings) => ChannelKeys.Read(settings.Keys, settings.ApiKey);

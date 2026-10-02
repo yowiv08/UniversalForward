@@ -20,7 +20,11 @@ if ((Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvar
 $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
 try {
     $names = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-    foreach ($required in @('Plugins.UniversalForward.dll', 'Plugins.UniversalForward.deps.json', 'plugin.json', 'README.md')) {
+    foreach ($required in @('Plugins.UniversalForward.dll', 'Plugins.UniversalForward.deps.json', 'plugin.json', 'README.md',
+        'Microsoft.Data.Sqlite.dll', 'SQLitePCLRaw.core.dll', 'SQLitePCLRaw.batteries_v2.dll',
+        'SQLitePCLRaw.provider.e_sqlite3.dll', 'runtimes/win-x64/native/e_sqlite3.dll',
+        'runtimes/linux-x64/native/libe_sqlite3.so', 'runtimes/linux-arm64/native/libe_sqlite3.so',
+        'runtimes/linux-musl-x64/native/libe_sqlite3.so', 'runtimes/linux-musl-arm64/native/libe_sqlite3.so')) {
         if ("universalforward/$required" -cnotin $names) { throw "包内缺少 $required" }
     }
     $content = foreach ($file in ($zip.Entries | Sort-Object FullName)) {

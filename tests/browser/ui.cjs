@@ -183,9 +183,7 @@ function hostMock() {
     await frame.locator('#headerOverride').fill(JSON.stringify(headers));
     await frame.locator('#headerVisual').click();
     await frame.locator('#headerCopy').click();
-    await frame.locator('#copyDialog').waitFor({ state: 'visible' });
-    assert.deepEqual(JSON.parse(await frame.locator('#copyContent').inputValue()), headers);
-    await frame.locator('#copyClose').click();
+    await frame.locator('#headerStatus').filter({ hasText: '已复制请求头' }).waitFor();
     await page.screenshot({ path: path.join(output, 'ui-headers-desktop.png') });
 
     await frame.locator('#tab-models').click();
@@ -208,10 +206,7 @@ function hostMock() {
     await frame.locator('#discover').click();
     await frame.locator('#discoveryResponse').filter({ hasText: '上游返回 401' }).waitFor();
     await frame.locator('#copyDiscoveryResponse').click();
-    await frame.locator('#copyDialog').waitFor({ state: 'visible' });
-    assert.equal(await frame.locator('#copyTitle').textContent(), '复制响应详情');
-    assert.equal(await frame.locator('#copyContent').inputValue(), '上游返回 401，请检查 Key');
-    await frame.locator('#copyClose').click();
+    await frame.locator('#discoveryStatus').filter({ hasText: '已复制响应详情' }).waitFor();
     await page.evaluate(() => { window.failDiscovery = false; window.emptyDiscovery = true; });
     await frame.locator('#discover').click();
     await frame.locator('#discoveryStatus').filter({ hasText: '空模型列表' }).waitFor();
