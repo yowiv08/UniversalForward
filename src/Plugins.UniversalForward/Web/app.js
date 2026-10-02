@@ -798,5 +798,25 @@
     } catch (e) { testState.cancelling = false; feedback('testError', e.message, true); updateTestControls(); }
   };
   /*__JOURNAL__*/
+  for (const modal of document.querySelectorAll('dialog')) {
+    let startedOutside = false;
+    const outside = event => {
+      const bounds = modal.getBoundingClientRect();
+      return event.target === modal && (event.clientX < bounds.left || event.clientX > bounds.right ||
+        event.clientY < bounds.top || event.clientY > bounds.bottom);
+    };
+    modal.addEventListener('pointerdown', event => {
+      startedOutside = event.isPrimary && event.button === 0 && outside(event);
+    });
+    modal.addEventListener('pointercancel', () => { startedOutside = false; });
+    modal.addEventListener('click', event => {
+      const dismiss = startedOutside && outside(event); startedOutside = false;
+      if (!dismiss) return;
+      event.stopPropagation();
+      if (modal.id === 'editor') closeEditor();
+      else if (modal.id === 'confirmDialog') resolveConfirm(false);
+      else modal.close();
+    });
+  }
   load();
 })();
