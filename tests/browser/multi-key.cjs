@@ -101,7 +101,6 @@ const html = require('./page-source.cjs')();
     const discovery = await page.evaluate(() => window.calls.filter(x => x.route.startsWith('models/')));
     assert.ok(discovery.every(x => x.body.keyId === 'b' && !('apiKey' in x.body)));
     await page.getByRole('button', { name: '测试连接', exact: true }).click();
-    await page.locator('#testExpand').click();
     await page.locator('#testKey').selectOption('all');
     await page.getByRole('checkbox', { name: '选择 model-a', exact: true }).check();
     await page.locator('#testSelected').click();

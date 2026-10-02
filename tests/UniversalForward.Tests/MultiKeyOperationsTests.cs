@@ -18,6 +18,19 @@ public sealed class MultiKeyOperationsTests
     private static readonly string[] RetryHeaders = ["Bearer secret-a", "Bearer secret-a", "Bearer secret-a"];
     private static readonly string[] SelectedSecrets = ["secret-a", "secret-b"];
 
+    [TestMethod]
+    [DataRow("/v1/responses")]
+    [DataRow("/v1/messages")]
+    public void CustomTestContentAndOutputLimitMatchProtocol(string endpoint)
+    {
+        const string prompt = "解释这段代码\n\"你好\"";
+        var body = UniversalForwardTerminal.CreateTestBody("model", endpoint, true, prompt, 1024);
+        Assert.AreEqual(prompt, endpoint == "/v1/responses" ? body.GetProperty("input").GetString()
+            : body.GetProperty("messages")[0].GetProperty("content").GetString());
+        Assert.AreEqual(1024, body.GetProperty(endpoint == "/v1/responses" ? "max_output_tokens" : "max_tokens").GetInt32());
+        Assert.IsTrue(body.GetProperty("stream").GetBoolean());
+    }
+
     private static List<ChannelKey> Keys() =>
         [new() { Id = "a", Name = "Alpha", Secret = "secret-a" }, new() { Id = "b", Name = "Beta", Secret = "secret-b" }];
 

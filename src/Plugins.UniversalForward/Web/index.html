@@ -133,11 +133,15 @@
     </form>
   </dialog>
   <dialog id="testDialog" class="test-dialog" aria-labelledby="testTitle">
-    <header class="dialog-heading"><div><span class="eyebrow">CONNECTION TEST</span><h2 id="testTitle">测试连接</h2></div><button id="testClose" type="button" class="icon-button" aria-label="关闭测试">×</button></header>
-    <div class="test-content"><div class="compact-search test-search"><div class="search-main"><input id="testFilter" aria-label="筛选测试模型" placeholder="搜索模型"><button id="testExpand" type="button" aria-expanded="false" aria-controls="testAdvanced">展开 ⌄</button></div><div id="testAdvanced" hidden><div class="test-options"><div class="field"><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div class="field"><label for="testKey">测试 Key</label><select id="testKey"></select></div><label class="inline-check"><input id="testStream" type="checkbox">流式模式</label></div>
-      </div></div><div class="test-toolbar"><div class="actions"><button id="testAll" class="primary">测试全部</button><button id="testSelected" class="secondary">测试勾选</button><button id="testCancel" class="secondary" disabled>取消测试</button><button id="testResume" class="secondary" hidden>重试查询</button></div></div>
+    <header class="dialog-heading"><h2 id="testTitle">测试渠道连接</h2><button id="testClose" type="button" class="icon-button" aria-label="关闭测试">×</button></header>
+    <div class="test-content">
+      <div class="test-setup"><div><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select><p>覆盖用于测试的端点。留空以自动检测。</p></div><div><label for="testStream">流式模式</label><label class="stream-control"><input id="testStream" type="checkbox" role="switch"><span id="testStreamLabel">已禁用</span></label><p>为测试请求启用流式模式。</p></div></div>
+      <div class="test-prompt"><div><label for="testContent">测试内容</label><textarea id="testContent" rows="3" maxlength="16000" placeholder="留空使用默认内容：Reply with OK."></textarea></div><div><label for="testMaxTokens">输出上限 · Token</label><input id="testMaxTokens" type="number" min="1" max="32768" value="32"><p class="muted">复杂问题可提高上限，可能增加费用。</p></div></div>
+      <div class="test-model-heading"><div><h3>渠道模型</h3><p>选择要运行批量测试的模型。</p></div><input id="testFilter" aria-label="筛选测试模型" placeholder="筛选模型…"></div>
+      <div class="test-toolbar"><div class="actions"><button id="testAll" class="primary">测试全部</button><button id="testSelected" class="secondary">测试勾选</button><button id="testCancel" class="secondary" disabled>取消测试</button><button id="testResume" class="secondary" hidden>重试查询</button></div><div class="test-key-choice"><label for="testKey">测试 Key</label><select id="testKey"></select></div></div>
       <div id="testProgress" class="feedback" role="status" hidden></div><div id="testError" class="feedback error" role="alert" hidden></div>
       <div class="table-scroll"><table><thead><tr><th><input id="testSelectAll" type="checkbox" aria-label="勾选可见模型"></th><th>模型</th><th>状态</th><th>结果</th><th>操作</th></tr></thead><tbody id="testRows"></tbody></table></div>
+      <div class="test-pagination"><span id="testTotal"></span><label for="testPageSize">每页行数</label><select id="testPageSize"><option>10</option><option selected>30</option><option>50</option><option>100</option></select><button id="testFirst" aria-label="测试模型首页">«</button><button id="testPrevious" aria-label="测试模型上一页">‹</button><span id="testPageNumber"></span><button id="testNext" aria-label="测试模型下一页">›</button><button id="testLast" aria-label="测试模型末页">»</button></div>
 
     </div>
   </dialog>

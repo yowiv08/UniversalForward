@@ -14,6 +14,8 @@ public sealed partial class UniversalForwardTerminal
     {
         if (!TryReadBody<ConnectionTestInput>(context.Body, out var input))
             return context.BadRequest("测试参数无效");
+        if (input.Content?.Length > 16000 || input.MaxOutputTokens is < 1 or > 32768)
+            return context.BadRequest("测试内容最多 16000 字符，输出上限须为 1–32768 Token");
         if (string.IsNullOrWhiteSpace(input.AccountId))
             return context.BadRequest("渠道 ID 不能为空");
         var account = await _host.Accounts.GetAsync(input.AccountId, context.CancellationToken);
@@ -51,7 +53,7 @@ public sealed partial class UniversalForwardTerminal
         var normalized = new ConnectionTestInput
         {
             AccountId = account.Id, Models = uniqueModels, KeyMode = input.KeyMode, KeyIds = keyIds,
-            Endpoint = endpoint, Stream = input.Stream
+            Endpoint = endpoint, Stream = input.Stream, Content = input.Content, MaxOutputTokens = input.MaxOutputTokens
         };
         var job = await _host.Jobs.StartAsync("connection-test", JsonSerializer.SerializeToElement(normalized, JsonOptions),
             new PluginJobOptions { Key = account.Id, Platform = ForwardApiPlatform }, context.CancellationToken);
@@ -112,7 +114,7 @@ public sealed partial class UniversalForwardTerminal
                 http.Timeout = Timeout.InfiniteTimeSpan;
                 using var client = new ConnectionTestClient(http, () => sends++, keyId);
                 captureClient = client;
-                var body = CreateTestBody(model, endpoint, input.Stream);
+                var body = CreateTestBody(model, endpoint, input.Stream, input.Content, input.MaxOutputTokens);
                 var result = await InvokeAsync(new PluginAttemptContext
                 {
                     PluginKey = ForwardApiPlatform, PlatformName = ForwardApiPlatform, Account = account,
@@ -239,11 +241,12 @@ public sealed partial class UniversalForwardTerminal
             yield return bytes.AsMemory(offset, Math.Min(16384, bytes.Length - offset));
     }
 
-    internal static JsonElement CreateTestBody(string model, string endpoint, bool stream)
+    internal static JsonElement CreateTestBody(string model, string endpoint, bool stream,
+        string? content = null, int maxOutputTokens = 32)
         => JsonSerializer.SerializeToElement(endpoint switch
         {
-            "/v1/responses" => (object)new { model, stream, input = "Reply with OK.", max_output_tokens = 32 },
-            "/v1/messages" => new { model, stream, messages = new[] { new { role = "user", content = "Reply with OK." } }, max_tokens = 32 },
+            "/v1/responses" => (object)new { model, stream, input = string.IsNullOrWhiteSpace(content) ? "Reply with OK." : content, max_output_tokens = maxOutputTokens },
+            "/v1/messages" => new { model, stream, messages = new[] { new { role = "user", content = string.IsNullOrWhiteSpace(content) ? "Reply with OK." : content } }, max_tokens = maxOutputTokens },
             _ => throw new FormatException("仅支持 Responses 和 Anthropic Messages。")
         });
 
@@ -305,6 +308,8 @@ public sealed partial class UniversalForwardTerminal
         public string[] Models { get; init; } = [];
         public string? Endpoint { get; init; }
         public bool Stream { get; init; }
+        public string? Content { get; init; }
+        public int MaxOutputTokens { get; init; } = 32;
         public string KeyMode { get; init; } = "strategy";
         public string? KeyId { get; init; }
         public string?[]? KeyIds { get; init; }

@@ -632,12 +632,26 @@
   const testBusy = () => testState.active || testState.starting;
   const resultId = (model, keyId) => JSON.stringify([model, keyId ?? null]);
   function updateTestControls() {
-    for (const id of ['testAll', 'testSelected', 'testEndpoint', 'testStream', 'testKey', 'testSelectAll']) $(id).disabled = testBusy();
+    for (const id of ['testAll', 'testSelected', 'testEndpoint', 'testStream', 'testKey', 'testSelectAll', 'testContent', 'testMaxTokens']) $(id).disabled = testBusy();
     $('testCancel').disabled = !testState.active || testState.cancelling;
+  }
+  let testPage = 1;
+  function visibleTestModels() {
+    const q = $('testFilter').value.toLowerCase();
+    return (testState.account?.models || []).filter(model => model.toLowerCase().includes(q));
   }
   function renderTests() {
     const root = $('testRows'); root.replaceChildren(); const q = $('testFilter').value.toLowerCase();
-    for (const model of testState.account?.models || []) {
+    const models = visibleTestModels(), size = +$('testPageSize').value;
+    const pages = Math.max(1, Math.ceil(models.length / size));
+    testPage = Math.min(testPage, pages);
+    $('testTotal').textContent = `总计：${models.length}`;
+    $('testPageNumber').textContent = String(testPage);
+    $('testFirst').disabled = $('testPrevious').disabled = testPage === 1;
+    $('testNext').disabled = $('testLast').disabled = testPage === pages;
+    $('testAll').textContent = `测试全部 ${(testState.account?.models || []).length} 个模型`;
+    $('testStreamLabel').textContent = $('testStream').checked ? '已启用' : '已禁用';
+    for (const model of models.slice((testPage - 1) * size, testPage * size)) {
       if (!model.toLowerCase().includes(q)) continue;
       const row = el('tr'), cell = el('td'), select = el('input'); select.type = 'checkbox';
       select.checked = testState.selected.has(model); select.disabled = testBusy(); select.setAttribute('aria-label', '选择 ' + model);
@@ -685,14 +699,14 @@
       feedback('formError', '出站方式尚未保存，请先保存渠道再测试', true); return;
     }
     if (testBusy() && testState.account?.id !== account.id) { message('请先取消或等待当前渠道测试完成', true); return; }
-    $('testTitle').textContent = '测试连接 · ' + account.label;
+    $('testTitle').textContent = '测试渠道连接：' + account.label;
     if (!testBusy()) {
       fillKeyOptions($('testKey'), account.keys || [], true);
       if (testState.account?.id !== account.id) {
         clearTimeout(testState.timer); testState.epoch++;
         Object.assign(testState, { account, selected: new Set(), rows: new Map(), targets: new Set(), combinations: [], jobId: null, active: false, running: null });
         feedback('testProgress'); feedback('testError'); $('testDetails').textContent = '';
-        $('testFilter').value = ''; $('testStream').checked = false;
+        $('testFilter').value = ''; $('testStream').checked = false; testPage = 1;
       } else testState.account = account;
       $('testEndpoint').replaceChildren(option('', '自动选择'));
       for (const endpoint of account.endpoints || []) $('testEndpoint').append(option(endpoint, endpoint));
@@ -701,6 +715,10 @@
   }
   async function startTests(models) {
     if (testBusy()) return;
+    const content = $('testContent').value, maxOutputTokens = Number($('testMaxTokens').value);
+    if (content.length > 16000 || !Number.isInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > 32768) {
+      feedback('testError', '测试内容最多 16000 字符，输出上限须为 1–32768 Token', true); return;
+    }
     const choice = $('testKey').value, keyMode = choice.startsWith('key:') ? 'specified' : choice;
     const keyId = keyMode === 'specified' ? choice.slice(4) : null;
     const keys = keyMode === 'all' ? (testState.account.keys || []).filter(k => k.enabled).map(k => k.id) : [keyId];
@@ -714,7 +732,7 @@
     for (const [id, row] of testState.rows) if (models.includes(row.model)) testState.rows.delete(id);
     feedback('testError'); $('testResume').hidden = true; renderTests();
     try {
-      const job = await api('POST', 'tests/start', { accountId: testState.account.id, models, keyMode, keyId, endpoint: $('testEndpoint').value || null, stream: $('testStream').checked });
+      const job = await api('POST', 'tests/start', { accountId: testState.account.id, models, keyMode, keyId, endpoint: $('testEndpoint').value || null, stream: $('testStream').checked, content, maxOutputTokens });
       testState.jobId = job.id; testState.active = true; testState.epoch++;
       feedback('testProgress', '测试已提交'); await pollTests(testState.epoch);
     } catch (e) { feedback('testError', e.message, true); }
@@ -748,9 +766,16 @@
     }
   }
   $('testAll').onclick = () => startTests(testState.account.models || []);
-  $('testSelected').onclick = () => startTests([...testState.selected]); $('testFilter').oninput = renderTests;
+  $('testSelected').onclick = () => startTests([...testState.selected]);
+  $('testFilter').oninput = () => { testPage = 1; renderTests(); };
+  $('testPageSize').onchange = () => { testPage = 1; renderTests(); };
+  $('testFirst').onclick = () => { testPage = 1; renderTests(); };
+  $('testPrevious').onclick = () => { testPage--; renderTests(); };
+  $('testNext').onclick = () => { testPage++; renderTests(); };
+  $('testLast').onclick = () => { testPage = Math.max(1, Math.ceil(visibleTestModels().length / +$('testPageSize').value)); renderTests(); };
+  $('testStream').onchange = () => { $('testStreamLabel').textContent = $('testStream').checked ? '已启用' : '已禁用'; };
   $('testSelectAll').onchange = () => {
-    for (const model of testState.account.models || []) if (model.toLowerCase().includes($('testFilter').value.toLowerCase())) {
+    for (const model of visibleTestModels().slice((testPage - 1) * +$('testPageSize').value, testPage * +$('testPageSize').value)) {
       if ($('testSelectAll').checked) testState.selected.add(model); else testState.selected.delete(model);
     }
     renderTests();
@@ -758,7 +783,7 @@
   $('testResume').onclick = () => pollTests(testState.epoch);
   $('testClose').onclick = () => $('testDialog').close();
   $('testDetailClose').onclick = () => $('testDetailDialog').close();
-  for (const [buttonId, panelId] of [['testExpand', 'testAdvanced'], ['journalExpand', 'journalAdvanced']]) {
+  for (const [buttonId, panelId] of [['journalExpand', 'journalAdvanced']]) {
     $(buttonId).onclick = () => {
       const panel = $(panelId); panel.hidden = !panel.hidden;
       $(buttonId).setAttribute('aria-expanded', String(!panel.hidden));
