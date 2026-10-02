@@ -23,9 +23,9 @@
     <section id="cards" class="channel-grid" aria-live="polite"></section>
   </main>
   <dialog id="journal" class="journal-dialog" aria-labelledby="journalTitle">
-    <header class="dialog-heading"><h2 id="journalTitle">请求日志</h2><button id="journalClose" type="button" class="icon-button" aria-label="关闭日志">×</button></header>
+    <header class="dialog-heading"><h2 id="journalTitle">本次运行日志</h2><button id="journalClose" type="button" class="icon-button" aria-label="关闭日志">×</button></header>
     <div class="journal-content">
-      <p class="muted">原文包含密钥及请求内容，仅供管理员查看。请求参数指插件收到及提交给 HTTP 客户端的内容，不代表网络抓包或模型内部计算强度。</p>
+      <p class="muted">日志仅保存在内存，重启或重新加载插件后清空。原文包含密钥及请求内容，仅供管理员查看。请求参数指插件收到及提交给 HTTP 客户端的内容，不代表网络抓包或模型内部计算强度。</p>
       <div id="journalStatus" class="feedback" role="status" hidden></div>
       <form id="journalFilters" class="journal-filters">
         <input name="channel" aria-label="日志渠道 ID" placeholder="渠道 ID">
@@ -53,10 +53,10 @@
         <div id="journalStorage" class="muted"></div>
         <form id="journalSettings" class="journal-filters">
           <label><input name="enabled" type="checkbox" checked>采集请求日志</label>
-          <label>保留天数<input name="retentionDays" type="number" min="1" max="3650" value="7" required></label>
-          <label>正文总容量 · MiB<input name="capacityMiB" type="number" min="1" max="1048576" value="5120" required></label>
-          <label>单向正文上限 · MiB<input name="bodyMiB" type="number" min="1" max="128" value="32" required></label>
-          <button type="submit" class="primary">保存日志设置</button>
+          <label>最多保留条数<input name="maxRecords" type="number" min="1" max="10000" value="1000" required></label>
+          <label>正文总容量 · MiB<input name="capacityMiB" type="number" min="1" max="512" value="64" required></label>
+          <label>单向正文上限 · MiB<input name="bodyMiB" type="number" min="1" max="32" value="4" required></label>
+          <button type="submit" class="primary">应用日志设置</button>
         </form>
       </details>
     </div>

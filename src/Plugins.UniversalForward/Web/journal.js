@@ -23,11 +23,11 @@
     try {
       const state = await api('GET', 'logs/status');
       if (epoch !== journalEpoch || !$('journal').open) return;
-      $('journalStorage').textContent = `目录：${state.directory || '未初始化'}\n状态：${state.available ? '可用' : '不可用'}\n未写入操作：${state.droppedWrites || 0}${state.error ? '\n错误：' + state.error : ''}`;
+      $('journalStorage').textContent = `存储：本次运行内存\n状态：${state.available ? '可用' : '不可用'}\n正文 ${state.bodyBytes || 0} 字节 · ${state.records || 0} 条\n未保留操作：${state.droppedWrites || 0}${state.error ? '\n错误：' + state.error : ''}`;
       if (state.settings) {
         const fields = $('journalSettings').elements;
         fields.enabled.checked = state.settings.enabled;
-        fields.retentionDays.value = state.settings.retentionDays;
+        fields.maxRecords.value = state.settings.maxRecords;
         fields.capacityMiB.value = state.settings.capacityBytes / 1048576;
         fields.bodyMiB.value = state.settings.bodyLimitBytes / 1048576;
       }
@@ -124,21 +124,21 @@
   };
   $('journalClear').onclick = async () => {
     if (!await ask('清空所有已结束的请求日志？', '清空请求日志')) return;
-    try { await api('POST', 'logs/clear', {}); $('journalDetail').hidden = true; journalPartEpoch++; journalDetail = null; journalPage = 1; await loadJournal(); }
+    try { await api('POST', 'logs/clear', {}); $('journalDetail').hidden = true; journalPartEpoch++; journalDetail = null; journalRawBody = ''; $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; journalPage = 1; await loadJournal(); }
     catch (error) { journalError(error); }
   };
   $('journalDelete').onclick = async () => {
     const detail = journalDetail;
     if (!detail || !await ask('删除这条请求日志及正文？', '删除请求日志')) return;
-    try { await api('POST', 'logs/delete', { id: detail.id }); $('journalDetail').hidden = true; journalPartEpoch++; journalDetail = null; await loadJournal(); }
+    try { await api('POST', 'logs/delete', { id: detail.id }); $('journalDetail').hidden = true; journalPartEpoch++; journalDetail = null; journalRawBody = ''; $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; await loadJournal(); }
     catch (error) { journalError(error); }
   };
   $('journalSettings').onsubmit = async event => {
     event.preventDefault(); const fields = $('journalSettings').elements;
     try {
-      await api('POST', 'logs/settings', { enabled: fields.enabled.checked, retentionDays: +fields.retentionDays.value,
+      await api('POST', 'logs/settings', { enabled: fields.enabled.checked, maxRecords: +fields.maxRecords.value,
         capacityBytes: +fields.capacityMiB.value * 1048576, bodyLimitBytes: +fields.bodyMiB.value * 1048576 });
-      await loadJournal(); feedback('journalStatus', '日志设置已保存');
+      await loadJournal(); feedback('journalStatus', '日志设置已生效，仅限本次运行');
     } catch (error) { journalError(error); }
   };
   $('journalExport').onclick = async () => {

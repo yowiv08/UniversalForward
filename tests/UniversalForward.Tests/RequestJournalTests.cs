@@ -22,7 +22,6 @@ public sealed class RequestJournalTests
             Assert.AreEqual(typeof(PluginHttpContext), method.GetParameters().Single().ParameterType);
         }
     }
-    private static string NewDirectory() => Path.Combine(Path.GetTempPath(), "universalforward-journal-tests", Guid.NewGuid().ToString("N"));
     private static JsonElement Json(object value) => JsonSerializer.SerializeToElement(value, RequestLogStore.Json);
     private static async Task<string> ReadBody(RequestLogStore store, string id, string part)
     {
@@ -45,33 +44,30 @@ public sealed class RequestJournalTests
             """{"reasoning_effort":"low"}""")!;
 
     [TestMethod]
-    public async Task RestartRetainsRawBodiesAndMarksOnlyAbandonedRequestsInterrupted()
+    public async Task RuntimeLogsAreRawAndRestartStartsEmpty()
     {
-        var directory = NewDirectory(); string done, abandoned;
-        using (var store = new RequestLogStore(directory))
+        string id;
+        using (var store = new RequestLogStore())
         {
-            Assert.IsTrue(store.Available, JsonSerializer.Serialize(store.Status));
-            var capture = Begin(store); done = capture.Id;
+            var capture = Begin(store); id = capture.Id;
             capture.Complete("completed", 200);
-            abandoned = Begin(store).Id;
             await store.FlushAsync();
+            StringAssert.Contains(await ReadBody(store, id, "incoming"), "private prompt");
+            StringAssert.Contains(await ReadBody(store, id, "incoming-headers"), "secret-key");
+            var rows = Json(store.List(new Dictionary<string, string>())).GetProperty("rows");
+            Assert.AreEqual(1, rows.GetArrayLength());
+            Assert.IsFalse(rows.ToString().Contains("secret-key", StringComparison.Ordinal));
+            Assert.AreEqual("Deleted channel name", store.Detail(id)!["channelLabel"]!.ToString());
         }
-        using var restarted = new RequestLogStore(directory);
-        Assert.AreEqual("completed", restarted.Detail(done)!["state"]!.ToString());
-        Assert.AreEqual("interrupted", restarted.Detail(abandoned)!["state"]!.ToString());
-        StringAssert.Contains(await ReadBody(restarted, done, "incoming"), "private prompt");
-        StringAssert.Contains(await ReadBody(restarted, done, "incoming-headers"), "secret-key");
-        var rows = Json(restarted.List(new Dictionary<string, string>())).GetProperty("rows");
-        Assert.AreEqual(2, rows.GetArrayLength());
-        Assert.IsFalse(rows.ToString().Contains("secret-key", StringComparison.Ordinal));
-        Assert.IsFalse(rows.ToString().Contains("private prompt", StringComparison.Ordinal));
-        Assert.AreEqual("Deleted channel name", restarted.Detail(done)!["channelLabel"]!.ToString());
+        using var restarted = new RequestLogStore();
+        Assert.IsNull(restarted.Detail(id));
+        Assert.AreEqual(0L, Json(restarted.Status).GetProperty("bodyBytes").GetInt64());
     }
 
     [TestMethod]
     public async Task CapturePreservesHeadersPayloadAndUpstreamReasoningAcrossRetries()
     {
-        using var store = new RequestLogStore(NewDirectory());
+        using var store = new RequestLogStore();
         var account = ChannelKeysTests.Account([new ChannelKey { Id = "key", Secret = "real-api-key" }], 1);
         var settings = ChannelKeysTests.Settings(account);
         settings["headerOverride"] = new JsonObject { ["Authorization"] = "Bearer {api_key}" };
@@ -111,7 +107,7 @@ public sealed class RequestJournalTests
     [TestMethod]
     public async Task StreamCaptureIsIncrementalAndDoesNotChangeResponseBytes()
     {
-        using var store = new RequestLogStore(NewDirectory());
+        using var store = new RequestLogStore();
         var capture = Begin(store);
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
         var attempt = capture.Sending(request, Encoding.UTF8.GetBytes("""{"reasoning":{"effort":"xhigh"}}"""));
@@ -132,8 +128,7 @@ public sealed class RequestJournalTests
     [TestMethod]
     public async Task LimitsRetentionAndDeletionKeepCorrectAccounting()
     {
-        var directory = NewDirectory();
-        using var store = new RequestLogStore(directory);
+        using var store = new RequestLogStore();
         await store.ConfigureAsync(new RequestLogSettings(BodyLimitBytes: 1024), CancellationToken.None);
         var capture = Begin(store);
         capture.AddText("large", new string('x', 4000));
@@ -146,15 +141,13 @@ public sealed class RequestJournalTests
         await store.DeleteAsync(capture.Id, CancellationToken.None);
         Assert.IsNull(store.Detail(capture.Id));
         Assert.AreEqual("", await ReadBody(store, capture.Id, "large"));
-        using var connection = store.Open();
-        using var command = RequestLogStore.Command(connection, "SELECT bytes FROM accounting WHERE id=1");
-        Assert.AreEqual(0L, (long)command.ExecuteScalar()!);
+        Assert.AreEqual(0L, Json(store.Status).GetProperty("bodyBytes").GetInt64());
     }
 
     [TestMethod]
     public async Task QueueOverflowIsVisibleAndDoesNotWaitForWriter()
     {
-        using var store = new RequestLogStore(NewDirectory(), 4);
+        using var store = new RequestLogStore(4);
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
         store.Enqueue("", _ => { entered.Set(); release.Wait(TimeSpan.FromSeconds(5)); });
@@ -175,20 +168,20 @@ public sealed class RequestJournalTests
     }
 
     [TestMethod]
-    public async Task UnwritableStorageDoesNotBreakForwarding()
+    public async Task DisabledAndDisposedStoresDoNotCapture()
     {
-        var directory = NewDirectory(); Directory.CreateDirectory(directory);
-        var file = Path.Combine(directory, "not-a-directory"); await File.WriteAllTextAsync(file, "");
-        using var store = new RequestLogStore(file);
+        var store = new RequestLogStore();
+        await store.ConfigureAsync(new RequestLogSettings(Enabled: false), CancellationToken.None);
+        Assert.IsNull(store.Begin("forward", null, null, null, null, null, null, null, null, null));
+        store.Dispose();
         Assert.IsFalse(store.Available);
         Assert.IsNull(store.Begin("forward", null, null, null, null, null, null, null, null, null));
-        Assert.IsNotNull(Json(store.Status).GetProperty("error").GetString());
     }
 
     [TestMethod]
     public async Task CapacityEvictsFinishedRecordsButPreservesActiveRecords()
     {
-        using var store = new RequestLogStore(NewDirectory(), 4096);
+        using var store = new RequestLogStore(4096);
         await store.ConfigureAsync(new RequestLogSettings(CapacityBytes: 1024 * 1024), CancellationToken.None);
         var first = Begin(store);
         first.AddText("large", new string('a', 700 * 1024));
@@ -204,61 +197,41 @@ public sealed class RequestJournalTests
         await store.FlushAsync();
         Assert.IsNotNull(store.Detail(active.Id));
         Assert.IsTrue(store.Detail(overflow.Id)!["incomplete"]!.GetValue<bool>());
-        using var connection = store.Open();
-        using var command = RequestLogStore.Command(connection, "SELECT bytes FROM accounting WHERE id=1");
-        Assert.IsTrue((long)command.ExecuteScalar()! <= 1024 * 1024);
+        Assert.IsTrue(Json(store.Status).GetProperty("bodyBytes").GetInt64() <= 1024 * 1024);
     }
 
     [TestMethod]
-    public async Task SettingsPersistAndSecondWriterCannotInterruptLiveSession()
+    public async Task InstancesAndSettingsAreIndependent()
     {
-        var directory = NewDirectory();
-        using (var store = new RequestLogStore(directory))
-        {
-            var active = Begin(store);
-            await store.ConfigureAsync(new RequestLogSettings(RetentionDays: 3), CancellationToken.None);
-            using var second = new RequestLogStore(directory);
-            Assert.IsFalse(second.Available);
-            Assert.AreEqual("running", store.Detail(active.Id)!["state"]!.ToString());
-        }
-        using var restarted = new RequestLogStore(directory);
-        Assert.AreEqual(3, restarted.Settings.RetentionDays);
+        using var first = new RequestLogStore();
+        var capture = Begin(first);
+        await first.ConfigureAsync(new RequestLogSettings(MaxRecords: 3), CancellationToken.None);
+        using var second = new RequestLogStore();
+        Assert.IsTrue(second.Available);
+        Assert.IsNull(second.Detail(capture.Id));
+        Assert.AreEqual(1000, second.Settings.MaxRecords);
+        Assert.AreEqual("running", first.Detail(capture.Id)!["state"]!.ToString());
     }
 
     [TestMethod]
-    public void ReplacementGenerationCanAcquireStoreAfterOldGenerationStops()
+    public async Task RecordLimitEvictsFinishedAndRejectsOverflowWithoutBlocking()
     {
-        var directory = NewDirectory();
-        using var old = new RequestLogStore(directory);
-        using var terminal = new UniversalForwardTerminal(ChannelKeysTests.Host(
-            ChannelKeysTests.Account([new ChannelKey { Id = "key", Secret = "secret" }], 0)))
-            { RequestLogs = new RequestLogStore(directory) };
-        Assert.IsFalse(terminal.RequestLogs.Available);
-        old.Dispose();
-        typeof(UniversalForwardTerminal).GetMethod("InitializeRequestLogs",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(terminal, null);
-        Assert.IsTrue(terminal.RequestLogs.Available);
-        Assert.AreEqual(directory, terminal.RequestLogs.DirectoryPath);
-    }
-
-    [TestMethod]
-    public void NewerSchemaIsNotOverwritten()
-    {
-        var directory = NewDirectory();
-        using (var store = new RequestLogStore(directory))
-        {
-            using var connection = store.Open();
-            RequestLogStore.Exec(connection, "PRAGMA user_version=2");
-        }
-        using var reopened = new RequestLogStore(directory);
-        Assert.IsFalse(reopened.Available);
-        StringAssert.Contains(Json(reopened.Status).GetProperty("error").GetString()!, "版本");
+        using var store = new RequestLogStore();
+        await store.ConfigureAsync(new RequestLogSettings(MaxRecords: 1), CancellationToken.None);
+        var first = Begin(store); first.Complete("completed", 200); await store.FlushAsync();
+        var active = Begin(store); await store.FlushAsync();
+        Assert.IsNull(store.Detail(first.Id));
+        var overflow = Begin(store); await store.FlushAsync();
+        Assert.IsNotNull(store.Detail(active.Id));
+        Assert.IsNull(store.Detail(overflow.Id));
+        Assert.AreEqual(1, Json(store.Status).GetProperty("records").GetInt32());
+        Assert.IsTrue(Json(store.Status).GetProperty("droppedWrites").GetInt64() > 0);
     }
 
     [TestMethod]
     public async Task ConcurrentRequestsAreIsolatedAndFiltersDoNotLoadBodies()
     {
-        using var store = new RequestLogStore(NewDirectory(), 4096);
+        using var store = new RequestLogStore(4096);
         await Task.WhenAll(Enumerable.Range(0, 20).Select(i => Task.Run(() =>
         {
             var capture = Begin(store, "trace-" + i);

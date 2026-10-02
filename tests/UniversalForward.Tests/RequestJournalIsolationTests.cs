@@ -7,7 +7,7 @@ namespace UniversalForward.Tests;
 public sealed class RequestJournalIsolationTests
 {
     [TestMethod]
-    public void PublishedPluginResolvesSqliteInIsolatedLoadContext()
+    public void PublishedPluginUsesMemoryWithoutSqlite()
     {
         var directory = Environment.GetEnvironmentVariable("UNIVERSALFORWARD_TEST_PACKAGE");
         if (string.IsNullOrWhiteSpace(directory))
@@ -21,12 +21,11 @@ public sealed class RequestJournalIsolationTests
         {
             var assembly = context.LoadFromAssemblyPath(entry);
             var type = assembly.GetType("Plugins.UniversalForward.RequestLogStore", true)!;
-            var path = Path.Combine(Path.GetTempPath(), "universalforward-isolation", Guid.NewGuid().ToString("N"));
-            using var store = (IDisposable)Activator.CreateInstance(type, path, 256)!;
+            using var store = (IDisposable)Activator.CreateInstance(type, [256])!;
             Assert.IsTrue((bool)type.GetProperty("Available")!.GetValue(store)!,
                 System.Text.Json.JsonSerializer.Serialize(type.GetProperty("Status")!.GetValue(store)));
-            Assert.IsTrue(File.Exists(Path.Combine(path, "requests.db")));
-            Assert.IsTrue(context.Assemblies.Any(a => a.GetName().Name == "Microsoft.Data.Sqlite"));
+            Assert.IsFalse(context.Assemblies.Any(a => a.GetName().Name!.Contains("Sqlite", StringComparison.OrdinalIgnoreCase)));
+            Assert.IsFalse(Directory.EnumerateFiles(directory, "*sqlite*", SearchOption.AllDirectories).Any());
         }
         finally { context.Unload(); }
     }

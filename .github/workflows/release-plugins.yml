@@ -41,6 +41,10 @@ jobs:
         run: dotnet test tests/UniversalForward.Tests/UniversalForward.Tests.csproj -c Release --nologo
       - name: Build plugin
         run: pwsh -File ./buildall.ps1 -OutputDirectory ./artifacts/plugins
+      - name: Test isolated plugin
+        env:
+          UNIVERSALFORWARD_TEST_PACKAGE: ${{ github.workspace }}/artifacts/plugins/universalforward
+        run: dotnet test tests/UniversalForward.Tests/UniversalForward.Tests.csproj -c Release --no-build --nologo --filter FullyQualifiedName~RequestJournalIsolationTests
       - name: Create archive and index
         shell: pwsh
         run: ./package-release.ps1 -Tag $env:RELEASE_TAG

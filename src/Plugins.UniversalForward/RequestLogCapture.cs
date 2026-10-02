@@ -32,17 +32,13 @@ internal sealed class RequestLogCapture
             ["network"] = network, ["trace"] = trace, ["state"] = "running", ["retries"] = 0
         };
         var json = _info.ToJsonString();
-        _store.Enqueue(Id, c => RequestLogStore.Exec(c, """
-            INSERT INTO requests(id,session,started,channel,model,endpoint,kind,network,trace,state,info)
-            VALUES($0,$1,$2,$3,$4,$5,$6,$7,$8,'running',$9)
-            """, Id, store.SessionId, started, channel, model, endpoint, kind, network, trace, json));
+        _store.Enqueue(Id, c => c.Insert(Id, json));
         AddText("incoming-headers", JsonSerializer.Serialize(headers, RequestLogStore.Json));
     }
     private sealed class Part
     {
         public long Observed;
         public long Accepted;
-        public int Sequence;
         public bool Ended;
     }
     public void AddText(string name, string text)
@@ -65,8 +61,8 @@ internal sealed class RequestLogCapture
             for (var offset = 0; offset < remaining; offset += 65536)
             {
                 var chunk = bytes.Slice(offset, Math.Min(65536, remaining - offset)).ToArray();
-                var sequence = part.Sequence++; var observed = part.Observed;
-                if (_store.Enqueue(Id, c => _store.AppendChunk(c, Id, name, sequence, observed, chunk))) part.Accepted += chunk.Length;
+                var observed = part.Observed;
+                if (_store.Enqueue(Id, c => c.AppendChunk(Id, name, observed, chunk))) part.Accepted += chunk.Length;
                 else _info["incomplete"] = true;
             }
         }
@@ -80,12 +76,7 @@ internal sealed class RequestLogCapture
             part.Ended = true;
             var observed = part.Observed; var truncated = observed > part.Accepted || !eof;
             if (truncated) _info["incomplete"] = true;
-            _store.Enqueue(Id, c =>
-            {
-                RequestLogStore.Exec(c, "INSERT OR IGNORE INTO parts(request,name) VALUES($0,$1)", Id, name);
-                RequestLogStore.Exec(c, "UPDATE parts SET observed=$2,truncated=max(truncated,$3) WHERE request=$0 AND name=$1",
-                    Id, name, observed, truncated);
-            });
+            _store.Enqueue(Id, c => c.EndPart(Id, name, observed, truncated));
         }
     }
     private static Dictionary<string, string[]> RequestHeaders(HttpRequestMessage request)
@@ -151,18 +142,14 @@ internal sealed class RequestLogCapture
     private void SaveAttempt(int number)
     {
         var json = _attempts[number - 1].ToJsonString();
-        _store.Enqueue(Id, c => RequestLogStore.Exec(c,
-            "INSERT INTO attempts VALUES($0,$1,$2) ON CONFLICT(request,number) DO UPDATE SET info=excluded.info", Id, number, json));
+        _store.Enqueue(Id, c => c.Attempt(Id, number, json));
     }
     public void Save()
     {
         lock (_gate)
         {
-            var json = _info.ToJsonString(); var state = _info["state"]!.GetValue<string>();
-            var status = _info["status"]?.GetValue<int>(); var incomplete = _info["incomplete"]?.GetValue<bool>() ?? false;
-            _store.Enqueue(Id, c => RequestLogStore.Exec(c,
-                "UPDATE requests SET info=$1,state=$2,status=$3,incomplete=max(incomplete,$4) WHERE id=$0",
-                Id, json, state, status, incomplete));
+            var json = _info.ToJsonString();
+            _store.Enqueue(Id, c => c.Update(Id, json));
         }
     }
     public void Complete(string state, int? status = null, string? error = null)
@@ -174,7 +161,7 @@ internal sealed class RequestLogCapture
             if (error is not null) AddText("error", error);
             _info["state"] = state; _info["status"] = status; _info["errorPresent"] = error is not null;
             _info["durationMs"] = _watch.ElapsedMilliseconds;
-            Save(); _store.Enqueue(Id, _store.Cleanup);
+            Save(); _store.Enqueue(Id, c => c.Cleanup());
         }
     }
     public static JsonObject Reasoning(string text)

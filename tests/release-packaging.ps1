@@ -20,17 +20,14 @@ if ((Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvar
 $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
 try {
     $names = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-    foreach ($required in @('Plugins.UniversalForward.dll', 'Plugins.UniversalForward.deps.json', 'plugin.json', 'README.md',
-        'Microsoft.Data.Sqlite.dll', 'SQLitePCLRaw.core.dll', 'SQLitePCLRaw.batteries_v2.dll',
-        'SQLitePCLRaw.provider.e_sqlite3.dll', 'runtimes/win-x64/native/e_sqlite3.dll',
-        'runtimes/linux-x64/native/libe_sqlite3.so', 'runtimes/linux-arm64/native/libe_sqlite3.so',
-        'runtimes/linux-musl-x64/native/libe_sqlite3.so', 'runtimes/linux-musl-arm64/native/libe_sqlite3.so')) {
+    foreach ($required in @('Plugins.UniversalForward.dll', 'Plugins.UniversalForward.deps.json', 'plugin.json', 'README.md')) {
         if ("universalforward/$required" -cnotin $names) { throw "包内缺少 $required" }
     }
     $content = foreach ($file in ($zip.Entries | Sort-Object FullName)) {
         $name = $file.FullName.Replace('\', '/')
         if (-not $name.StartsWith('universalforward/', [StringComparison]::Ordinal) -or
             $name -match '(^|/)\.\.(/|$)' -or $name -match '(^|/)Router\.Contracts\.' -or
+            $name -match '(?i)(sqlite|e_sqlite3)' -or
             $name -match '(?i)(^|/)(Config\.json|\.env[^/]*|.*\.(db|key|pem|pfx))$') {
             throw "包内文件无效：$name"
         }
