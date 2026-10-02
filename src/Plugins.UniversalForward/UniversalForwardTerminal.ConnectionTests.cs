@@ -19,8 +19,6 @@ public sealed partial class UniversalForwardTerminal
         var account = await _host.Accounts.GetAsync(input.AccountId, context.CancellationToken);
         if (account is null) return context.Json(404, new { error = "渠道不存在" });
         if (!TryReadSettings(account, out var settings)) return context.BadRequest("渠道配置无效");
-        if (!settings.Enabled || account.Status.State is ResourceState.Disabled or ResourceState.Invalid)
-            return context.BadRequest("渠道已停用，请先启用");
         var models = input.Models;
         if (models is null || models.Length is < 1 or > 100
             || models.Any(x => !ReadModels(account).Contains(x, StringComparer.Ordinal)))

@@ -82,7 +82,7 @@
     const input = el('textarea');
     input.value = text; input.readOnly = true; input.tabIndex = -1;
     input.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;font-size:16px';
-    (document.querySelector('dialog[open]') || document.body).append(input);
+    ([...document.querySelectorAll('dialog[open]')].at(-1) || document.body).append(input);
     let copied = false;
     try {
       input.focus({ preventScroll: true }); input.select(); input.setSelectionRange(0, text.length);
@@ -648,15 +648,34 @@
       const state = pending ? testState.running === model ? '测试中' : '排队中' : results.length
         ? results.every(r => r.cancelled) ? '已取消' : results.every(r => r.success) ? '成功' : '失败' : '未测试';
       const summaryCell = el('td');
-      for (const r of results) summaryCell.append(el('div',
-        `${r.keyName || r.keyId || '按策略'} · ${r.cancelled ? '已取消' : r.success ? '成功' : '失败'} · ${r.originalStatus ?? '—'} → ${r.mappedStatus ?? '—'} · ${r.durationMs ?? '—'}ms · 重试 ${r.retries ?? 0}次`, 'result-line'));
+      for (const r of results) {
+        const result = el('div', '', 'result-line');
+        result.append(el('span', r.keyName || r.keyId || '按策略', 'result-key'),
+          el('code', `${r.originalStatus ?? '—'} → ${r.mappedStatus ?? '—'}`, 'result-http'),
+          el('strong', `${r.durationMs ?? '—'}ms`, 'result-duration'),
+          el('span', `重试 ${r.retries ?? 0}次`, 'result-retries'));
+        summaryCell.append(result);
+      }
+      if (!results.length) summaryCell.append(el('span', pending ? '等待响应' : '—', 'result-empty'));
       const ops = el('td'), run = button('测试', () => startTests([model])); run.disabled = testBusy(); ops.append(run);
       if (results.length) ops.append(button('详情', () => {
         $('testDetails').textContent = results.map(r =>
           `${r.keyName || r.keyId || '按策略'} · 出站方式：${r.networkMode === 'proxyPool' ? '代理池' : '直连'}\n${r.response || r.error || '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
-        ).join('\n\n'); $('testDetails').parentElement.open = true;
+        ).join('\n\n');
+        const overview = $('testDetailOverview'); overview.replaceChildren();
+        for (const r of results) {
+          const section = el('section', '', 'detail-group'), values = el('dl', '', 'detail-values detail-card');
+          section.append(el('h4', r.keyName || r.keyId || '按渠道策略'));
+          for (const [label, value] of [['模型', model], ['状态', r.cancelled ? '已取消' : r.success ? '成功' : '失败'],
+            ['出站方式', r.networkMode === 'proxyPool' ? '代理池' : '直连'], ['状态码', `${r.originalStatus ?? '—'} → ${r.mappedStatus ?? '—'}`],
+            ['响应时间', `${r.durationMs ?? '—'} ms`], ['重试次数', String(r.retries ?? 0)]]) values.append(el('dt', label), el('dd', value));
+          section.append(values); overview.append(section);
+        }
+        $('testDetailDialog').showModal();
       }, 'text-button'));
-      row.append(cell, el('td', model), el('td', state), summaryCell, ops); root.append(row);
+      const stateCell = el('td');
+      stateCell.append(el('span', state, 'console-badge ' + (state === '成功' ? 'is-success' : state === '失败' ? 'is-error' : pending ? 'is-active' : 'is-neutral')));
+      row.append(cell, el('td', model, 'console-model'), stateCell, summaryCell, ops); root.append(row);
     }
     updateTestControls();
   }
@@ -738,6 +757,14 @@
   };
   $('testResume').onclick = () => pollTests(testState.epoch);
   $('testClose').onclick = () => $('testDialog').close();
+  $('testDetailClose').onclick = () => $('testDetailDialog').close();
+  for (const [buttonId, panelId] of [['testExpand', 'testAdvanced'], ['journalExpand', 'journalAdvanced']]) {
+    $(buttonId).onclick = () => {
+      const panel = $(panelId); panel.hidden = !panel.hidden;
+      $(buttonId).setAttribute('aria-expanded', String(!panel.hidden));
+      $(buttonId).textContent = panel.hidden ? '展开 ⌄' : '收起 ⌃';
+    };
+  }
   $('testCancel').onclick = async () => {
     testState.cancelling = true; updateTestControls();
     try {

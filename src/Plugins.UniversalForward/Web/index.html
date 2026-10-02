@@ -23,32 +23,17 @@
     <section id="cards" class="channel-grid" aria-live="polite"></section>
   </main>
   <dialog id="journal" class="journal-dialog" aria-labelledby="journalTitle">
-    <header class="dialog-heading"><h2 id="journalTitle">本次运行日志</h2><button id="journalClose" type="button" class="icon-button" aria-label="关闭日志">×</button></header>
+    <header class="dialog-heading"><div class="console-heading"><span class="console-icon" aria-hidden="true">≡</span><div><span class="eyebrow">REQUEST INSPECTOR</span><h2 id="journalTitle">本次运行日志</h2></div></div><button id="journalClose" type="button" class="icon-button" aria-label="关闭日志">×</button></header>
     <div class="journal-content">
       <p class="muted">日志仅保存在内存，重启或重新加载插件后清空。原文包含密钥及请求内容，仅供管理员查看。请求参数指插件收到及提交给 HTTP 客户端的内容，不代表网络抓包或模型内部计算强度。</p>
       <div id="journalStatus" class="feedback" role="status" hidden></div>
-      <form id="journalFilters" class="journal-filters">
-        <input name="channel" aria-label="日志渠道 ID" placeholder="渠道 ID">
-        <input name="model" aria-label="日志模型" placeholder="模型">
-        <input name="trace" aria-label="Trace ID" placeholder="Trace ID">
-        <input name="status" type="number" aria-label="日志状态码" placeholder="状态码">
-        <select name="endpoint" aria-label="日志接口"><option value="">全部接口</option><option>/v1/responses</option><option>/v1/messages</option><option>/v1/models</option></select>
-        <select name="kind" aria-label="日志类型"><option value="">全部类型</option><option value="forward">转发</option><option value="connection-test">连接测试</option><option value="models-discover">获取模型</option><option value="models-refresh">刷新模型</option></select>
-        <select name="network" aria-label="日志出站方式"><option value="">全部出站方式</option><option value="direct">直连</option><option value="proxyPool">代理池</option></select>
-        <select name="state" aria-label="日志执行状态"><option value="">全部执行状态</option><option value="running">执行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option></select>
-        <label>开始时间<input name="from" type="datetime-local"></label><label>结束时间<input name="to" type="datetime-local"></label>
-        <button type="submit" class="primary">查询</button><button id="journalClear" type="button" class="secondary">清空已结束日志</button>
+      <form id="journalFilters" class="journal-filters compact-search">
+        <div class="search-main"><div class="date-range"><input name="from" type="datetime-local" aria-label="开始时间"><span>～</span><input name="to" type="datetime-local" aria-label="结束时间"></div><input name="model" aria-label="日志模型" placeholder="模型"><select name="kind" aria-label="日志类型"><option value="">全部类型</option><option value="forward">转发</option><option value="connection-test">连接测试</option><option value="models-discover">获取模型</option><option value="models-refresh">刷新模型</option></select><button id="journalExpand" type="button" aria-expanded="false" aria-controls="journalAdvanced">展开 ⌄</button><button class="primary" type="submit">查询</button></div>
+        <div id="journalAdvanced" class="search-advanced" hidden><input name="channel" aria-label="日志渠道 ID" placeholder="渠道 ID"><input name="trace" aria-label="Trace ID" placeholder="Trace ID"><input name="status" type="number" aria-label="日志状态码" placeholder="状态码"><select name="endpoint" aria-label="日志接口"><option value="">全部接口</option><option>/v1/responses</option><option>/v1/messages</option><option>/v1/models</option></select><select name="network" aria-label="日志出站方式"><option value="">全部出站方式</option><option value="direct">直连</option><option value="proxyPool">代理池</option></select><select name="state" aria-label="日志执行状态"><option value="">全部执行状态</option><option value="running">执行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option></select><button id="journalClear" type="button">清空已结束日志</button></div>
       </form>
       <div class="journal-table"><table><thead><tr><th>时间／渠道</th><th>模型／接口</th><th>结果</th><th>思考参数</th><th>操作</th></tr></thead><tbody id="journalRows"></tbody></table></div>
       <div class="actions"><button id="journalPrevious" type="button" class="secondary">上一页</button><span id="journalPage"></span><button id="journalNext" type="button" class="secondary">下一页</button></div>
-      <section id="journalDetail" hidden>
-        <h3>请求详情</h3>
-        <div class="actions"><button id="journalExport" type="button" class="secondary">导出整条日志</button><button id="journalDelete" type="button" class="secondary">删除日志</button></div>
-        <pre id="journalMetadata" class="journal-pre" tabindex="0"></pre>
-        <label for="journalPart">原始内容</label><select id="journalPart"></select>
-        <div class="actions"><button id="journalRaw" type="button" class="secondary">原文</button><button id="journalJson" type="button" class="secondary">JSON</button><button id="journalCopy" type="button" class="secondary">复制原文</button></div>
-        <div id="journalPartStatus" class="muted"></div><pre id="journalBody" class="journal-pre" tabindex="0"></pre>
-      </section>
+
       <details><summary>日志存储设置</summary>
         <div id="journalStorage" class="muted"></div>
         <form id="journalSettings" class="journal-filters">
@@ -61,6 +46,15 @@
       </details>
     </div>
   </dialog>
+      <dialog id="journalDetail" class="request-detail-dialog" aria-labelledby="requestDetailTitle">
+        <header class="request-detail-heading"><h3 id="requestDetailTitle">日志详情</h3><button id="journalDetailClose" class="icon-button" aria-label="关闭详情">×</button></header>
+        <div id="journalOverview"></div>
+        <div class="actions"><button id="journalExport" type="button" class="secondary">导出整条日志</button><button id="journalDelete" type="button" class="secondary">删除日志</button></div>
+        <details class="journal-metadata"><summary>请求元数据与重试记录</summary><pre id="journalMetadata" class="journal-pre" tabindex="0"></pre></details>
+        <label for="journalPart">原始内容</label><select id="journalPart"></select>
+        <div class="actions"><button id="journalRaw" type="button" class="secondary">原文</button><button id="journalJson" type="button" class="secondary">JSON</button><button id="journalCopy" type="button" class="secondary">复制原文</button></div>
+        <div id="journalPartStatus" class="muted"></div><pre id="journalBody" class="journal-pre" tabindex="0"></pre>
+      </dialog>
   <dialog id="editor" class="editor-dialog" aria-labelledby="formTitle">
     <form id="accountForm" novalidate>
       <header class="dialog-heading"><div><span class="eyebrow">CHANNEL SETTINGS</span><h2 id="formTitle">添加渠道</h2></div><button type="button" id="close" class="icon-button" aria-label="关闭编辑">×</button></header>
@@ -140,13 +134,14 @@
   </dialog>
   <dialog id="testDialog" class="test-dialog" aria-labelledby="testTitle">
     <header class="dialog-heading"><div><span class="eyebrow">CONNECTION TEST</span><h2 id="testTitle">测试连接</h2></div><button id="testClose" type="button" class="icon-button" aria-label="关闭测试">×</button></header>
-    <div class="test-content"><div class="test-options"><div class="field"><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div class="field"><label for="testKey">测试 Key</label><select id="testKey"></select></div><label class="inline-check"><input id="testStream" type="checkbox">流式模式</label></div>
-      <div class="test-toolbar"><input id="testFilter" aria-label="筛选测试模型" placeholder="搜索模型"><div class="actions"><button id="testAll" class="primary">测试全部</button><button id="testSelected" class="secondary">测试勾选</button><button id="testCancel" class="secondary" disabled>取消测试</button><button id="testResume" class="secondary" hidden>重试查询</button></div></div>
+    <div class="test-content"><div class="compact-search test-search"><div class="search-main"><input id="testFilter" aria-label="筛选测试模型" placeholder="搜索模型"><button id="testExpand" type="button" aria-expanded="false" aria-controls="testAdvanced">展开 ⌄</button></div><div id="testAdvanced" hidden><div class="test-options"><div class="field"><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div class="field"><label for="testKey">测试 Key</label><select id="testKey"></select></div><label class="inline-check"><input id="testStream" type="checkbox">流式模式</label></div>
+      </div></div><div class="test-toolbar"><div class="actions"><button id="testAll" class="primary">测试全部</button><button id="testSelected" class="secondary">测试勾选</button><button id="testCancel" class="secondary" disabled>取消测试</button><button id="testResume" class="secondary" hidden>重试查询</button></div></div>
       <div id="testProgress" class="feedback" role="status" hidden></div><div id="testError" class="feedback error" role="alert" hidden></div>
       <div class="table-scroll"><table><thead><tr><th><input id="testSelectAll" type="checkbox" aria-label="勾选可见模型"></th><th>模型</th><th>状态</th><th>结果</th><th>操作</th></tr></thead><tbody id="testRows"></tbody></table></div>
-      <details><summary>结果详情</summary><pre id="testDetails"></pre></details>
+
     </div>
   </dialog>
+  <dialog id="testDetailDialog" class="request-detail-dialog" aria-labelledby="testDetailTitle"><header class="request-detail-heading"><h3 id="testDetailTitle">连接详情</h3><button id="testDetailClose" class="icon-button" aria-label="关闭连接详情">×</button></header><div id="testDetailOverview"></div><h4>响应原文</h4><pre id="testDetails" class="journal-pre"></pre></dialog>
   <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmTitle"><h3 id="confirmTitle">确认操作</h3><p id="confirmText"></p><div class="actions"><button id="confirmNo" class="secondary">取消</button><button id="confirmYes" class="primary">确认</button></div></dialog>
   <script>/*__SCRIPT__*/</script>
 </body>

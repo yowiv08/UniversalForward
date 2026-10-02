@@ -93,12 +93,12 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
 
     private readonly ChannelKeySelector _keySelector = new();
     private static List<ChannelKey> ReadKeys(ForwardApiSettings settings) => ChannelKeys.Read(settings.Keys, settings.ApiKey);
-    private bool IsAccountEligible(Account account, AdapterRequest request)
+    private bool IsAccountEligible(Account account, AdapterRequest request, bool connectionTest = false)
     {
         if (!SupportedEndpoints.Contains(NormalizeEndpoint(request.Endpoint), StringComparer.OrdinalIgnoreCase))
             return false;
         var policy = GetAccountModelPolicy(account);
-        if (policy is null || !policy.Enabled)
+        if (policy is null || (!connectionTest && !policy.Enabled))
             return false;
         if (!policy.Endpoints.Contains(NormalizeEndpoint(request.Endpoint), StringComparer.OrdinalIgnoreCase))
             return false;

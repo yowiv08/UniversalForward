@@ -13,7 +13,7 @@
   async function openJournal(channel = '') {
     $('journalFilters').reset(); $('journalFilters').elements.channel.value = channel;
     journalPage = 1; journalDetail = null; journalRawBody = ''; journalPartEpoch++;
-    $('journalDetail').hidden = true; $('journalBody').textContent = ''; $('journalMetadata').textContent = '';
+    $('journalDetail').close(); $('journalBody').textContent = ''; $('journalMetadata').textContent = '';
     if (!$('journal').open) $('journal').showModal();
     await loadJournal();
   }
@@ -42,16 +42,27 @@
       const root = $('journalRows'); root.replaceChildren();
       for (const row of data.rows || []) {
         const tr = el('tr'), identity = el('td'), model = el('td'), stateCell = el('td'), effort = el('td'), actions = el('td');
-        identity.append(el('div', new Date(row.started).toLocaleString()), el('div', row.channelLabel || row.channel || '未保存渠道'), el('small', row.trace || row.id));
-        model.append(el('div', row.model || '—'), el('div', row.endpoint || '—'), el('small', `${journalKinds[row.kind] || row.kind} · ${row.network === 'proxyPool' ? '代理池' : '直连'}`));
-        stateCell.append(el('div', `${journalStates[row.state] || row.state} · HTTP ${row.status ?? '—'}${row.incomplete ? ' · 日志不完整' : ''}`),
-          el('small', `首包 ${row.firstByteMs ?? '—'} ms · 总计 ${row.durationMs ?? '—'} ms · 重试 ${row.retries || 0}`));
-        effort.append(el('div', '收到：' + journalEffort(row.receivedReasoning)),
-          el('div', '扩展：' + journalEffort(row.extensionReasoning)),
-          el('div', '发送：' + journalEffort(row.sentReasoning)),
-          el('div', '上游报告：' + (row.reportedReasoning ? journalEffort(row.reportedReasoning) : '未返回')));
-        if (row.reasoningChanged) effort.append(el('strong', '插件收到与发送的参数不同'));
-        actions.append(button('详情', () => showJournalDetail(row.id)));
+        const stamp = new Date(row.started), trace = el('small', row.trace || row.id, 'record-trace');
+        trace.title = row.trace || row.id;
+        identity.append(el('strong', stamp.toLocaleTimeString('zh-CN', { hour12: false }), 'record-time'),
+          el('span', stamp.toLocaleDateString(), 'record-date'),
+          el('div', row.channelLabel || row.channel || '未保存渠道', 'record-channel'), trace);
+        model.append(el('strong', row.model || '—', 'record-model'), el('code', row.endpoint || '—', 'record-endpoint'),
+          el('small', `${journalKinds[row.kind] || row.kind} · ${row.network === 'proxyPool' ? '代理池' : '直连'}`));
+        stateCell.append(el('div', `${journalStates[row.state] || row.state} · HTTP ${row.status ?? '—'}${row.incomplete ? ' · 日志不完整' : ''}`, 'console-badge ' + (row.state === 'completed' ? 'is-success' : row.state === 'failed' ? 'is-error' : row.state === 'running' ? 'is-active' : 'is-neutral')),
+          el('div', '', 'record-metrics'));
+        for (const [label, value] of [['首字', `${row.firstByteMs ?? '—'} ms`], ['耗时', `${row.durationMs ?? '—'} ms`], ['重试', String(row.retries || 0)]]) {
+          const metric = el('span');
+          metric.append(el('small', label), el('strong', value));
+          stateCell.lastChild.append(metric);
+        }
+        effort.append(el('div', '请求：' + journalEffort(row.sentReasoning)),
+          el('div', '上游：' + (row.reportedReasoning && Object.keys(row.reportedReasoning).length ? journalEffort(row.reportedReasoning) : '未返回')));
+        actions.append(button('详情', () => {
+          for (const item of root.children) item.classList.remove('is-selected');
+          tr.classList.add('is-selected'); showJournalDetail(row.id);
+        }));
+        for (const [cell, label] of [[identity, '时间 / 渠道'], [model, '模型 / 接口'], [stateCell, '结果'], [effort, '思考参数'], [actions, '操作']]) cell.dataset.label = label;
         tr.append(identity, model, stateCell, effort, actions); root.append(tr);
       }
       $('journalPage').textContent = `第 ${data.page} 页 · 共 ${data.total} 条`;
@@ -66,7 +77,9 @@
     try {
       const detail = await api('GET', 'logs/detail?id=' + encodeURIComponent(id));
       if (epoch !== journalPartEpoch || !$('journal').open) return;
-      journalDetail = detail; $('journalDetail').hidden = false;
+      journalDetail = detail;
+      renderJournalOverview(detail);
+      if (!$('journalDetail').open) $('journalDetail').showModal();
       $('journalMetadata').textContent = JSON.stringify(detail, null, 2);
       $('journalDelete').disabled = detail.state === 'running';
       $('journalPart').replaceChildren(...(detail.parts || []).map(part => option(part.name, journalPartLabel(part.name))));
@@ -74,6 +87,29 @@
       if (response) $('journalPart').value = response.name;
       await loadJournalPart();
     } catch (error) { if (epoch === journalPartEpoch) journalError(error); }
+  }
+  function renderJournalOverview(detail) {
+    const root = $('journalOverview'); root.replaceChildren();
+    const group = (title, values) => {
+      const section = el('section', '', 'detail-group');
+      if (title) section.append(el('h4', title));
+      const list = el('dl', '', title ? 'detail-values detail-card' : 'detail-values');
+      for (const [label, value] of values) {
+        list.append(el('dt', label), el('dd', value == null || value === '' ? '—' : String(value)));
+      }
+      section.append(list); root.append(section);
+    };
+    group('', [['请求 ID', detail.id], ['Trace ID', detail.trace], ['渠道', detail.channelLabel || detail.channel],
+      ['模型', detail.model], ['执行状态', journalStates[detail.state] || detail.state],
+      ['出站方式', detail.network === 'proxyPool' ? '代理池' : '直连'],
+      ['耗时', `${detail.durationMs ?? '—'} ms · 首字 ${detail.firstByteMs ?? '—'} ms`]]);
+    group('请求信息', [['接口', detail.endpoint], ['请求类型', journalKinds[detail.kind] || detail.kind],
+      ['状态码', detail.status], ['重试次数', detail.retries || 0]]);
+    group('思考参数', [['请求', journalEffort(detail.sentReasoning)],
+      ['上游', detail.reportedReasoning && Object.keys(detail.reportedReasoning).length ? journalEffort(detail.reportedReasoning) : '未返回']]);
+    for (const attempt of detail.attempts || []) group(`上游尝试 ${attempt.number}`, [
+      ['请求地址', attempt.url], ['最终地址', attempt.finalUrl], ['状态码', attempt.status],
+      ['重试原因', attempt.retryReason || '无']]);
   }
   async function readJournalChunks(id, part, consume, current) {
     let after = -1;
@@ -106,6 +142,11 @@
     } catch (error) { if (current()) { $('journalBody').textContent = ''; journalError(error); } }
   }
   $('openJournal').onclick = () => openJournal();
+  $('journalDetailClose').onclick = () => $('journalDetail').close();
+  $('journalDetail').addEventListener('close', () => {
+    journalPartEpoch++; journalRawBody = ''; journalDetail = null;
+    $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; $('journalOverview').replaceChildren();
+  });
   $('journalClose').onclick = () => $('journal').close();
   $('journal').addEventListener('close', () => { journalEpoch++; journalPartEpoch++; journalDetail = null; journalRawBody = ''; $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; });
   $('journalFilters').onsubmit = event => { event.preventDefault(); journalPage = 1; loadJournal(); };
@@ -124,13 +165,13 @@
   };
   $('journalClear').onclick = async () => {
     if (!await ask('清空所有已结束的请求日志？', '清空请求日志')) return;
-    try { await api('POST', 'logs/clear', {}); $('journalDetail').hidden = true; journalPartEpoch++; journalDetail = null; journalRawBody = ''; $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; journalPage = 1; await loadJournal(); }
+    try { await api('POST', 'logs/clear', {}); $('journalDetail').close(); journalPartEpoch++; journalDetail = null; journalRawBody = ''; $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; journalPage = 1; await loadJournal(); }
     catch (error) { journalError(error); }
   };
   $('journalDelete').onclick = async () => {
     const detail = journalDetail;
     if (!detail || !await ask('删除这条请求日志及正文？', '删除请求日志')) return;
-    try { await api('POST', 'logs/delete', { id: detail.id }); $('journalDetail').hidden = true; journalPartEpoch++; journalDetail = null; journalRawBody = ''; $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; await loadJournal(); }
+    try { await api('POST', 'logs/delete', { id: detail.id }); $('journalDetail').close(); journalPartEpoch++; journalDetail = null; journalRawBody = ''; $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; await loadJournal(); }
     catch (error) { journalError(error); }
   };
   $('journalSettings').onsubmit = async event => {

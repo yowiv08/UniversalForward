@@ -37,7 +37,7 @@ public sealed partial class UniversalForwardTerminal
         context.CancellationToken.ThrowIfCancellationRequested();
         if (!TryReadSettings(context.Account, out var settings))
             return LocalFailure("账号配置无效");
-        if (!IsAccountEligible(context.Account, context.Request))
+        if (!IsAccountEligible(context.Account, context.Request, context.HttpClient is ConnectionTestClient))
             return LocalFailure("账号未启用此模型或端点");
         if (!TryValidateBaseUrl(settings.BaseUrl, out var urlError)) return LocalFailure(urlError);
         if (!TryReadReplaceHeaders(ReadExtraParams(settings), out var headers, out var headerError))

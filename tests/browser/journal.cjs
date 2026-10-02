@@ -11,7 +11,8 @@ const row = {
   endpoint: '/v1/responses', kind: 'forward', network: 'proxyPool', trace: 'trace-one', state: 'completed',
   status: 200, retries: 1, firstByteMs: 30, durationMs: 80, reasoningChanged: true,
   receivedReasoning: { 'reasoning.effort': 'xhigh' }, extensionReasoning: { reasoning_effort: 'low' },
-  sentReasoning: { 'reasoning.effort': 'xhigh' }
+  sentReasoning: { 'reasoning.effort': 'low' },
+  reportedReasoning: { 'reasoning.effort': 'max', 'usage.output_tokens_details.reasoning_tokens': 34 }
 };
 const detail = { ...row, attempts: [{ number: 1, retryReason: 'HTTP 502' }],
   parts: [{ name: 'attempt-1-response', savedBytes: bytes.length, observedBytes: bytes.length, truncated: false }] };
@@ -46,13 +47,18 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     await frame.locator('#cards').getByRole('button', { name: '日志', exact: true }).click();
     await frame.locator('#journalRows').getByRole('button', { name: '详情' }).waitFor();
     assert.equal(await frame.locator('#journalFilters [name=channel]').inputValue(), 'channel');
-    assert.match(await frame.locator('#journalRows').textContent(), /xhigh/);
-    assert.match(await frame.locator('#journalRows').textContent(), /上游报告：未返回/);
+    const effort = frame.locator('#journalRows tr td').nth(3);
+    assert.deepEqual(await effort.locator('div').allTextContents(), [
+      '请求：reasoning.effort="low"',
+      '上游：reasoning.effort="max"；usage.output_tokens_details.reasoning_tokens=34'
+    ]);
+    assert.equal(await effort.locator('strong').count(), 0);
     assert.equal((await frame.locator('#journalRows').textContent()).includes('raw-secret'), false);
     await frame.locator('#journalRows').getByRole('button', { name: '详情' }).click();
     await frame.locator('#journalBody').filter({ hasText: 'raw-secret' }).waitFor();
     assert.equal(await frame.locator('#journalBody').textContent(), raw);
     assert.equal(await frame.locator('#journalBody img').count(), 0);
+    await page.screenshot({ path: path.resolve(__dirname, '../../artifacts/journal-redesign-desktop.png'), fullPage: true });
     await frame.locator('#journalCopy').click();
     await frame.locator('#journalStatus').filter({ hasText: '已复制原文' }).waitFor();
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), raw);
@@ -79,6 +85,7 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     await frame.locator('#journalStatus').filter({ hasText: '日志设置已生效，仅限本次运行' }).waitFor();
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await frame.locator('#journal').evaluate(n => n.scrollWidth <= n.clientWidth + 1), true);
+    await page.screenshot({ path: path.resolve(__dirname, '../../artifacts/journal-redesign-mobile.png'), fullPage: true });
     await frame.locator('#journalClose').click();
     assert.equal(await frame.locator('#journalBody').textContent(), '');
     assert.deepEqual(errors, []);

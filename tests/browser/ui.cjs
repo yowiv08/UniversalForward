@@ -277,6 +277,7 @@ function hostMock() {
     await frame.locator('#testProgress').filter({ hasText: '测试中' }).waitFor();
     await frame.locator('#testCancel').click();
     await frame.locator('#testProgress').filter({ hasText: '已取消' }).waitFor();
+    await page.screenshot({ path: path.join(output, 'ui-connection-redesign.png') });
     await frame.locator('#testClose').click();
     await frame.locator('#cards .channel-card').last().getByRole('button', { name: '删除', exact: true }).click();
     await frame.locator('#confirmNo').click();

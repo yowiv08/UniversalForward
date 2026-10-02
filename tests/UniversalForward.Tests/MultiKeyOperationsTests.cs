@@ -41,6 +41,24 @@ public sealed class MultiKeyOperationsTests
     }
 
     [TestMethod]
+    public async Task DisabledChannelCanStartManualTestWithoutEnablingIt()
+    {
+        var host = JobHost(out var account);
+        var settings = ChannelKeysTests.Settings(account);
+        settings["enabled"] = false;
+        var fields = new Dictionary<string, string?>(((CustomCredential)account.Credential).Fields)
+        { ["settings"] = settings.ToJsonString() };
+        account.Credential = new CustomCredential(fields);
+        account.Status = new ResourceStatus { State = ResourceState.Disabled };
+        using var terminal = new UniversalForwardTerminal(host);
+        var result = await terminal.StartConnectionTestsAsync(ChannelKeysTests.Context(new
+        { accountId = account.Id, models = Models, keyMode = "strategy" }));
+        Assert.AreEqual(202, result.StatusCode);
+        Assert.AreEqual(ResourceState.Disabled, account.Status.State);
+        Assert.IsFalse(ChannelKeysTests.Settings(account)["enabled"]!.GetValue<bool>());
+    }
+
+    [TestMethod]
     public async Task MoreThan100CombinationsAndDisabledSpecifiedKeyAreRejected()
     {
         var host = JobHost(out var account);
