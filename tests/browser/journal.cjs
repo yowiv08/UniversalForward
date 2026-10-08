@@ -14,8 +14,8 @@ const row = {
   sentReasoning: { 'reasoning.effort': 'low' },
   reportedReasoning: { 'reasoning.effort': 'max', 'usage.output_tokens_details.reasoning_tokens': 34 }
 };
-const detail = { ...row, attempts: [{ number: 1, retryReason: 'HTTP 502' }],
-  parts: [{ name: 'attempt-1-response', savedBytes: bytes.length, observedBytes: bytes.length, truncated: false }] };
+const detail = { ...row, attempts: [{ number: 1, transport: 'websocket', status: 101, url: 'wss://upstream.example/v1/responses' }],
+  parts: [{ name: 'attempt-1-websocket-events', savedBytes: bytes.length, observedBytes: bytes.length, truncated: false }] };
 const chunks = [...bytes].map((value, i) => ({ sequence: i, base64: Buffer.from([value]).toString('base64') }));
 const mock = `<script>
 window.calls=[];window.logSettings={enabled:true,maxRecords:1000,capacityBytes:67108864,bodyLimitBytes:4194304};
@@ -58,6 +58,9 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     await frame.locator('#journalBody').filter({ hasText: 'raw-secret' }).waitFor();
     assert.equal(await frame.locator('#journalBody').textContent(), raw);
     assert.equal(await frame.locator('#journalBody img').count(), 0);
+    assert.match(await frame.locator('#journalOverview').innerText(), /WebSocket/);
+    assert.match(await frame.locator('#journalOverview').innerText(), /101/);
+    assert.match(await frame.locator('#journalPart option:checked').innerText(), /WebSocket 原始消息/);
     await page.screenshot({ path: path.resolve(__dirname, '../../artifacts/journal-redesign-desktop.png'), fullPage: true });
     await frame.locator('#journalCopy').click();
     await frame.locator('#journalStatus').filter({ hasText: '已复制原文' }).waitFor();

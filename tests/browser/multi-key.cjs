@@ -20,7 +20,7 @@ const html = require('./page-source.cjs')();
       const account = {
         id: 'channel', label: '多 Key 渠道', baseUrl: 'https://example.test/v1',
         enabled: true, weight: 100, models: ['model-a', 'model-b'],
-        endpoints: ['/v1/messages'], keyRevision: 7,
+        endpoints: ['/v1/responses'], keyRevision: 7,
         keySelectionMode: 'roundRobin', enabledKeyCount: 2, totalKeyCount: 3,
         keys: [
           { id: 'a', name: 'Alpha', masked: '••••••0001', enabled: true },
@@ -33,6 +33,7 @@ const html = require('./page-source.cjs')();
         if (route === 'accounts') return { accounts: [account] };
         if (route === 'accounts/save') {
           if (window.conflict) throw Error('Key 配置已变化，请重新加载后编辑');
+          account.responsesTransport = body.responsesTransport;
           return { account };
         }
         if (route === 'models/discover' || route === 'models/refresh') return { models: ['model-a'] };
@@ -48,7 +49,7 @@ const html = require('./page-source.cjs')();
           if (cancelled) return { state: 4, progress: { rows: [], total: targets.length, completed: 0 } };
           if (job !== 2 && polls > 1) return { state: 2, result: { rows: targets.map(row => ({
             ...row, keyName: row.keyId === 'a' ? 'Alpha' : 'Beta', success: true,
-            originalStatus: 200, mappedStatus: 200, durationMs: 24, retries: 0
+            originalStatus: 200, mappedStatus: 200, durationMs: 24, retries: 0, transport: account.responsesTransport
           })) } };
           return { state: 1, progress: { rows: [], completed: 0, total: targets.length, running: targets[0].model } };
         }
@@ -61,6 +62,9 @@ const html = require('./page-source.cjs')();
     fs.writeFileSync(preview, html);
     await page.goto('file:///' + preview.replaceAll('\\', '/'));
     await page.getByRole('button', { name: '编辑', exact: true }).click();
+    assert.equal(await page.locator('#responsesTransport').inputValue(), 'http');
+    await page.locator('#responsesTransport').selectOption('websocket');
+    await page.screenshot({ path: path.join(output, 'websocket-settings-desktop.png'), fullPage: true });
     await page.locator('#tab-keys').click();
     assert.equal(await page.locator('#keyRows .card').count(), 3);
     assert.deepEqual(await page.locator('#keyRows input[type=password]').evaluateAll(xs => xs.map(x => x.value)), ['', '', '']);
@@ -90,6 +94,7 @@ const html = require('./page-source.cjs')();
     await page.waitForFunction(() => !document.querySelector('#editor').open);
     const saved = await page.evaluate(() => window.calls.filter(x => x.route === 'accounts/save').at(-1).body);
     assert.equal(saved.keyRevision, 7);
+    assert.equal(saved.responsesTransport, 'websocket');
     assert.equal(saved.keySelectionMode, 'priority');
     assert.equal(saved.keys[0].id, 'b');
     assert.equal(saved.keys[0].secret, '');
@@ -110,10 +115,35 @@ const html = require('./page-source.cjs')();
     assert.match(await firstRow.innerText(), /Alpha/);
     assert.match(await firstRow.innerText(), /Beta/);
     assert.equal(await firstRow.locator('td').nth(3).locator('div').count(), 2);
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 660 }]) {
+      await page.setViewportSize(viewport);
+      const layout = await page.locator('#testDialog').evaluate(dialog => {
+        const bounds = dialog.getBoundingClientRect();
+        const lastRow = dialog.querySelector('#testRows tr:last-child').getBoundingClientRect();
+        const footer = dialog.querySelector('.test-pagination').getBoundingClientRect();
+        return {
+          compactWidth: bounds.width <= 960,
+          backdropVisible: bounds.top >= 23 && bounds.bottom <= innerHeight - 23,
+          resultsVisible: lastRow.bottom <= bounds.bottom,
+          footerVisible: footer.bottom <= bounds.bottom,
+          noHorizontalOverflow: dialog.scrollWidth <= dialog.clientWidth
+        };
+      });
+      assert.deepEqual(layout, {
+        compactWidth: true, backdropVisible: true, resultsVisible: true,
+        footerVisible: true, noHorizontalOverflow: true
+      }, JSON.stringify(viewport));
+    }
+    await page.screenshot({ path: path.join(output, 'connection-compact-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.locator('#testDialog').evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth), true);
+    await page.screenshot({ path: path.join(output, 'connection-compact-mobile.png'), fullPage: true });
+    await page.setViewportSize({ width: 1200, height: 900 });
     await page.screenshot({ path: path.join(output, 'multi-key-tests-desktop.png'), fullPage: true });
     await firstRow.getByRole('button', { name: '详情', exact: true }).click();
     assert.equal(await page.locator('#testDetailDialog').isVisible(), true);
     assert.match(await page.locator('#testDetailOverview').innerText(), /model-a/);
+    assert.match(await page.locator('#testDetailOverview').innerText(), /WebSocket/);
     await page.screenshot({ path: path.join(output, 'connection-detail-desktop.png'), fullPage: true });
     await page.locator('#testDetailTitle').click();
     assert.equal(await page.locator('#testDetailDialog').isVisible(), true);
@@ -133,8 +163,10 @@ const html = require('./page-source.cjs')();
     assert.equal(tests[1].keyId, 'b');
     await page.locator('#testClose').click();
     await page.getByRole('button', { name: '编辑', exact: true }).click();
-    await page.locator('#tab-keys').click();
+    assert.equal(await page.locator('#responsesTransport').inputValue(), 'websocket');
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: path.join(output, 'websocket-settings-mobile.png'), fullPage: true });
+    await page.locator('#tab-keys').click();
     await page.screenshot({ path: path.join(output, 'multi-key-editor-mobile.png'), fullPage: true });
     assert.deepEqual(errors, []);
     console.log('Multi-Key browser mock passed: edit, batch, duplicate, order, enable/delete, revision conflict, discovery/refresh, all/specified tests, cancellation, desktop/mobile.');

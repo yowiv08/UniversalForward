@@ -49,9 +49,25 @@ Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配�
 - 自定义重试状态码和响应状态码映射。
 - 状态码映射提供可视化和 JSON 两种编辑方式，默认可视化。
 
+## Responses 上游 WebSocket
+
+在渠道基础设置中，将「Responses 上游连接」选为 WebSocket 并保存，即可通过 WS/WSS 连接上游 `/v1/responses`。Base URL 继续填写 HTTP(S) 地址，默认连接方式为 HTTP / SSE。
+
+- 沿用渠道 Key、请求头、直连或代理池设置；连接测试也使用所选方式。
+- 客户端继续使用 HTTP/SSE，非流式请求汇总为 Responses JSON。Messages 和模型获取仍走 HTTP。
+- 每次请求独立连接，发送 `response.create`。不支持后台请求或跨请求连接缓存；`previous_response_id` 需要上游持久化支持。
+- 连接失败不回退 HTTP；首次有效输出前按渠道规则重试，输出后断流不重放请求。
+- 日志记录真实握手状态、响应头和原始 WS 消息；普通 HTTP 200 不算 WS 连接成功。
+
+协议参考：[OpenAI WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)。
+
 ## 请求头配置
 
-通过 JSON 配置固定请求头、变量替换和按名称匹配的请求头透传。
+默认透传客户端业务请求头，包括 User-Agent、语言、会话标识及自定义字段。显式覆盖同名字段优先；删除覆盖项并保存后恢复客户端原值，HTTP 与 WebSocket 一致。
+
+上游认证使用渠道 Key；Host、Content-Length、连接专用头和失效的压缩/摘要头由转发链路处理，本地认证、Cookie、CSRF 不透传。连接测试和模型发现不借用管理页面的请求头。旧宿主只能透传它实际提供给插件的字段。
+
+通过 JSON 配置固定值和变量替换；兼容 `*`、正则及旧 `PassThroughHeaders`，默认透传无需配置这些规则。旧 `ReplaceHeaders` 仍参与显式覆盖。
 支持所有接口共用配置，或按实际上游 Responses、Messages 接口独立配置；接口可继承通用配置，模板不限接口。模型发现使用通用配置。
 
 | 配置 | 功能 |

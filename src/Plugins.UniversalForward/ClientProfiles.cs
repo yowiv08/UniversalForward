@@ -62,12 +62,14 @@ internal static class ClientProfiles
         };
     }
 
-    internal static JsonObject CompleteHeaders(JsonObject config)
+    internal static JsonObject CompleteHeaders(JsonObject config, IReadOnlyDictionary<string, string>? incoming = null)
     {
         var result = (JsonObject)config.DeepClone();
         void Add(string name, string value)
         {
-            if (!result.Any(p => p.Key.Equals(name, StringComparison.OrdinalIgnoreCase))) result[name] = value;
+            if (!result.Any(p => p.Key.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                result[name] = incoming?.Keys.Any(key => key.Equals(name, StringComparison.OrdinalIgnoreCase)) == true
+                    ? "{client_header:" + name + "}" : value;
         }
         if (Profile(config) == "codex")
         {

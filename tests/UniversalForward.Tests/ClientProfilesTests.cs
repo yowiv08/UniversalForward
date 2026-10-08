@@ -76,6 +76,40 @@ public sealed class ClientProfilesTests
     }
 
     [TestMethod]
+    public void DeletedCodexOverridesUseClientIdentityBeforeGeneratedDefaults()
+    {
+        var client = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["session-id"] = "client-session", ["thread-id"] = "client-thread",
+            ["X-Client-Request-Id"] = "client-request", ["X-Codex-Window-Id"] = "client-window",
+            ["X-Codex-Turn-Metadata"] = "{\"custom\":\"client-metadata\"}"
+        };
+        var config = new JsonObject { ["Originator"] = "codex_exec", ["Session-Id"] = "configured-session" };
+        var bodyIdentity = ClientProfiles.Variables(JsonNode.Parse("""{"client_metadata":{"session_id":"body-session"}}"""));
+        var configured = HeaderOverrides.Resolve(config, client, "key", variables: bodyIdentity);
+        Assert.AreEqual("configured-session", configured["Session-Id"]);
+        config.Remove("Session-Id");
+        var restored = HeaderOverrides.Resolve(config, client, "key", variables: bodyIdentity);
+        foreach (var (name, value) in client) Assert.AreEqual(value, restored[name], name);
+        var test = HeaderOverrides.Resolve(config, client, "key", channelTest: true);
+        Assert.AreNotEqual("client-session", test["Session-Id"]);
+        Assert.AreNotEqual("client-request", test["X-Client-Request-Id"]);
+    }
+
+    [TestMethod]
+    public void DeletedClaudeOverridesUseClientValuesBeforeGeneratedDefaults()
+    {
+        var config = new JsonObject { ["x-app"] = "cli", ["anthropic-beta"] = "claude-code-20250219" };
+        var client = new Dictionary<string, string>
+        {
+            ["x-claude-code-session-id"] = "original-session",
+            ["anthropic-dangerous-direct-browser-access"] = "false"
+        };
+        var resolved = HeaderOverrides.Resolve(config, client, "key");
+        foreach (var (name, value) in client) Assert.AreEqual(value, resolved[name], name);
+    }
+
+    [TestMethod]
     public void CodexCompletionPreservesConversationToolsAndExplicitOptions()
     {
         var original = JsonNode.Parse("""

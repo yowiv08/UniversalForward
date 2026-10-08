@@ -81,12 +81,12 @@ internal sealed class RequestLogCapture
     }
     private static Dictionary<string, string[]> RequestHeaders(HttpRequestMessage request)
     {
-        var headers = request.Headers.ToDictionary(p => p.Key, p => p.Value.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var headers = request.Headers.NonValidated.ToDictionary(p => p.Key, p => p.Value.ToArray(), StringComparer.OrdinalIgnoreCase);
         if (request.Content is not null)
-            foreach (var p in request.Content.Headers) headers[p.Key] = p.Value.ToArray();
+            foreach (var p in request.Content.Headers.NonValidated) headers[p.Key] = p.Value.ToArray();
         return headers;
     }
-    public int Sending(HttpRequestMessage request, ReadOnlySpan<byte> body)
+    public int Sending(HttpRequestMessage request, ReadOnlySpan<byte> body, string transport = "http")
     {
         lock (_gate)
         {
@@ -95,33 +95,51 @@ internal sealed class RequestLogCapture
             var info = new JsonObject
             {
                 ["number"] = number, ["method"] = request.Method.Method, ["url"] = request.RequestUri?.ToString(),
+                ["transport"] = transport,
                 ["startedMs"] = _watch.ElapsedMilliseconds, ["sentReasoning"] = Reasoning(text)
             };
+            if (transport == "websocket") info["url"] = UpstreamWebSocket.Address(request.RequestUri!).ToString();
             _attempts.Add(info);
             _info["retries"] = number - 1;
             _info["sentReasoning"] = info["sentReasoning"]?.DeepClone();
             _info["reasoningChanged"] = !JsonNode.DeepEquals(_info["receivedReasoning"], _info["sentReasoning"]);
-            AddText($"attempt-{number}-request-headers", JsonSerializer.Serialize(RequestHeaders(request), RequestLogStore.Json));
+            if (transport != "websocket")
+                AddText($"attempt-{number}-request-headers", JsonSerializer.Serialize(RequestHeaders(request), RequestLogStore.Json));
             Observe($"attempt-{number}-request", body); EndPart($"attempt-{number}-request", true);
             SaveAttempt(number); Save();
             return number;
         }
     }
+    public void WebSocketHandshake(int number, HttpRequestMessage request)
+    {
+        AddText($"attempt-{number}-request-headers", JsonSerializer.Serialize(RequestHeaders(request), RequestLogStore.Json));
+    }
+    public void WebSocketHandshakeResponse(int number, HttpResponseMessage response)
+    {
+        lock (_gate) RecordResponse(number, response, websocket: true);
+    }
     public void Received(int number, HttpResponseMessage response)
     {
         lock (_gate)
         {
-            var info = _attempts[number - 1];
-            info["status"] = (int)response.StatusCode;
-            info["headersMs"] = _watch.ElapsedMilliseconds;
-            info["finalUrl"] = response.RequestMessage?.RequestUri?.ToString() ?? info["url"]?.ToString();
-            _info["upstreamStatus"] = (int)response.StatusCode;
-            var headers = response.Headers.ToDictionary(p => p.Key, p => p.Value.ToArray(), StringComparer.OrdinalIgnoreCase);
-            foreach (var p in response.Content.Headers) headers[p.Key] = p.Value.ToArray();
-            AddText($"attempt-{number}-response-headers", JsonSerializer.Serialize(headers, RequestLogStore.Json));
+            if (_attempts[number - 1]["transport"]?.ToString() != "websocket")
+                RecordResponse(number, response);
             response.Content = new CapturedContent(response.Content, this, number);
-            SaveAttempt(number); Save();
         }
+    }
+    private void RecordResponse(int number, HttpResponseMessage response, bool websocket = false)
+    {
+        var info = _attempts[number - 1];
+        info["status"] = (int)response.StatusCode;
+        info["headersMs"] = _watch.ElapsedMilliseconds;
+        var uri = response.RequestMessage?.RequestUri;
+        info["finalUrl"] = uri is null ? info["url"]?.ToString()
+            : websocket ? UpstreamWebSocket.Address(uri).ToString() : uri.ToString();
+        _info["upstreamStatus"] = (int)response.StatusCode;
+        var headers = response.Headers.ToDictionary(p => p.Key, p => p.Value.ToArray(), StringComparer.OrdinalIgnoreCase);
+        foreach (var p in response.Content.Headers) headers[p.Key] = p.Value.ToArray();
+        AddText($"attempt-{number}-response-headers", JsonSerializer.Serialize(headers, RequestLogStore.Json));
+        SaveAttempt(number); Save();
     }
     public void SendError(int number, Exception error)
     {

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -243,5 +244,67 @@ public sealed class RequestJournalTests
         var id = filtered.GetProperty("rows")[0].GetProperty("id").GetString()!;
         Assert.AreEqual("private-7", await ReadBody(store, id, "private"));
         Assert.IsFalse(filtered.ToString().Contains("private-7", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task PagesIncludeEveryMatchingRecordExactlyOnce()
+    {
+        using var store = new RequestLogStore(4096);
+        for (var i = 0; i < 51; i++) Begin(store, "trace-" + i).Complete("completed", 200);
+        await store.FlushAsync();
+
+        foreach (var size in new[] { 10, 25, 50, 100 })
+        {
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            for (var page = 1; page <= (51 + size - 1) / size; page++)
+            {
+                var result = Json(store.List(new Dictionary<string, string>
+                { ["page"] = page.ToString(CultureInfo.InvariantCulture), ["pageSize"] = size.ToString(CultureInfo.InvariantCulture) }));
+                Assert.AreEqual(51L, result.GetProperty("total").GetInt64());
+                Assert.AreEqual(page, result.GetProperty("page").GetInt32());
+                Assert.AreEqual(size, result.GetProperty("pageSize").GetInt32());
+                var rows = result.GetProperty("rows");
+                Assert.AreEqual(Math.Min(size, 51 - (page - 1) * size), rows.GetArrayLength());
+                foreach (var row in rows.EnumerateArray())
+                    Assert.IsTrue(ids.Add(row.GetProperty("id").GetString()!), "A record appeared on more than one page.");
+            }
+            Assert.AreEqual(51, ids.Count);
+        }
+    }
+
+    [TestMethod]
+    public async Task PagesRemainValidAfterDeletionFilteringAndRetention()
+    {
+        using var store = new RequestLogStore();
+        for (var i = 0; i < 11; i++) Begin(store, "trace-" + i).Complete("completed", 200);
+        await store.FlushAsync();
+        var query = new Dictionary<string, string> { ["page"] = "2", ["pageSize"] = "10" };
+        var lastPage = Json(store.List(query));
+        Assert.AreEqual(1, lastPage.GetProperty("rows").GetArrayLength());
+        await store.DeleteAsync(lastPage.GetProperty("rows")[0].GetProperty("id").GetString(), CancellationToken.None);
+
+        var afterDelete = Json(store.List(query));
+        Assert.AreEqual(1, afterDelete.GetProperty("page").GetInt32());
+        Assert.AreEqual(10L, afterDelete.GetProperty("total").GetInt64());
+        Assert.AreEqual(10, afterDelete.GetProperty("rows").GetArrayLength());
+
+        query["trace"] = afterDelete.GetProperty("rows")[0].GetProperty("trace").GetString()!;
+        var filtered = Json(store.List(query));
+        Assert.AreEqual(1, filtered.GetProperty("page").GetInt32());
+        Assert.AreEqual(1L, filtered.GetProperty("total").GetInt64());
+        Assert.AreEqual(1, filtered.GetProperty("rows").GetArrayLength());
+
+        query["trace"] = "no-matching-trace";
+        var empty = Json(store.List(query));
+        Assert.AreEqual(1, empty.GetProperty("page").GetInt32());
+        Assert.AreEqual(0L, empty.GetProperty("total").GetInt64());
+        Assert.AreEqual(0, empty.GetProperty("rows").GetArrayLength());
+
+        query.Remove("trace");
+        await store.ConfigureAsync(new RequestLogSettings(MaxRecords: 3), CancellationToken.None);
+        var afterRetention = Json(store.List(query));
+        Assert.AreEqual(1, afterRetention.GetProperty("page").GetInt32());
+        Assert.AreEqual(3L, afterRetention.GetProperty("total").GetInt64());
+        Assert.AreEqual(3, afterRetention.GetProperty("rows").GetArrayLength());
     }
 }

@@ -87,19 +87,24 @@ public sealed partial class UniversalForwardTerminal
         try
         {
             var isTest = context.HttpClient is ConnectionTestClient;
-            if (settings.NetworkMode == "proxyPool" && !isTest)
+            var extra = ReadExtraParams(settings);
+            var clientHeaders = isTest ? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+                : ForwardHeaders.ReadClientHeaders(context.Request, extra);
+            var clientHeaderText = clientHeaders.ToDictionary(p => p.Key, p => string.Join(", ", p.Value), StringComparer.OrdinalIgnoreCase);
+            var websocket = settings.ResponsesTransport == "websocket" && upstreamEndpoint == "/v1/responses";
+            if ((settings.NetworkMode == "proxyPool" || websocket) && !isTest)
                 networkClient = await CreateNetworkClientAsync(settings.NetworkMode, false, total.Token);
             await TryLogAsync("request.network.selected", $"出站方式: {settings.NetworkMode}",
                 traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
                 details: new { networkMode = settings.NetworkMode });
             var headerConfig = HeaderOverrides.Select(settings.HeaderOverrideMode, settings.HeaderOverride,
                 settings.EndpointHeaderOverrides, upstreamEndpoint);
-            var resolvedHeaders = HeaderOverrides.Resolve(headerConfig, context.Request.RequestHeaders,
+            var resolvedHeaders = HeaderOverrides.Resolve(headerConfig, clientHeaderText,
                 settings.ApiKey, isTest, ClientProfiles.Variables(
                     isTest ? null : JsonNode.Parse(context.Request.OriginalBody!.Value.GetRawText()),
-                    isTest ? null : context.Request.RequestHeaders));
+                    isTest ? null : clientHeaderText));
             var profile = ClientProfiles.Profile(headerConfig);
-            var nativeStream = profile == "codex" && upstreamEndpoint == "/v1/responses"
+            var nativeStream = websocket || profile == "codex" && upstreamEndpoint == "/v1/responses"
                 || profile == "claude" && upstreamEndpoint == "/v1/messages";
             if (isTest && (profile == "codex" && upstreamEndpoint == "/v1/responses"
                 || profile == "claude" && upstreamEndpoint == "/v1/messages"))
@@ -125,6 +130,7 @@ public sealed partial class UniversalForwardTerminal
                 body["stream"] = true;
                 payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
             }
+            if (websocket) payload = UpstreamWebSocket.CreatePayload(payload);
             var targetEndpoint = profile == "claude" && upstreamEndpoint == "/v1/messages"
                 ? upstreamEndpoint + "?beta=true" : upstreamEndpoint;
             for (var attempt = 0; ;)
@@ -133,14 +139,19 @@ public sealed partial class UniversalForwardTerminal
                 using var request = new HttpRequestMessage(HttpMethod.Post, BuildUri(settings.BaseUrl, targetEndpoint))
                 { Content = new ByteArrayContent(payload) };
                 request.Content.Headers.ContentType = new("application/json");
-                ApplyRequestHeaders(request, context.Request, settings, ReadExtraParams(settings), headers, upstreamEndpoint);
+                ApplyRequestHeaders(request, clientHeaders, settings, extra, headers, upstreamEndpoint);
                 ApplyReplaceHeaders(request, resolvedHeaders);
-                var logAttempt = capture?.Sending(request, payload) ?? 0;
+                if (websocket) UpstreamWebSocket.PrepareHandshake(request);
+                var logAttempt = capture?.Sending(request, payload, websocket ? "websocket" : "http") ?? 0;
                 using var headerBudget = CancellationTokenSource.CreateLinkedTokenSource(total.Token);
                 headerBudget.CancelAfter(TimeSpan.FromSeconds(policy.HeaderTimeoutSeconds));
                 try
                 {
-                    response = networkClient is not null
+                    response = websocket
+                        ? context.HttpClient is ConnectionTestClient wsTest
+                            ? await wsTest.SendWebSocketAsync(request, payload, capture, logAttempt, headerBudget.Token)
+                            : await UpstreamWebSocket.SendAsync(networkClient!, request, payload, capture, logAttempt, headerBudget.Token)
+                        : networkClient is not null
                         ? await networkClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headerBudget.Token)
                         : await context.HttpClient.SendAsync(request, false,
                             HttpCompletionOption.ResponseHeadersRead, headerBudget.Token);
@@ -258,6 +269,7 @@ public sealed partial class UniversalForwardTerminal
                     durationMs: (int)watch.ElapsedMilliseconds, details: new { keyId = selectedKey.Id, keyName = selectedKey.Name, strategy = settings.KeySelectionMode, originalCode, mappedCode, retries = attempt,
                         responseRetries = anomalyRetries, streamStarted = streamPrefix != null,
                         incomingEndpoint = context.Request.Endpoint, upstreamEndpoint, networkMode = settings.NetworkMode,
+                        transport = websocket ? "websocket" : "http",
                         downstreamStream = context.Request.Stream, upstreamStream = nativeStream || context.Request.Stream,
                         upstreamRequestId = ResponseHeader(response, "x-request-id"), upstreamTraceId = ResponseHeader(response, "x-trace-id"),
                         gatewayRay = ResponseHeader(response, "cf-ray") });
@@ -731,13 +743,13 @@ public sealed partial class UniversalForwardTerminal
         => ForwardHeaders.SafeName(name);
     private static void ApplyRequestHeaders(
         HttpRequestMessage request,
-        AdapterRequest source,
+        IReadOnlyDictionary<string, string[]> clientHeaders,
         ForwardApiSettings settings,
         JsonObject extra,
         IReadOnlyDictionary<string, string> replaceHeaders,
         string upstreamEndpoint)
     {
-        ForwardHeaders.ApplySelected(request, source.RequestHeaders, extra);
+        ForwardHeaders.ApplyClientHeaders(request, clientHeaders);
 
         var isMessages = upstreamEndpoint.Equals("/v1/messages", StringComparison.OrdinalIgnoreCase);
         var keyHeader = ReadString(extra, "apiKeyHeader")

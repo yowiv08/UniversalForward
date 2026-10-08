@@ -1,13 +1,20 @@
 using System.Text.Json.Nodes;
+using Router.Contracts.Domain;
 
 namespace Plugins.UniversalForward;
 /// <summary>请求头校验与透传配置。</summary>
 internal static class ForwardHeaders
 {
+    private static readonly System.Reflection.PropertyInfo? FullHeaders = typeof(AdapterRequest).GetProperty("DownstreamRequestHeaders");
     private static readonly HashSet<string> Forbidden = new(StringComparer.OrdinalIgnoreCase)
     {
         "Host", "Connection", "Keep-Alive", "TE", "Trailer", "Transfer-Encoding",
         "Upgrade", "Content-Length", "Cookie", "Set-Cookie", "Accept-Encoding"
+    };
+    private static readonly HashSet<string> NotForwarded = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Authorization", "X-Api-Key", "X-Goog-Api-Key", "X-Csrf-Token",
+        "Content-Encoding", "Content-MD5", "Content-Digest", "Repr-Digest", "Digest"
     };
 
     internal static bool SafeName(string name) => !string.IsNullOrWhiteSpace(name)
@@ -42,28 +49,37 @@ internal static class ForwardHeaders
         }
     }
 
-    internal static void ApplySelected(HttpRequestMessage request,
-        IReadOnlyDictionary<string, string> source, JsonObject extra)
+    internal static Dictionary<string, string[]> ReadClientHeaders(AdapterRequest source, JsonObject extra)
     {
-        if (extra["PassThroughHeaders"] is not JsonArray names) return;
-        var excluded = source.Where(p => p.Key.Equals("Connection", StringComparison.OrdinalIgnoreCase))
-            .SelectMany(p => p.Value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        var headers = source.RequestHeaders.ToDictionary(p => p.Key, p => new[] { p.Value }, StringComparer.OrdinalIgnoreCase);
+        // Older hosts only expose RequestHeaders; newer hosts also retain the complete received values.
+        // The full snapshot includes local credentials, which must be filtered before forwarding or template expansion.
+        if (FullHeaders?.GetValue(source) is IReadOnlyDictionary<string, string?[]> full)
+            foreach (var (name, values) in full)
+                headers[name] = values.Where(value => value is not null).Select(value => value!).ToArray();
+        var excluded = headers.Where(p => p.Key.Equals("Connection", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(p => p.Value).SelectMany(value => value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var item in names)
+        var keyHeader = extra["apiKeyHeader"]?.GetValue<string>();
+        foreach (var name in headers.Keys.ToArray())
+            if (!SafeName(name) || NotForwarded.Contains(name) || excluded.Contains(name)
+                || name.Equals(keyHeader, StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("Sec-WebSocket-", StringComparison.OrdinalIgnoreCase))
+                headers.Remove(name);
+        return headers;
+    }
+
+    internal static void ApplyClientHeaders(HttpRequestMessage request, IReadOnlyDictionary<string, string[]> headers)
+    {
+        foreach (var (name, values) in headers)
         {
-            var name = item!.GetValue<string>();
-            if (excluded.Contains(name)) continue;
-            var matching = source.Where(p => p.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (matching.Length > 1) throw new FormatException($"客户端请求头 {name} 重复。");
-            if (matching.Length == 0) continue;
-            var value = matching[0].Value;
-            if (value.Length > 8192 || value.Any(char.IsControl))
+            if (values.Sum(value => value.Length) > 8192 || values.Any(value => value.Any(char.IsControl)))
                 throw new FormatException($"客户端请求头 {name} 包含非法值。");
-            request.Headers.Remove(name);
-            if (!request.Headers.TryAddWithoutValidation(name, value) && request.Content is { } content)
+            if (request.Headers.NonValidated.Contains(name)) request.Headers.Remove(name);
+            if (!request.Headers.TryAddWithoutValidation(name, values) && request.Content is { } content)
             {
                 content.Headers.Remove(name);
-                content.Headers.TryAddWithoutValidation(name, value);
+                content.Headers.TryAddWithoutValidation(name, values);
             }
         }
     }

@@ -206,7 +206,7 @@ public sealed partial class UniversalForwardTerminal
                 var status = result.Attempt.StatusCode ?? result.Response.StatusCode;
                 rows.Add(new
                 {
-                    model, keyId, keyName, endpoint, networkMode, success = status is >= 200 and < 300 && valid,
+                    model, keyId, keyName, endpoint, networkMode, transport = client.Transport, success = status is >= 200 and < 300 && valid,
                     originalStatus = status, mappedStatus = result.Response.StatusCode,
                     durationMs = watch.ElapsedMilliseconds, firstEventMs, retries = Math.Max(0, sends - 1), error,
                     response = client.RawBody, responseTruncated = client.Truncated
@@ -215,7 +215,7 @@ public sealed partial class UniversalForwardTerminal
             catch (OperationCanceledException) when (job.CancellationToken.IsCancellationRequested) { throw; }
             catch (Exception error)
             {
-                rows.Add(new { model, keyId, keyName, networkMode, success = false, durationMs = watch.ElapsedMilliseconds,
+                rows.Add(new { model, keyId, keyName, networkMode, transport = captureClient?.Transport, success = false, durationMs = watch.ElapsedMilliseconds,
                     firstEventMs, retries = Math.Max(0, sends - 1),
                     mappedStatus = error is ProxyPoolUnavailableException ? 503 : (int?)null,
                     code = error is ProxyPoolUnavailableException ? "proxy_pool_unavailable" : null,
@@ -320,18 +320,30 @@ public sealed partial class UniversalForwardTerminal
         private readonly MemoryStream _capture = new();
         public string RawBody => Encoding.UTF8.GetString(_capture.ToArray());
         public bool Truncated { get; private set; }
+        public string Transport { get; private set; } = "http";
         public void Dispose() => _capture.Dispose();
         public string? KeyId { get; } = keyId;
         public ChannelKey? SelectedKey { get; set; }
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption option, CancellationToken ct)
             => SendAsync(request, false, option, ct);
+        public async Task<HttpResponseMessage> SendWebSocketAsync(HttpRequestMessage request, byte[] payload,
+            RequestLogCapture? capture, int attempt, CancellationToken ct)
+        {
+            Transport = "websocket";
+            sent(); _capture.SetLength(0); Truncated = false;
+            return await CaptureAsync(await UpstreamWebSocket.SendAsync(client, request, payload, capture, attempt, ct), ct);
+        }
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, bool useProxyPool, HttpCompletionOption option, CancellationToken ct)
         {
             if (useProxyPool) throw new InvalidOperationException("渠道测试已绑定出站客户端");
+            Transport = "http";
             sent();
             _capture.SetLength(0);
             Truncated = false;
-            var response = await client.SendAsync(request, option, ct);
+            return await CaptureAsync(await client.SendAsync(request, option, ct), ct);
+        }
+        private async Task<HttpResponseMessage> CaptureAsync(HttpResponseMessage response, CancellationToken ct)
+        {
             var original = response.Content;
             try
             {

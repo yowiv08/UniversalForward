@@ -171,6 +171,7 @@ internal sealed class RequestLogStore : IDisposable
             var size = query.TryGetValue("pageSize", out var s) && int.TryParse(s, out n) ? Math.Clamp(n, 1, 100) : 25;
             var ordered = filtered.OrderByDescending(e => e.Info["started"]!.GetValue<long>())
                 .ThenBy(e => e.Info["id"]!.ToString(), StringComparer.Ordinal).ToArray();
+            page = Math.Min(page, Math.Max(1, (ordered.Length + size - 1) / size));
             return new { rows = ordered.Skip((page - 1) * size).Take(size).Select(e => e.Info.DeepClone()).ToArray(),
                 total = (long)ordered.Length, page, pageSize = size };
         }

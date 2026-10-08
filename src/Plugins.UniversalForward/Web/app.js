@@ -203,6 +203,7 @@
     $('formTitle').textContent = account ? '编辑渠道' : '添加渠道';
     for (const name of ['id', 'label', 'baseUrl']) form.elements[name].value = account?.[name] || '';
     form.elements.networkMode.value = account?.networkMode || 'direct';
+    form.elements.responsesTransport.value = account?.responsesTransport || 'http';
     form.elements.weight.value = account?.weight ?? 100;
     form.elements.enabled.checked = account?.enabled ?? true;
     form.elements.models.value = (account?.models || []).join('\n');
@@ -619,6 +620,7 @@
       const saved = await api('POST', 'accounts/save', {
         id: form.elements.id.value || null, label: form.elements.label.value.trim(), baseUrl: form.elements.baseUrl.value.trim(),
         networkMode: form.elements.networkMode.value,
+        responsesTransport: form.elements.responsesTransport.value,
         keys, deletedKeyIds, keyRevision, keySelectionMode: $('keySelectionMode').value, weight: Number(form.elements.weight.value),
         enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, requestPolicy, headerOverride,
         headerOverrideMode: headerPolicyMode, endpointHeaderOverrides: endpointHeaderDraft, extraParams
@@ -674,14 +676,15 @@
       const ops = el('td'), run = button('测试', () => startTests([model])); run.disabled = testBusy(); ops.append(run);
       if (results.length) ops.append(button('详情', () => {
         $('testDetails').textContent = results.map(r =>
-          `${r.keyName || r.keyId || '按策略'} · 出站方式：${r.networkMode === 'proxyPool' ? '代理池' : '直连'}\n${r.response || r.error || '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
+          `${r.keyName || r.keyId || '按策略'} · 出站方式：${r.networkMode === 'proxyPool' ? '代理池' : '直连'} · 上游连接：${r.transport === 'websocket' ? 'WebSocket' : 'HTTP'}\n${r.response || r.error || '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
         ).join('\n\n');
         const overview = $('testDetailOverview'); overview.replaceChildren();
         for (const r of results) {
           const section = el('section', '', 'detail-group'), values = el('dl', '', 'detail-values detail-card');
           section.append(el('h4', r.keyName || r.keyId || '按渠道策略'));
           for (const [label, value] of [['模型', model], ['状态', r.cancelled ? '已取消' : r.success ? '成功' : '失败'],
-            ['出站方式', r.networkMode === 'proxyPool' ? '代理池' : '直连'], ['状态码', `${r.originalStatus ?? '—'} → ${r.mappedStatus ?? '—'}`],
+            ['出站方式', r.networkMode === 'proxyPool' ? '代理池' : '直连'], ['上游连接', r.transport === 'websocket' ? 'WebSocket' : 'HTTP'],
+            ['状态码', `${r.originalStatus ?? '—'} → ${r.mappedStatus ?? '—'}`],
             ['响应时间', `${r.durationMs ?? '—'} ms`], ['重试次数', String(r.retries ?? 0)]]) values.append(el('dt', label), el('dd', value));
           section.append(values); overview.append(section);
         }
@@ -695,8 +698,9 @@
   }
   function openTests(account) {
     if (dialog.open && savedAccount?.id === account.id &&
-        form.elements.networkMode.value !== (account.networkMode || 'direct')) {
-      feedback('formError', '出站方式尚未保存，请先保存渠道再测试', true); return;
+        (form.elements.networkMode.value !== (account.networkMode || 'direct') ||
+         form.elements.responsesTransport.value !== (account.responsesTransport || 'http'))) {
+      feedback('formError', '连接设置尚未保存，请先保存渠道再测试', true); return;
     }
     if (testBusy() && testState.account?.id !== account.id) { message('请先取消或等待当前渠道测试完成', true); return; }
     $('testTitle').textContent = '测试渠道连接：' + account.label;

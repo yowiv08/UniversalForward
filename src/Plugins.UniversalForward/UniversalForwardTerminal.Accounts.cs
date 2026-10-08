@@ -75,6 +75,9 @@ public sealed partial class UniversalForwardTerminal
         if (!TryReadExtraParams(input.ExtraParams, previous.ExtraParams, out var extraParams, out var extraError))
             return context.BadRequest(extraError);
 
+        var responsesTransport = input.ResponsesTransport ?? previous.ResponsesTransport;
+        try { UpstreamWebSocket.ValidateTransport(responsesTransport); }
+        catch (FormatException error) { return context.BadRequest(error.Message); }
         var policy = input.RequestPolicy ?? previous.RequestPolicy;
         var networkMode = input.NetworkMode ?? previous.NetworkMode;
         try { ValidateNetworkMode(networkMode); }
@@ -89,6 +92,7 @@ public sealed partial class UniversalForwardTerminal
         {
             HeaderOverride = headerOverride,
             NetworkMode = networkMode,
+            ResponsesTransport = responsesTransport,
             HeaderOverrideMode = headerOverrideMode,
             EndpointHeaderOverrides = endpointHeaderOverrides,
             ModelProtocols = input.ModelProtocols ?? previous.ModelProtocols,
@@ -387,6 +391,7 @@ public sealed partial class UniversalForwardTerminal
             headerOverride = settings.HeaderOverride,
             headerOverrideMode = settings.HeaderOverrideMode,
             networkMode = settings.NetworkMode,
+            responsesTransport = settings.ResponsesTransport,
             endpointHeaderOverrides = settings.EndpointHeaderOverrides,
             modelProtocols = settings.ModelProtocols,
             models = ReadModels(account),
@@ -527,6 +532,7 @@ public sealed partial class UniversalForwardTerminal
     private sealed class AccountSaveInput
     {
         public AccountSaveInput() { }
+        public string? ResponsesTransport { get; init; }
         public string? NetworkMode { get; init; }
         public List<ChannelKey>? Keys { get; init; }
         public string[]? DeletedKeyIds { get; init; }

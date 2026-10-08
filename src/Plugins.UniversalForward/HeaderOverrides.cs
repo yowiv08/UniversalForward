@@ -70,7 +70,7 @@ internal static class HeaderOverrides
         IReadOnlyDictionary<string, string> client, string apiKey, bool channelTest = false,
         IReadOnlyDictionary<string, string>? variables = null)
     {
-        config = ClientProfiles.CompleteHeaders(config);
+        config = ClientProfiles.CompleteHeaders(config, channelTest ? null : client);
         variables ??= ClientProfiles.Variables(incoming: channelTest ? null : client);
         Validate(config);
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

@@ -215,6 +215,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
             if (settings.RequestPolicy is null || settings.Endpoints is null) return false;
             settings.RequestPolicy.Validate();
             ValidateNetworkMode(settings.NetworkMode);
+            UpstreamWebSocket.ValidateTransport(settings.ResponsesTransport);
             ChannelKeys.Validate(ReadKeys(settings), settings.KeySelectionMode);
             HeaderOverrides.ValidateConfiguration(settings.HeaderOverrideMode, settings.HeaderOverride, settings.EndpointHeaderOverrides);
             if (settings.ModelProtocols is null) return false;
@@ -285,6 +286,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         public ForwardApiSettings() { }
         public string BaseUrl { get; set; } = string.Empty;
         public string NetworkMode { get; set; } = "direct";
+        public string ResponsesTransport { get; set; } = "http";
         public string ApiKey { get; set; } = string.Empty;
         public List<ChannelKey>? Keys { get; set; }
         public string KeySelectionMode { get; set; } = "roundRobin";

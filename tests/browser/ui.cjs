@@ -164,6 +164,18 @@ function hostMock() {
     assert.equal(headers['X-Codex-Window-Id'], '{window_id}');
     assert.equal(headers['X-Codex-Turn-Metadata'], '{codex_turn_metadata}');
     assert.equal('Host' in headers, false);
+    await frame.locator('#headerVisual').click();
+    for (const name of ['User-Agent', 'Session-Id']) {
+      const names = await frame.locator('#headerRows .header-row input:first-child').evaluateAll(inputs => inputs.map(input => input.value));
+      const index = names.indexOf(name);
+      assert.notEqual(index, -1);
+      await frame.locator('#headerRows .header-row').nth(index).getByRole('button').click();
+    }
+    await frame.locator('#headerJson').click();
+    const remainingHeaders = JSON.parse(await frame.locator('#headerOverride').inputValue());
+    assert.equal('User-Agent' in remainingHeaders, false);
+    assert.equal('Session-Id' in remainingHeaders, false);
+    assert.equal(remainingHeaders.Originator, 'codex_exec');
     await frame.locator('#templateClaude').click();
     await frame.locator('#confirmYes').click();
     headers = JSON.parse(await frame.locator('#headerOverride').inputValue());

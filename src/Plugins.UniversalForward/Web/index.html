@@ -32,7 +32,10 @@
         <div id="journalAdvanced" class="search-advanced" hidden><input name="channel" aria-label="日志渠道 ID" placeholder="渠道 ID"><input name="trace" aria-label="Trace ID" placeholder="Trace ID"><input name="status" type="number" aria-label="日志状态码" placeholder="状态码"><select name="endpoint" aria-label="日志接口"><option value="">全部接口</option><option>/v1/responses</option><option>/v1/messages</option><option>/v1/models</option></select><select name="network" aria-label="日志出站方式"><option value="">全部出站方式</option><option value="direct">直连</option><option value="proxyPool">代理池</option></select><select name="state" aria-label="日志执行状态"><option value="">全部执行状态</option><option value="running">执行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option></select><button id="journalClear" type="button">清空已结束日志</button></div>
       </form>
       <div class="journal-table"><table><thead><tr><th>时间／渠道</th><th>模型／接口</th><th>结果</th><th>思考参数</th><th>操作</th></tr></thead><tbody id="journalRows"></tbody></table></div>
-      <div class="actions"><button id="journalPrevious" type="button" class="secondary">上一页</button><span id="journalPage"></span><button id="journalNext" type="button" class="secondary">下一页</button></div>
+      <div class="actions journal-pagination" aria-label="日志分页">
+        <label for="journalPageSize">每页<select id="journalPageSize"><option value="10">10 条</option><option value="25">25 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label>
+        <button id="journalPrevious" type="button" class="secondary" disabled>上一页</button><span id="journalPage" role="status"></span><button id="journalNext" type="button" class="secondary" disabled>下一页</button>
+      </div>
 
       <details><summary>日志存储设置</summary>
         <div id="journalStorage" class="muted"></div>
@@ -72,6 +75,7 @@
             <div class="section-heading"><h3>连接到你的上游</h3><p>配置渠道名称、服务地址和访问入口</p></div>
             <div class="field"><label for="label">渠道名称</label><input id="label" name="label" placeholder="例如：主力推理渠道" required maxlength="120"></div>
             <div class="field"><label for="baseUrl">Base URL</label><input id="baseUrl" name="baseUrl" type="url" placeholder="https://api.example.com/v1" required></div>
+            <div class="field"><label for="responsesTransport">Responses 上游连接</label><select id="responsesTransport" name="responsesTransport"><option value="http">HTTP / SSE</option><option value="websocket">WebSocket</option></select><small>WebSocket 仅用于上游 Responses；Messages 和模型获取仍使用 HTTP。每次请求独立连接，失败不回退 HTTP。</small></div>
             <div class="field"><label for="networkMode">出站方式</label><select id="networkMode" name="networkMode"><option value="direct">直连</option><option value="proxyPool">代理池</option></select><small>代理池使用宿主全部启用订阅中的可用节点；无可用节点时报错，不回退直连。适用于转发、模型获取和连接测试。</small></div>
             <div class="field-row"><div class="field"><label for="weight">渠道权重</label><input id="weight" name="weight" type="number" min="0" max="1000" value="100" required><small>0–1000</small></div><div class="field"><label>渠道状态</label><label class="switch-card"><input name="enabled" type="checkbox" checked><span>启用渠道</span></label></div></div>
             <div class="field"><label>允许端点</label><div id="endpoints" class="endpoint-grid"></div></div>
@@ -102,7 +106,7 @@
             <div id="headerVisualPane"><div id="headerRows"></div><button id="headerAdd" type="button" class="add-row">＋ 添加请求头</button></div>
             <div id="headerJsonPane" hidden><label class="sr-only" for="headerOverride">请求头 JSON</label><textarea id="headerOverride" name="headerOverride" class="code-editor" rows="13" spellcheck="false">{}</textarea><button id="headerFormat" type="button" class="text-button">格式化</button></div>
             <div id="headerStatus" class="feedback" role="status" hidden></div>
-            <p class="field-hint"><code>{api_key}</code> 引用当前 Key，显式请求头优先。</p>
+            <p class="field-hint">默认透传客户端请求头；覆盖项优先，删除后恢复客户端原值。<code>{api_key}</code> 引用当前渠道 Key。</p>
           </section>
           <section id="panel-policy" role="tabpanel" aria-labelledby="tab-policy" hidden>
             <div class="section-heading"><h3>重试与映射</h3><p>设置请求时限、重试条件和返回状态</p></div>
@@ -135,9 +139,9 @@
   <dialog id="testDialog" class="test-dialog" aria-labelledby="testTitle">
     <header class="dialog-heading"><h2 id="testTitle">测试渠道连接</h2><button id="testClose" type="button" class="icon-button" aria-label="关闭测试">×</button></header>
     <div class="test-content">
-      <div class="test-setup"><div><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select><p>覆盖用于测试的端点。留空以自动检测。</p></div><div><label for="testStream">流式模式</label><label class="stream-control"><input id="testStream" type="checkbox" role="switch"><span id="testStreamLabel">已禁用</span></label><p>为测试请求启用流式模式。</p></div></div>
-      <div class="test-prompt"><div><label for="testContent">测试内容</label><textarea id="testContent" rows="3" maxlength="16000" placeholder="留空使用默认内容：Reply with OK."></textarea></div><div><label for="testMaxTokens">输出上限 · Token</label><input id="testMaxTokens" type="number" min="1" max="32768" value="32"><p class="muted">复杂问题可提高上限，可能增加费用。</p></div></div>
-      <div class="test-model-heading"><div><h3>渠道模型</h3><p>选择要运行批量测试的模型。</p></div><input id="testFilter" aria-label="筛选测试模型" placeholder="筛选模型…"></div>
+      <div class="test-setup"><div><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div><label for="testStream">流式模式</label><label class="stream-control"><input id="testStream" type="checkbox" role="switch"><span id="testStreamLabel">已禁用</span></label></div></div>
+      <div class="test-prompt"><div><label for="testContent">测试内容</label><textarea id="testContent" rows="2" maxlength="16000" placeholder="留空使用默认内容：Reply with OK."></textarea></div><div><label for="testMaxTokens">输出上限 · Token</label><input id="testMaxTokens" type="number" min="1" max="32768" value="32"><p class="muted">提高上限可能增加费用。</p></div></div>
+      <div class="test-model-heading"><h3>渠道模型</h3><input id="testFilter" aria-label="筛选测试模型" placeholder="筛选模型…"></div>
       <div class="test-toolbar"><div class="actions"><button id="testAll" class="primary">测试全部</button><button id="testSelected" class="secondary">测试勾选</button><button id="testCancel" class="secondary" disabled>取消测试</button><button id="testResume" class="secondary" hidden>重试查询</button></div><div class="test-key-choice"><label for="testKey">测试 Key</label><select id="testKey"></select></div></div>
       <div id="testProgress" class="feedback" role="status" hidden></div><div id="testError" class="feedback error" role="alert" hidden></div>
       <div class="table-scroll"><table><thead><tr><th><input id="testSelectAll" type="checkbox" aria-label="勾选可见模型"></th><th>模型</th><th>状态</th><th>结果</th><th>操作</th></tr></thead><tbody id="testRows"></tbody></table></div>
