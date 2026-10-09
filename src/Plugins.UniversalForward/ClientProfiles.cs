@@ -6,6 +6,7 @@ namespace Plugins.UniversalForward;
 /// <summary>客户端请求身份与连接测试协议。</summary>
 internal static class ClientProfiles
 {
+    private static readonly string[] SessionHeaders = ["Session-Id", "Thread-Id", "x-claude-code-session-id"];
     private static string Id() => Guid.NewGuid().ToString();
     private static readonly Lazy<JsonObject> Codex = new(() =>
     {
@@ -25,41 +26,103 @@ internal static class ClientProfiles
     }
 
     internal static Dictionary<string, string> Variables(JsonNode? body = null,
-        IReadOnlyDictionary<string, string>? incoming = null)
+        IReadOnlyDictionary<string, string>? incoming = null, ClientSessionIdentity? fallback = null,
+        JsonObject? configuration = null, IReadOnlyDictionary<string, string>? legacyOverrides = null)
     {
-        string? Header(string name) => incoming?.FirstOrDefault(p =>
-            p.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;
+        string? Header(string name) => ReadHeader(incoming, name);
+        string? Override(string name) => ConfiguredValue(configuration, incoming, name) ?? ReadHeader(legacyOverrides, name);
         var meta = body?["client_metadata"] as JsonObject;
-        JsonObject? claudeIdentity = null;
-        if (body?["metadata"] is JsonObject claudeMeta && claudeMeta["user_id"] is JsonValue userId
-            && userId.TryGetValue<string>(out var userText))
-        {
-            try { claudeIdentity = JsonNode.Parse(userText) as JsonObject; }
-            catch (System.Text.Json.JsonException) { }
-        }
-        var session = meta?["session_id"]?.ToString() ?? claudeIdentity?["session_id"]?.ToString()
-            ?? Header("session-id") ?? Header("x-claude-code-session-id") ?? Id();
-        var turn = meta?["turn_id"]?.ToString() ?? Id();
-        var installation = meta?["x-codex-installation-id"]?.ToString() ?? Id();
-        var thread = meta?["thread_id"]?.ToString() ?? Header("thread-id") ?? session;
-        var window = meta?["x-codex-window-id"]?.ToString() ?? Header("x-codex-window-id") ?? session + ":0";
-        var context = Id();
-        var metadata = meta?["x-codex-turn-metadata"]?.ToString() ?? Header("x-codex-turn-metadata")
+        var claudeIdentity = ParseObject(Read((body?["metadata"] as JsonObject)?["user_id"]));
+        var suppliedMetadata = Override("X-Codex-Turn-Metadata") ?? Header("x-codex-turn-metadata")
+            ?? Read(meta?["x-codex-turn-metadata"]);
+        var turnMetadata = ParseObject(suppliedMetadata);
+        var suppliedThread = Override("Thread-Id") ?? Header("thread-id") ?? Read(meta?["thread_id"])
+            ?? Read(turnMetadata?["thread_id"]);
+        var session = Override("Session-Id") ?? Override("x-claude-code-session-id")
+            ?? Header("session-id") ?? Header("x-claude-code-session-id")
+            ?? Read(meta?["session_id"]) ?? Read(claudeIdentity?["session_id"]) ?? Read(turnMetadata?["session_id"])
+            ?? suppliedThread ?? fallback?.SessionId ?? Id();
+        var turn = Read(meta?["turn_id"]) ?? Read(turnMetadata?["turn_id"]) ?? Id();
+        var installation = Read(meta?["x-codex-installation-id"]) ?? Read(turnMetadata?["installation_id"])
+            ?? fallback?.InstallationId ?? Id();
+        var thread = suppliedThread ?? fallback?.ThreadId ?? session;
+        var window = Override("X-Codex-Window-Id") ?? Header("x-codex-window-id")
+            ?? Read(meta?["x-codex-window-id"]) ?? Read(turnMetadata?["window_id"]) ?? fallback?.WindowId ?? session + ":0";
+        var context = Read(turnMetadata?["context_window_id"]) ?? fallback?.ContextWindowId ?? Id();
+        var metadata = suppliedMetadata
             ?? new JsonObject
             {
                 ["installation_id"] = installation, ["session_id"] = session, ["thread_id"] = thread,
                 ["agent_name"] = "/root", ["turn_id"] = turn, ["window_id"] = window, ["window_number"] = 0,
-                ["context_window_id"] = context, ["request_kind"] = "turn", ["root_turn_id"] = turn,
+                ["context_window_id"] = context, ["request_kind"] = "turn",
+                ["root_turn_id"] = Read(meta?["root_turn_id"]) ?? turn,
                 ["thread_source"] = "user", ["sandbox"] = "none", ["sandbox_mode"] = "read-only",
                 ["auto_review_enabled"] = false, ["node_repl_auto_review_required"] = false,
                 ["node_repl_disabled"] = false, ["turn_started_at_unix_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             }.ToJsonString();
-        return new(StringComparer.Ordinal)
+        return new ClientProfileVariables
         {
+            GeneratedTurnMetadata = suppliedMetadata is null,
+            ["request_id"] = Override("X-Client-Request-Id") ?? Header("x-client-request-id") ?? Id(),
             ["session_id"] = session, ["thread_id"] = thread, ["turn_id"] = turn,
             ["installation_id"] = installation, ["context_window_id"] = context, ["window_id"] = window,
-            ["codex_turn_metadata"] = metadata
+            ["codex_turn_metadata"] = metadata,
+            ["device_id"] = Read(claudeIdentity?["device_id"]) ?? fallback?.DeviceId
+                ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant()
         };
+    }
+
+    internal static string? IdentitySource(JsonNode? body, IReadOnlyDictionary<string, string> incoming,
+        JsonObject configuration, IReadOnlyDictionary<string, string>? legacyOverrides = null)
+    {
+        string? Override(string name) => ConfiguredValue(configuration, incoming, name) ?? ReadHeader(legacyOverrides, name);
+        if (SessionHeaders.Any(name => Override(name) is not null)
+            || HasSession(ParseObject(Override("X-Codex-Turn-Metadata"))))
+            return "override";
+        if (SessionHeaders.Any(name => ReadHeader(incoming, name) is not null)
+            || HasSession(body?["client_metadata"] as JsonObject)
+            || HasSession(ParseObject(Read((body?["metadata"] as JsonObject)?["user_id"])))
+            || HasSession(ParseObject(ReadHeader(incoming, "X-Codex-Turn-Metadata")))
+            || HasSession(ParseObject(Read((body?["client_metadata"] as JsonObject)?["x-codex-turn-metadata"]))))
+            return "client";
+        return null;
+    }
+
+    private static bool HasSession(JsonObject? metadata) => Read(metadata?["session_id"]) is not null || Read(metadata?["thread_id"]) is not null;
+    private static string? Read(JsonNode? value) => value is not null && !string.IsNullOrWhiteSpace(value.ToString()) ? value.ToString() : null;
+    private static string? ReadHeader(IReadOnlyDictionary<string, string>? headers, string name)
+    {
+        var value = headers?.FirstOrDefault(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+    private static JsonObject? ParseObject(string? text)
+    {
+        if (text is null) return null;
+        try { return JsonNode.Parse(text) as JsonObject; }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+    private static string? ConfiguredValue(JsonObject? config, IReadOnlyDictionary<string, string>? incoming, string name)
+    {
+        if (config?.FirstOrDefault(pair => pair.Key.Trim().Equals(name, StringComparison.OrdinalIgnoreCase)).Value
+            is not JsonValue node || !node.TryGetValue<string>(out var text) || string.IsNullOrWhiteSpace(text)) return null;
+        const string clientPrefix = "{client_header:";
+        var trimmed = text.Trim();
+        if (trimmed.StartsWith(clientPrefix, StringComparison.Ordinal) && trimmed.EndsWith('}'))
+            return ReadHeader(incoming, trimmed[clientPrefix.Length..^1].Trim());
+        // A generated placeholder is not a client-provided conversation boundary.
+        return System.Text.RegularExpressions.Regex.IsMatch(text, @"\{[a-z_]+\}",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)) ? null : text;
+    }
+
+    internal static void AlignGeneratedMetadata(Dictionary<string, string> headers, IReadOnlyDictionary<string, string> variables)
+    {
+        if (variables is not ClientProfileVariables { GeneratedTurnMetadata: true }
+            || !headers.TryGetValue("X-Codex-Turn-Metadata", out var text)
+            || text != variables["codex_turn_metadata"]) return;
+        var metadata = JsonNode.Parse(text)!.AsObject();
+        foreach (var (field, header) in new[] { ("session_id", "Session-Id"), ("thread_id", "Thread-Id"), ("window_id", "X-Codex-Window-Id") })
+            if (headers.TryGetValue(header, out var value)) metadata[field] = value;
+        headers["X-Codex-Turn-Metadata"] = metadata.ToJsonString();
     }
 
     internal static JsonObject CompleteHeaders(JsonObject config, IReadOnlyDictionary<string, string>? incoming = null)
@@ -68,14 +131,14 @@ internal static class ClientProfiles
         void Add(string name, string value)
         {
             if (!result.Any(p => p.Key.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                result[name] = incoming?.Keys.Any(key => key.Equals(name, StringComparison.OrdinalIgnoreCase)) == true
+                result[name] = ReadHeader(incoming, name) is not null
                     ? "{client_header:" + name + "}" : value;
         }
         if (Profile(config) == "codex")
         {
             Add("Session-Id", "{session_id}");
             Add("Thread-Id", "{thread_id}");
-            Add("X-Client-Request-Id", "{session_id}");
+            Add("X-Client-Request-Id", "{request_id}");
             Add("X-Codex-Window-Id", "{window_id}");
             Add("X-Codex-Turn-Metadata", "{codex_turn_metadata}");
         }
@@ -123,7 +186,7 @@ internal static class ClientProfiles
         return body;
     }
 
-    internal static JsonObject PrepareClaudeRequest(JsonObject original, Dictionary<string, string> headers)
+    internal static JsonObject PrepareClaudeRequest(JsonObject original, Dictionary<string, string> headers, string? deviceId = null)
     {
         const string identityText = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
         var body = (JsonObject)original.DeepClone();
@@ -166,7 +229,7 @@ internal static class ClientProfiles
             identity ??= new JsonObject { ["user_id"] = text };
         }
         identity ??= new JsonObject();
-        identity["device_id"] ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        identity["device_id"] ??= deviceId ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
         identity["account_uuid"] ??= "";
         identity["session_id"] = headers["x-claude-code-session-id"];
         metadata["user_id"] = identity.ToJsonString();
@@ -199,4 +262,9 @@ internal static class ClientProfiles
             })
         }, headers);
     }
+}
+
+internal sealed class ClientProfileVariables : Dictionary<string, string>
+{
+    internal bool GeneratedTurnMetadata { get; init; }
 }

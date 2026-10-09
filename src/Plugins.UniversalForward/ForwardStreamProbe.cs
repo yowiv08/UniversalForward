@@ -11,8 +11,11 @@ internal sealed class ForwardStreamProbe : IDisposable
     private readonly ForwardResponseAnalysis _analysis = new();
     private string _eventType = "";
     private bool _afterCr;
+    private bool _crlf;
     private bool _firstLine = true;
     internal ForwardResponseAnalysis Analysis => _analysis;
+    // Keep the LF of the final CRLF even when it arrives in a separate read.
+    internal bool Completed => _analysis.StreamEnded && !_analysis.HasError && !(_afterCr && _crlf);
 
     internal bool Observe(ReadOnlySpan<byte> bytes, bool stopOnOutput = true)
     {
@@ -21,7 +24,8 @@ internal sealed class ForwardStreamProbe : IDisposable
             if (_afterCr)
             {
                 _afterCr = false;
-                if (bytes[0] == (byte)'\n') { bytes = bytes[1..]; continue; }
+                _crlf = bytes[0] == (byte)'\n';
+                if (_crlf) { bytes = bytes[1..]; continue; }
             }
             var end = bytes.IndexOfAny((byte)'\r', (byte)'\n');
             if (_line.Length + (end < 0 ? bytes.Length : end) > 32 * 1024 * 1024)

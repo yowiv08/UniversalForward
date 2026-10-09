@@ -292,6 +292,7 @@ public sealed partial class UniversalForwardTerminal
         if (account is null) return context.Json(404, new { error = "账号不存在" });
         await _host.Accounts.DeleteAsync(account.Id, context.CancellationToken);
         _keySelector.Remove(account.Id);
+        _clientSessions.RemoveAccount(account.Id);
         await RebuildAccountModelSnapshotAsync(context.PluginKey, context.CancellationToken);
         _host.Models.Invalidate(ForwardApiPlatform);
         await TryLogAsync("account.deleted", $"账号“{account.Label ?? account.Id}”已删除", accountId: account.Id);

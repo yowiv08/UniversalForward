@@ -156,21 +156,16 @@ function hostMock() {
     assert.equal(headers.Originator, 'codex_exec');
     assert.equal('Authorization' in headers, false);
     assert.equal('x-api-key' in headers, false);
-    assert.equal(headers['User-Agent'], 'Codex Desktop/0.146.0-alpha.9.2 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.727.51351)');
+    assert.equal(headers['User-Agent'], 'Codex Desktop/0.162.0-alpha.2 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.1002.52244)');
     assert.equal(headers['X-Codex-Beta-Features'], 'remote_compaction_v2');
-    assert.equal(headers['Session-Id'], '{session_id}');
-    assert.equal(headers['Thread-Id'], '{thread_id}');
-    assert.equal(headers['X-Client-Request-Id'], '{session_id}');
-    assert.equal(headers['X-Codex-Window-Id'], '{window_id}');
-    assert.equal(headers['X-Codex-Turn-Metadata'], '{codex_turn_metadata}');
+    for (const name of ['Session-Id', 'Thread-Id', 'X-Client-Request-Id', 'X-Codex-Window-Id', 'X-Codex-Turn-Metadata'])
+      assert.equal(name in headers, false, `${name} is completed when forwarding, not stored in the preset`);
     assert.equal('Host' in headers, false);
     await frame.locator('#headerVisual').click();
-    for (const name of ['User-Agent', 'Session-Id']) {
-      const names = await frame.locator('#headerRows .header-row input:first-child').evaluateAll(inputs => inputs.map(input => input.value));
-      const index = names.indexOf(name);
-      assert.notEqual(index, -1);
-      await frame.locator('#headerRows .header-row').nth(index).getByRole('button').click();
-    }
+    const headerNames = await frame.locator('#headerRows .header-row input:first-child').evaluateAll(inputs => inputs.map(input => input.value));
+    const userAgentIndex = headerNames.indexOf('User-Agent');
+    assert.notEqual(userAgentIndex, -1);
+    await frame.locator('#headerRows .header-row').nth(userAgentIndex).getByRole('button').click();
     await frame.locator('#headerJson').click();
     const remainingHeaders = JSON.parse(await frame.locator('#headerOverride').inputValue());
     assert.equal('User-Agent' in remainingHeaders, false);

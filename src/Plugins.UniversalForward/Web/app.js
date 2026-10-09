@@ -30,11 +30,9 @@
   const templates = {
     codex: {
       'Content-Type': 'application/json', Accept: 'text/event-stream',
-      'User-Agent': 'Codex Desktop/0.146.0-alpha.9.2 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.727.51351)',
+      'User-Agent': 'Codex Desktop/0.162.0-alpha.2 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.1002.52244)',
       Originator: 'codex_exec', 'X-Codex-Beta-Features': 'remote_compaction_v2',
-      'X-OpenAI-Internal-Codex-Responses-Lite': 'true',
-      'Session-Id': '{session_id}', 'Thread-Id': '{thread_id}', 'X-Client-Request-Id': '{session_id}',
-      'X-Codex-Window-Id': '{window_id}', 'X-Codex-Turn-Metadata': '{codex_turn_metadata}'
+      'X-OpenAI-Internal-Codex-Responses-Lite': 'true'
     },
     claude: {
       'Content-Type': 'application/json', 'User-Agent': 'claude-cli/2.1.161 (external, cli)',

@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Moq;
 using Plugins.UniversalForward;
 using Router.Contracts.Host;
@@ -230,7 +232,8 @@ public sealed class StreamingRetryTests
         if (kind == "idle") policy.StreamIdleTimeoutSeconds = 1;
         if (kind == "total") policy.TotalTimeoutSeconds = 1;
         var host = PluginTestHost.Create("universalforward");
-        using var terminal = new UniversalForwardTerminal(host);
+        using var logs = new RequestLogStore();
+        using var terminal = new UniversalForwardTerminal(host) { RequestLogs = logs };
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true,
             policy: policy, cancellation: kind == "request" ? cancellation.Token : default));
         await using var output = result.Response.RawStream!.GetAsyncEnumerator(kind == "reader" ? cancellation.Token : default);
@@ -239,13 +242,28 @@ public sealed class StreamingRetryTests
         var next = output.MoveNextAsync().AsTask();
         await body.Waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
         if (kind is "request" or "reader") cancellation.Cancel();
-        await Assert.ThrowsAsync<OperationCanceledException>(async () => await next.WaitAsync(TimeSpan.FromSeconds(5)));
+        Exception failure = kind is "request" or "reader"
+            ? await Assert.ThrowsAsync<OperationCanceledException>(async () => await next.WaitAsync(TimeSpan.FromSeconds(5)))
+            : await Assert.ThrowsAsync<TimeoutException>(async () => await next.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.IsTrue(body.Disposed);
         Assert.AreEqual(1, client.Invocations.Count);
         var log = Mock.Get(host.Services.Log).Invocations.Select(x => x.Arguments[0])
             .OfType<PluginLog>().Single(x => x.EventType == "request.stream.failed");
-        StringAssert.Contains(log.DetailsJson!, kind is "request" or "reader" ? "request_cancelled"
-            : kind == "total" ? "total_timeout" : "stream_idle_timeout");
+        var reason = kind is "request" or "reader" ? "request_cancelled"
+            : kind == "total" ? "total_timeout" : "stream_idle_timeout";
+        StringAssert.Contains(log.DetailsJson!, reason);
+        StringAssert.Contains(failure.Message, reason);
+        var details = JsonNode.Parse(log.DetailsJson!)!;
+        Assert.IsTrue(details["hasOutput"]!.GetValue<bool>());
+        Assert.IsFalse(details["terminalReceived"]!.GetValue<bool>());
+        Assert.AreEqual(kind switch
+        {
+            "request" => "host_or_caller", "reader" => "downstream", "total" => "plugin_total_timeout", _ => "stream_idle_timeout"
+        }, details["cancellationSource"]!.ToString());
+        await logs.FlushAsync();
+        var row = JsonSerializer.SerializeToElement(logs.List(new Dictionary<string, string>())).GetProperty("rows")[0];
+        Assert.AreEqual(kind is "request" or "reader" ? "cancelled" : "failed", row.GetProperty("state").GetString());
+        Assert.IsTrue(row.GetProperty("incomplete").GetBoolean());
     }
 
     [TestMethod]

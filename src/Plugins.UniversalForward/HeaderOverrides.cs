@@ -68,10 +68,13 @@ internal static class HeaderOverrides
 
     internal static Dictionary<string, string> Resolve(JsonObject config,
         IReadOnlyDictionary<string, string> client, string apiKey, bool channelTest = false,
-        IReadOnlyDictionary<string, string>? variables = null)
+        IReadOnlyDictionary<string, string>? variables = null,
+        IReadOnlyDictionary<string, string>? legacyOverrides = null)
     {
+        var explicitConfig = config;
         config = ClientProfiles.CompleteHeaders(config, channelTest ? null : client);
-        variables ??= ClientProfiles.Variables(incoming: channelTest ? null : client);
+        variables ??= ClientProfiles.Variables(incoming: channelTest ? null : client,
+            configuration: explicitConfig, legacyOverrides: legacyOverrides);
         Validate(config);
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var all = config.Any(p => p.Key.Trim() == "*");
@@ -93,6 +96,14 @@ internal static class HeaderOverrides
         {
             var name = key.Trim();
             if (Rule(name)) continue;
+            // Automatic profile defaults must not replace an explicit legacy value.
+            if (!explicitConfig.Any(pair => pair.Key.Trim().Equals(name, StringComparison.OrdinalIgnoreCase))
+                && legacyOverrides?.FirstOrDefault(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value is { } legacy
+                && !string.IsNullOrWhiteSpace(legacy))
+            {
+                Put(result, name, legacy);
+                continue;
+            }
             var template = node!.GetValue<string>();
             var trimmed = template.Trim();
             if (trimmed.StartsWith(ClientPrefix, StringComparison.Ordinal))
@@ -106,6 +117,7 @@ internal static class HeaderOverrides
                 m.Groups[1].Value == "api_key" ? apiKey :
                 variables.TryGetValue(m.Groups[1].Value, out var replacement) ? replacement : m.Value));
         }
+        ClientProfiles.AlignGeneratedMetadata(result, variables);
         return result;
     }
 

@@ -148,10 +148,11 @@ public sealed class ForwardRetryTests
         {
             StreamIdleTimeoutSeconds = 1, MaxRetries = 10
         }, stream: true));
-        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        var error = await Assert.ThrowsAsync<TimeoutException>(async () =>
         {
             await foreach (var _ in result.Response.RawStream!) { }
         });
+        StringAssert.Contains(error.Message, "stream_idle_timeout");
         Assert.IsTrue(stream.Disposed);
         Assert.AreEqual(1, client.Invocations.Count);
     }

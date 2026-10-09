@@ -14,7 +14,8 @@ public sealed class ClientProfilesTests
         Assert.AreEqual("Bearer secret", headers["Authorization"]);
         Assert.IsTrue(Guid.TryParse(headers["Session-Id"], out _));
         Assert.AreEqual(headers["Session-Id"], headers["Thread-Id"]);
-        Assert.AreEqual(headers["Session-Id"], headers["X-Client-Request-Id"]);
+        Assert.IsTrue(Guid.TryParse(headers["X-Client-Request-Id"], out _));
+        Assert.AreNotEqual(headers["Session-Id"], headers["X-Client-Request-Id"]);
         Assert.AreEqual(headers["Session-Id"] + ":0", headers["X-Codex-Window-Id"]);
         var next = HeaderOverrides.Resolve(config, new Dictionary<string, string>(), "secret", true);
         Assert.AreNotEqual(headers["Session-Id"], next["Session-Id"]);
@@ -94,6 +95,60 @@ public sealed class ClientProfilesTests
         var test = HeaderOverrides.Resolve(config, client, "key", channelTest: true);
         Assert.AreNotEqual("client-session", test["Session-Id"]);
         Assert.AreNotEqual("client-request", test["X-Client-Request-Id"]);
+    }
+
+    [TestMethod]
+    public void GeneratedTemplatePlaceholdersStillAllowInferredSessionIdentity()
+    {
+        var config = new JsonObject
+        {
+            ["Originator"] = "codex_exec", ["Session-Id"] = "{session_id}", ["Thread-Id"] = "{thread_id}",
+            ["X-Codex-Turn-Metadata"] = "{codex_turn_metadata}"
+        };
+        var client = new Dictionary<string, string>();
+        var body = JsonNode.Parse("""{"input":"question"}""")!;
+        Assert.IsNull(ClientProfiles.IdentitySource(body, client, config));
+        var inferred = ClientSessionIdentity.Create();
+        var variables = ClientProfiles.Variables(body, client, inferred, config);
+        var headers = HeaderOverrides.Resolve(config, client, "key", variables: variables);
+        Assert.AreEqual(inferred.SessionId, headers["Session-Id"]);
+        Assert.AreEqual(inferred.ThreadId, headers["Thread-Id"]);
+    }
+
+    [TestMethod]
+    public void ConfiguredClientHeaderAndMetadataOnlyIdentityArePreserved()
+    {
+        var config = new JsonObject { ["Originator"] = "codex_exec", ["Session-Id"] = "{client_header:X-Chat}" };
+        var client = new Dictionary<string, string> { ["X-Chat"] = "client-session" };
+        Assert.AreEqual("override", ClientProfiles.IdentitySource(null, client, config));
+        var headers = HeaderOverrides.Resolve(config, client, "key",
+            variables: ClientProfiles.Variables(incoming: client, configuration: config));
+        Assert.AreEqual("client-session", headers["Session-Id"]);
+        Assert.AreEqual("client-session", JsonNode.Parse(headers["X-Codex-Turn-Metadata"])!["session_id"]!.ToString());
+
+        config.Remove("Session-Id");
+        const string metadata = """{"session_id":"metadata-session","thread_id":"metadata-thread","turn_id":"native-turn","custom":"untouched"}""";
+        client = new Dictionary<string, string> { ["X-Codex-Turn-Metadata"] = metadata };
+        Assert.AreEqual("client", ClientProfiles.IdentitySource(null, client, config));
+        var resolved = HeaderOverrides.Resolve(config, client, "key");
+        Assert.AreEqual("metadata-session", resolved["Session-Id"]);
+        Assert.AreEqual("metadata-thread", resolved["Thread-Id"]);
+        Assert.AreEqual(metadata, resolved["X-Codex-Turn-Metadata"]);
+    }
+
+    [TestMethod]
+    public void EmptyClientIdentityValuesAreCompleted()
+    {
+        var config = new JsonObject { ["Originator"] = "codex_exec" };
+        var client = new Dictionary<string, string>
+        {
+            ["Session-Id"] = "", ["Thread-Id"] = " ", ["X-Client-Request-Id"] = "", ["X-Codex-Turn-Metadata"] = ""
+        };
+        Assert.IsNull(ClientProfiles.IdentitySource(null, client, config));
+        var headers = HeaderOverrides.Resolve(config, client, "key");
+        Assert.IsTrue(Guid.TryParse(headers["Session-Id"], out _));
+        Assert.IsTrue(Guid.TryParse(headers["X-Client-Request-Id"], out _));
+        Assert.AreEqual(headers["Session-Id"], headers["Thread-Id"]);
     }
 
     [TestMethod]

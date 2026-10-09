@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Nodes;
 using Router.Contracts.Domain;
 
@@ -67,6 +69,22 @@ internal static class ForwardHeaders
                 || name.StartsWith("Sec-WebSocket-", StringComparison.OrdinalIgnoreCase))
                 headers.Remove(name);
         return headers;
+    }
+
+    internal static string AuthenticationDigest(AdapterRequest source)
+    {
+        var full = FullHeaders?.GetValue(source) as IReadOnlyDictionary<string, string?[]>;
+        string? Read(string name)
+        {
+            var values = full?.FirstOrDefault(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;
+            return values is not null ? string.Join(", ", values)
+                : source.RequestHeaders.FirstOrDefault(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;
+        }
+        var authorization = Read("Authorization");
+        // Match the host's downstream authentication choice. Never use the selected upstream Key.
+        var credential = authorization?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true
+            ? authorization["Bearer ".Length..].Trim() : Read("X-Api-Key")?.Trim() ?? "";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(credential)));
     }
 
     internal static void ApplyClientHeaders(HttpRequestMessage request, IReadOnlyDictionary<string, string[]> headers)

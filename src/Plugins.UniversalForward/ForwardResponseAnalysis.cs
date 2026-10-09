@@ -11,6 +11,7 @@ internal sealed class ForwardResponseAnalysis
     internal bool RateLimited { get; private set; }
     internal bool PermanentError { get; private set; }
     internal bool Terminal { get; private set; }
+    internal bool StreamEnded { get; private set; }
     internal string State { get; private set; } = "missing_terminal";
     internal string IncompleteReason { get; private set; } = "";
     internal JsonElement? ErrorPayload { get; private set; }
@@ -59,11 +60,16 @@ internal sealed class ForwardResponseAnalysis
 
     internal void ReadEvent(string text, string eventType = "")
     {
-        if (text.Trim() == "[DONE]") { Terminal = true; if (!HasError) State = "completed"; return; }
+        if (text.Trim() == "[DONE]") { Terminal = true; StreamEnded = true; if (!HasError) State = "completed"; return; }
         try
         {
             using var doc = JsonDocument.Parse(text);
             Observe(doc.RootElement, eventType);
+            var type = Text(doc.RootElement, "type");
+            if (type.Length == 0) type = eventType;
+            // Item status and Chat Completions finish_reason may precede more
+            // content or usage. Only a whole-response event ends the transport.
+            if (type is "response.completed" or "response.done" or "message_stop") StreamEnded = true;
         }
         catch (JsonException ex) { throw new IOException("上游事件内容无效", ex); }
     }

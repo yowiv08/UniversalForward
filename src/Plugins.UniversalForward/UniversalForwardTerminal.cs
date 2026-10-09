@@ -89,9 +89,10 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         Dispose();
         return ValueTask.CompletedTask;
     }
-    public void Dispose() { DisposeRequestLogs(); _keySelector.Clear(); _snapshotRefreshGate.Dispose(); }
+    public void Dispose() { DisposeRequestLogs(); _keySelector.Clear(); _clientSessions.Dispose(); _snapshotRefreshGate.Dispose(); }
 
     private readonly ChannelKeySelector _keySelector = new();
+    private readonly ClientSessionResolver _clientSessions = new();
     private static List<ChannelKey> ReadKeys(ForwardApiSettings settings) => ChannelKeys.Read(settings.Keys, settings.ApiKey);
     private bool IsAccountEligible(Account account, AdapterRequest request, bool connectionTest = false)
     {
