@@ -51,6 +51,14 @@ internal sealed class RequestLogCapture
             if (name == "extensions") _info["extensionReasoning"] = Reasoning(text);
         }
     }
+    public void MappedReasoning(ReasoningMappingDecision decision)
+    {
+        lock (_gate)
+        {
+            _info["reasoningMapping"] = JsonSerializer.SerializeToNode(decision, RequestLogStore.Json);
+            Save();
+        }
+    }
     public void Observe(string name, ReadOnlySpan<byte> bytes)
     {
         lock (_gate)

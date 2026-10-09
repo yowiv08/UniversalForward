@@ -491,6 +491,35 @@ public sealed class UpstreamWebSocketTests
         Assert.AreEqual("websocket", ChannelKeysTests.Settings(account)["responsesTransport"]!.ToString());
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ReasoningMappingReachesRealWebSocketPayload(bool stream)
+    {
+        JsonObject? sent = null;
+        await using var server = new WebSocketLoopback(async (peer, _, ct) =>
+        {
+            using var socket = await peer.AcceptAsync(ct);
+            sent = JsonNode.Parse(await WebSocketLoopback.ReceiveAsync(socket, ct))!.AsObject();
+            await WebSocketLoopback.SendAsync(socket, Done, ct);
+        });
+        var account = Account(server.Address);
+        ReasoningPolicyTests.Edit(account, settings =>
+        {
+            settings["headerOverride"]!["Originator"] = "codex_exec";
+            settings["reasoningPolicy"] = JsonNode.Parse("""{"defaults":{"responses":{"mode":"fixed","fixedEffort":"low"}},"models":{"model":{"responses":{"mode":"map","mappings":[{"from":"high","to":"max"}]}}}}""");
+        });
+        using var terminal = new UniversalForwardTerminal(Host(account, () => server.CreateClient()));
+        var context = Context(account, stream);
+        var result = await terminal.InvokeAsync(context);
+        Assert.AreEqual(200, result.Response.StatusCode);
+        if (stream) _ = await ReadAll(result.Response.RawStream!);
+        await server.Completion;
+        Assert.AreEqual("response.create", sent!["type"]!.ToString());
+        Assert.AreEqual("max", sent["reasoning"]!["effort"]!.ToString());
+        Assert.AreEqual("high", context.Request.OriginalBody!.Value.GetProperty("reasoning").GetProperty("effort").GetString());
+    }
+
     private static ForwardRequestPolicy Policy() => new()
     {
         HeaderTimeoutSeconds = 5, TotalTimeoutSeconds = 12, StreamIdleTimeoutSeconds = 5,

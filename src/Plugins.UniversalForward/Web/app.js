@@ -209,6 +209,7 @@
     keyDraft = (account?.keys || []).map(k => ({ ...k, secret: '', uiId: 'draft:' + ++keySequence }));
     deletedKeyIds = []; keyRevision = account?.keyRevision ?? 0;
     modelProtocolDraft = Object.assign(Object.create(null), structuredClone(account?.modelProtocols || {}));
+    loadReasoningPolicy(account?.reasoningPolicy);
     candidates = account?.availableModels || [];
     $('keySelectionMode').value = account?.keySelectionMode || 'roundRobin';
     for (const [name, fallback] of Object.entries(defaults)) form.elements[name].value = account?.requestPolicy?.[name] ?? fallback;
@@ -377,6 +378,7 @@
     if (!modelIds().length) $('models').focus();
   };
   function renderProtocols() {
+    updateReasoningModels();
     const root = $('modelProtocols'); root.replaceChildren(); $('protocolCount').textContent = modelIds().length;
     if (!modelIds().length) { root.append(el('div', '添加模型后在这里配置协议', 'empty')); return; }
     for (const model of modelIds()) {
@@ -608,7 +610,8 @@
       const keys = readKeys(), models = modelIds();
       if (!models.length) fail('请填写或选择允许模型', 'models', 'models');
       const modelProtocols = readProtocols();
-      let headerOverride, statusCodeMapping;
+      let headerOverride, statusCodeMapping, reasoningPolicy;
+      try { reasoningPolicy = readReasoningPolicy(); } catch (e) { fail(e.message, 'reasoning'); }
       try { commitHeaderDraft(); headerOverride = commonHeaderDraft; } catch (e) { fail(e.message, 'headers'); }
       try { statusCodeMapping = readMapping(); } catch (e) { fail(e.message, 'policy'); }
       const requestPolicy = { statusCodeMapping };
@@ -620,7 +623,7 @@
         networkMode: form.elements.networkMode.value,
         responsesTransport: form.elements.responsesTransport.value,
         keys, deletedKeyIds, keyRevision, keySelectionMode: $('keySelectionMode').value, weight: Number(form.elements.weight.value),
-        enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, requestPolicy, headerOverride,
+        enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, reasoningPolicy, requestPolicy, headerOverride,
         headerOverrideMode: headerPolicyMode, endpointHeaderOverrides: endpointHeaderDraft, extraParams
       });
       editorEpoch++; dialog.close(); await load(); message(saved.warning || '渠道已保存', !!saved.warning);
@@ -799,6 +802,7 @@
       feedback('testProgress', '已申请取消，正在等待任务退出'); await pollTests(testState.epoch);
     } catch (e) { testState.cancelling = false; feedback('testError', e.message, true); updateTestControls(); }
   };
+  /*__REASONING__*/
   /*__JOURNAL__*/
   for (const modal of document.querySelectorAll('dialog')) {
     let startedOutside = false;

@@ -43,6 +43,7 @@ public sealed partial class UniversalForwardTerminal
         if (!TryReadReplaceHeaders(ReadExtraParams(settings), out var headers, out var headerError))
             return LocalFailure(headerError);
         byte[] payload;
+        ReasoningMappingDecision? reasoningMapping;
         var upstreamModel = ReadModels(context.Account).Contains(context.Request.Model, StringComparer.OrdinalIgnoreCase)
             ? context.Request.Model : UpstreamModel(context.Request.Model);
         var upstreamEndpoint = context.Request.Endpoint;
@@ -58,6 +59,7 @@ public sealed partial class UniversalForwardTerminal
                 return LocalFailure("请求体必须为 JSON 对象");
             var body = JsonNode.Parse(original.GetRawText())!.AsObject();
             body["model"] = upstreamModel;
+            reasoningMapping = settings.ReasoningPolicy.Resolve(body, upstreamModel, upstreamEndpoint);
             payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
         }
         catch (Exception error) when (error is JsonException or FormatException or ArgumentException)
@@ -140,6 +142,13 @@ public sealed partial class UniversalForwardTerminal
                 var body = JsonNode.Parse(payload)!.AsObject();
                 body["stream"] = true;
                 payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
+            }
+            if (reasoningMapping is not null)
+            {
+                var body = JsonNode.Parse(payload)!.AsObject();
+                ReasoningPolicy.Apply(body, reasoningMapping);
+                payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
+                capture?.MappedReasoning(reasoningMapping);
             }
             if (websocket) payload = UpstreamWebSocket.CreatePayload(payload);
             var targetEndpoint = profile == "claude" && upstreamEndpoint == "/v1/messages"

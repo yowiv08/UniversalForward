@@ -134,3 +134,12 @@ dialog{border:1px solid #dfe6f2;border-radius:16px;padding:0;color:inherit;backg
   .test-pagination button, .test-pagination #testPageNumber { width: 28px; height: 28px; }
 }
 @media(max-width:380px) { .test-prompt { grid-template-columns: 1fr; } }
+#reasoningFields { border: 0; padding: 0; margin: 16px 0; min-width: 0; }
+#reasoningFields:disabled { opacity: .65; }
+.reasoning-default { margin-top: 20px; }
+.reasoning-preview-box { margin-top: 24px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #fafcff; }
+.reasoning-preview-box h4 { margin-top: 0; }
+.reasoning-preview-box .field-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.reasoning-preview-box small { color: var(--muted); }
+#reasoningRows input, #panel-reasoning select { min-width: 0; }
+@media(max-width:560px) { #panel-reasoning .field-row { grid-template-columns: minmax(0, 1fr); } .reasoning-preview-box { padding: 14px; } }

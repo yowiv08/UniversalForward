@@ -12,6 +12,8 @@
   };
   const journalEffort = value => value && Object.keys(value).length
     ? Object.entries(value).map(([key, v]) => `${key}=${JSON.stringify(v)}`).join('；') : '未提供';
+  const journalMappingSource = mapping => (mapping.source === 'model' ? '模型规则：' + mapping.model : '渠道默认规则')
+    + ' · ' + (mapping.reason === 'default' ? '未提供时使用缺省值' : mapping.mode === 'fixed' ? '固定等级' : '按值映射');
   function journalError(error) { feedback('journalStatus', error.message || String(error), true); }
   function updateJournalPagination() {
     $('journalPrevious').disabled = journalLoading || journalPage <= 1;
@@ -68,8 +70,12 @@
           metric.append(el('small', label), el('strong', value));
           stateCell.lastChild.append(metric);
         }
-        effort.append(el('div', '请求：' + journalEffort(row.sentReasoning)),
-          el('div', '上游：' + (row.reportedReasoning && Object.keys(row.reportedReasoning).length ? journalEffort(row.reportedReasoning) : '未返回')));
+        if (row.reasoningMapping) {
+          const mapping = row.reasoningMapping;
+          effort.append(el('div', `客户端 ${mapping.received == null ? '未提供' : JSON.stringify(mapping.received)} → 发送 ${JSON.stringify(mapping.sent)}`),
+            el('small', journalMappingSource(mapping)));
+        } else effort.append(el('div', '请求：' + journalEffort(row.sentReasoning)));
+        effort.append(el('div', '上游：' + (row.reportedReasoning && Object.keys(row.reportedReasoning).length ? journalEffort(row.reportedReasoning) : '未返回')));
         actions.append(button('详情', () => {
           for (const item of root.children) item.classList.remove('is-selected');
           tr.classList.add('is-selected'); showJournalDetail(row.id);
@@ -121,7 +127,9 @@
       ['耗时', `${detail.durationMs ?? '—'} ms · 首字 ${detail.firstByteMs ?? '—'} ms`]]);
     group('请求信息', [['接口', detail.endpoint], ['请求类型', journalKinds[detail.kind] || detail.kind],
       ['状态码', detail.status], ['重试次数', detail.retries || 0]]);
-    group('思考参数', [['请求', journalEffort(detail.sentReasoning)],
+    group('思考参数', [...(detail.reasoningMapping ? [
+      ['客户端', journalEffort(detail.receivedReasoning)], ['命中规则', journalMappingSource(detail.reasoningMapping)]] : []),
+      [detail.reasoningMapping ? '实际发送' : '请求', journalEffort(detail.sentReasoning)],
       ['上游', detail.reportedReasoning && Object.keys(detail.reportedReasoning).length ? journalEffort(detail.reportedReasoning) : '未返回']]);
     for (const attempt of detail.attempts || []) group(`上游尝试 ${attempt.number}`, [
       ['连接方式', attempt.transport === 'websocket' ? 'WebSocket' : 'HTTP'],

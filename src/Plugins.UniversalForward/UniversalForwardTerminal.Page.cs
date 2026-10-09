@@ -8,7 +8,9 @@ public sealed partial class UniversalForwardTerminal
         "UniversalForward 渠道管理",
         ReadPageAsset("index.html")
             .Replace("/*__STYLE__*/", ReadPageAsset("styles.css"), StringComparison.Ordinal)
-            .Replace("/*__SCRIPT__*/", ReadPageAsset("app.js").Replace("/*__JOURNAL__*/", ReadPageAsset("journal.js"), StringComparison.Ordinal), StringComparison.Ordinal));
+            .Replace("/*__SCRIPT__*/", ReadPageAsset("app.js")
+                .Replace("/*__REASONING__*/", ReadPageAsset("reasoning.js"), StringComparison.Ordinal)
+                .Replace("/*__JOURNAL__*/", ReadPageAsset("journal.js"), StringComparison.Ordinal), StringComparison.Ordinal));
 
     private static string ReadPageAsset(string name)
     {

@@ -68,6 +68,45 @@ HTTP 200 表示上游已开始正常响应，宿主尝试详情中的 `Healthy` 
 
 配置地址继续填写 `http://` 或 `https://`，连接时自动使用对应的 `ws://` 或 `wss://`。协议参考：[OpenAI WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)。
 
+## 思考等级映射
+
+在渠道编辑的「思考映射」页签中，选择渠道默认或具体模型，并分别配置 Responses、Messages：
+
+- **不改写**：沿用现有处理，新渠道及旧配置默认使用此行为。
+- **按值映射**：例如 `low → max`。来源去除首尾空格并忽略大小写；未命中保持原处理。只映射一次，`low → high` 不会继续触发 `high → max`。
+- **固定等级**：包含未传等级的请求，统一发送指定等级。
+- **客户端未提供时**：映射模式可设置缺省等级，只用于原始字段缺失或为 `null` 的请求，留空则不改写。
+
+模型按接口继承渠道规则；取消继承后整条覆盖，不合并映射表。模型选择「不改写」可独立关闭该接口的渠道映射。等级支持自定义，实际可用值由上游模型决定；空来源、空目标和重复来源禁止保存。预览不会发送请求。
+
+Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`。以原始请求中的对应字段为准，不把宿主扩展参数或模板默认值当成客户端输入；规则在模板补全后执行，保留对象内其他参数、思考开关、Token 预算和聊天历史中的动态等级控制。
+
+例如，只有 `low → max` 时，Codex 模板给未传等级请求补入的 `low` 不会触发映射；另设缺省 `high` 后，这类请求最终发送 `high`。现有连接测试生成的请求也按「客户端未提供」处理。HTTP、WebSocket、流式、非流式和重试使用同一规则，重试期间映射结果不变。
+
+日志显示客户端等级、实际发送等级和命中规则来源，上游报告独立显示，不推断内部思考量。
+
+渠道查询与 `accounts/save` 使用可选的 `reasoningPolicy` 字段；省略或传 `null` 保留原配置，传空 `defaults` / `models` 可清空规则。模型键使用渠道允许模型中的 ID，接口键为 `responses` / `messages`。以下为该字段的示例值：
+
+```json
+{
+  "defaults": {
+    "responses": {
+      "mode": "map",
+      "mappings": [{ "from": "low", "to": "max" }],
+      "defaultEffort": "high"
+    }
+  },
+  "models": {
+    "your-model-id": {
+      "responses": { "mode": "fixed", "fixedEffort": "max" },
+      "messages": { "mode": "off" }
+    }
+  }
+}
+```
+
+模型或接口条目缺失表示继承；`mode` 为 `off`、`map` 或 `fixed`。配置仍保存在现有渠道 settings JSON 中，无需升级宿主 Contracts 或迁移数据库。
+
 ## 请求头配置
 
 默认透传客户端的业务请求头，包括 User-Agent、Accept-Language、会话标识及自定义字段；无需逐项配置或添加 `*`。请求头覆盖只修改同名字段，删除覆盖项并保存后恢复客户端原值，HTTP 和 WebSocket 使用同一规则。

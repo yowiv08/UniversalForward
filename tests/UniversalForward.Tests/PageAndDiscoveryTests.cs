@@ -15,11 +15,14 @@ public sealed class PageAndDiscoveryTests
         using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
         var html = terminal.GetMainPage().Html;
         StringAssert.Contains(html, "tab-models");
+        StringAssert.Contains(html, "tab-reasoning");
+        StringAssert.Contains(html, "function readReasoningPolicy()");
         StringAssert.Contains(html, "templateCodex");
         StringAssert.Contains(html, "templateClaude");
         StringAssert.Contains(html, "mappingVisualPane");
         Assert.IsFalse(html.Contains("/*__STYLE__*/", StringComparison.Ordinal));
         Assert.IsFalse(html.Contains("/*__SCRIPT__*/", StringComparison.Ordinal));
+        Assert.IsFalse(html.Contains("/*__REASONING__*/", StringComparison.Ordinal));
         Assert.IsFalse(html.Contains("headerPass", StringComparison.Ordinal));
         Assert.IsFalse(html.Contains("confirm(", StringComparison.Ordinal));
     }

@@ -67,8 +67,9 @@
           <button type="button" id="tab-basic" role="tab" data-tab="basic" aria-controls="panel-basic" aria-selected="true"><span>01</span>基础设置</button>
           <button type="button" id="tab-keys" role="tab" data-tab="keys" aria-controls="panel-keys" aria-selected="false"><span>02</span>Key 管理</button>
           <button type="button" id="tab-models" role="tab" data-tab="models" aria-controls="panel-models" aria-selected="false"><span>03</span>模型与协议</button>
-          <button type="button" id="tab-headers" role="tab" data-tab="headers" aria-controls="panel-headers" aria-selected="false"><span>04</span>请求头</button>
-          <button type="button" id="tab-policy" role="tab" data-tab="policy" aria-controls="panel-policy" aria-selected="false"><span>05</span>重试与映射</button>
+          <button type="button" id="tab-reasoning" role="tab" data-tab="reasoning" aria-controls="panel-reasoning" aria-selected="false"><span>04</span>思考映射</button>
+          <button type="button" id="tab-headers" role="tab" data-tab="headers" aria-controls="panel-headers" aria-selected="false"><span>05</span>请求头</button>
+          <button type="button" id="tab-policy" role="tab" data-tab="policy" aria-controls="panel-policy" aria-selected="false"><span>06</span>重试与映射</button>
         </nav>
         <div class="editor-content">
           <section id="panel-basic" role="tabpanel" aria-labelledby="tab-basic">
@@ -94,6 +95,33 @@
             <div class="between"><h4>上游协议 <span id="protocolCount" class="count">0</span></h4><button id="syncProtocols" type="button" class="text-button">同步当前模型</button></div>
             <div id="protocolStatus" class="feedback" role="status" hidden></div>
             <div id="modelProtocols" class="protocol-list"></div>
+          </section>
+          <section id="panel-reasoning" role="tabpanel" aria-labelledby="tab-reasoning" hidden>
+            <div class="section-heading"><h3>思考等级映射</h3><p>将客户端等级映射为上游发送等级，或为模型固定等级</p></div>
+            <div class="field-row">
+              <div class="field"><label for="reasoningScope">配置范围</label><select id="reasoningScope"></select></div>
+              <div class="field"><label for="reasoningProtocol">上游接口</label><select id="reasoningProtocol"><option value="responses">OpenAI Responses</option><option value="messages">Anthropic Messages</option></select></div>
+            </div>
+            <label id="reasoningInheritance" class="inline-check" hidden><input id="reasoningUseDefault" type="checkbox">继承渠道规则</label>
+            <p id="reasoningSource" class="muted"></p>
+            <fieldset id="reasoningFields">
+              <div class="field"><label for="reasoningMode">处理方式</label><select id="reasoningMode"><option value="off">不改写</option><option value="map">按值映射</option><option value="fixed">固定等级</option></select></div>
+              <div id="reasoningMapSettings" hidden>
+                <div class="between"><h4>客户端等级 → 发送等级</h4></div>
+                <div id="reasoningRows"></div><button id="reasoningAdd" type="button" class="add-row">＋ 添加映射</button>
+                <div class="field reasoning-default"><label for="reasoningDefault">客户端未提供时</label><input id="reasoningDefault" list="reasoningLevels" placeholder="留空：沿用现有处理" autocomplete="off" spellcheck="false"><small>仅在客户端未传等级或值为 null 时使用；未命中的已有等级不变。</small></div>
+              </div>
+              <div id="reasoningFixedSettings" class="field" hidden><label for="reasoningFixed">固定发送等级</label><input id="reasoningFixed" list="reasoningLevels" placeholder="例如：max" autocomplete="off" spellcheck="false"><small>包含客户端未传等级的请求。</small></div>
+            </fieldset>
+            <datalist id="reasoningLevels"><option value="none"><option value="minimal"><option value="low"><option value="medium"><option value="high"><option value="xhigh"><option value="max"><option value="ultra"></datalist>
+            <p class="muted">可输入自定义等级，请使用上游模型支持的值。仅改写请求顶层等级，思考开关、Token 预算和聊天历史保持原样。</p>
+            <section class="reasoning-preview-box" aria-label="映射预览">
+              <h4>规则预览</h4>
+              <div class="field-row"><div class="field"><label for="reasoningPreviewModel">预览范围</label><select id="reasoningPreviewModel"></select></div><div class="field"><label for="reasoningPreviewInput">客户端等级</label><input id="reasoningPreviewInput" list="reasoningLevels" value="low" autocomplete="off" spellcheck="false"></div></div>
+              <label class="inline-check"><input id="reasoningPreviewMissing" type="checkbox">客户端未提供等级</label>
+              <div id="reasoningPreview" class="feedback" role="status"></div>
+              <small>预览不会发送请求。实际发送值与上游报告可在请求日志中核对。</small>
+            </section>
           </section>
           <section id="panel-headers" role="tabpanel" aria-labelledby="tab-headers" hidden>
             <div class="section-heading"><h3>请求头覆盖</h3><p>选择客户端模板，或编辑自定义请求头</p></div>
