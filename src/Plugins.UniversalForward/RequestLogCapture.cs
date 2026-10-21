@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Router.Contracts.Domain;
+using Router.Contracts.Host;
 
 namespace Plugins.UniversalForward;
 
@@ -49,6 +50,14 @@ internal sealed class RequestLogCapture
         {
             if (name == "incoming") _info["receivedReasoning"] = Reasoning(text);
             if (name == "extensions") _info["extensionReasoning"] = Reasoning(text);
+        }
+    }
+    public void SelectedProxy(ProxyPoolNode? proxy)
+    {
+        lock (_gate)
+        {
+            _info["proxy"] = JsonSerializer.SerializeToNode(proxy, RequestLogStore.Json);
+            Save();
         }
     }
     public void MappedReasoning(ReasoningMappingDecision decision)
@@ -104,6 +113,7 @@ internal sealed class RequestLogCapture
             {
                 ["number"] = number, ["method"] = request.Method.Method, ["url"] = request.RequestUri?.ToString(),
                 ["transport"] = transport,
+                ["proxy"] = _info["proxy"]?.DeepClone(),
                 ["startedMs"] = _watch.ElapsedMilliseconds, ["sentReasoning"] = Reasoning(text)
             };
             if (transport == "websocket") info["url"] = UpstreamWebSocket.Address(request.RequestUri!).ToString();

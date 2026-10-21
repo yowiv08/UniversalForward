@@ -2,12 +2,18 @@
 
 Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配置和连接测试。
 
+**0.3.0 兼容官方 Router2API 2.1.0（Router.Contracts 2.0.0）。** 更新 UniversalForward 插件即可，原渠道默认行为保留，无需数据库迁移。
+
 ## 渠道管理
 
 - 添加、编辑、删除和启停渠道。
 - 在渠道卡片上直接启用或禁用，保留渠道配置。
 - 配置渠道地址、权重、API Key 和允许端点。
-- 出站方式 `networkMode` 可选 `direct`（默认直连）或 `proxyPool`。代理池复用宿主全部启用订阅，无可用节点时返回 `503 proxy_pool_unavailable`，不回退直连。
+- 出站方式可选择直连、全部代理、指定订阅或指定节点；订阅中包含「手动节点」。`networkMode` 仍为 `direct`（默认）或 `proxyPool`，代理范围通过可选的 `proxySubscriptionIds` 和 `proxyId` 保存。
+- 空来源数组表示全部启用订阅及手动节点；`["manual"]` 表示仅手动节点。`proxyId` 为空或 `null` 表示不固定节点。保存接口省略代理字段时保留旧值，传空数组或空字符串可清除相应限制。
+- 指定节点必须同时满足来源范围与可用性；节点已删除、禁用、冷却或订阅停用时返回 `503 proxy_pool_unavailable`，不换其他节点，也不回退直连。目录刷新保留已失效的选择，待管理员主动调整。
+- 请求日志及连接测试详情记录实际使用的节点 ID、来源和无认证地址。代理目录不返回密码或订阅 URL。
+- 代理目录由插件通过现有 `IProxyStore`、`IProxySubscriptionService` 生成白名单投影；代理 HTTP 请求通过 `IProxyHttpClientFactory` 复用宿主已有连接池，沿用宿主的节点状态与订阅管理。
 - 出站方式统一用于转发、模型获取和连接测试；单次请求及其重试固定使用同一代理。获取模型使用表单草稿，刷新和连接测试使用已保存配置。
 - 按渠道名称、地址或模型筛选。
 - 分页签管理基础设置、Key、模型与协议、请求头、重试与映射。
@@ -46,7 +52,9 @@ Codex Responses 和 Claude Messages 模板使用上游流式传输；客户端�
 非流式汇总上限为 32 MiB；流中断或缺少结束事件返回明确错误。空错误响应附带原始状态码和请求追踪标识。
 
 - 重试次数：0–10次。
-- 响应头、总请求和流空闲超时：1–3600秒。
+- 渠道响应头、总请求和流空闲超时可设 1–3600 秒，同时受宿主执行预算限制；页面展示实际预算。
+- 成功 SSE 响应头或 WebSocket 握手后，通过 Contracts 2.0.0 已有执行接口通知宿主切换到响应体预算，再进行首个有效片段探测、流式转发或非流式汇总。
+- 建立响应尝试策略最多 300 秒、建立响应总策略最多 180 秒，且不能超过宿主配置。响应体预算默认 10 分钟，与渠道总时限中先到的截止时间生效。连接测试另受宿主 Job 时限约束。
 - 自定义重试状态码和响应状态码映射。
 - 响应异常重试：首次有效输出前支持限流与空回重试，SSE 实时透传。
 - 输出前检测到上游错误时保留原始状态码、Content-Type 和响应体，不转换为 429/502 JSON；关闭重试不关闭错误识别。
@@ -105,7 +113,7 @@ Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`。�
 }
 ```
 
-模型或接口条目缺失表示继承；`mode` 为 `off`、`map` 或 `fixed`。配置仍保存在现有渠道 settings JSON 中，无需升级宿主 Contracts 或迁移数据库。
+模型或接口条目缺失表示继承；`mode` 为 `off`、`map` 或 `fixed`。配置仍保存在现有渠道 settings JSON 中；思考映射规则本身无需额外 Contracts 变更或数据库迁移。
 
 ## 请求头配置
 
@@ -161,3 +169,23 @@ Codex 覆盖预设保留固定 User-Agent 和协议头，不重复填写会话�
 - 日志及日志设置仅保存在本次运行内存，不写入磁盘，重启或重新加载插件后清空。
 - 默认最多保留 1000 条，正文容量 64 MiB，每份正文最多 4 MiB；超限优先清理最旧的已结束日志。活动日志占满容量时丢弃新采集内容并提示，不影响转发。
 - 截断、采集缺失和异常中断均标记为不完整。日志故障不触发模型请求重试。
+
+## 本地构建与验证
+
+独立构建使用已发布的 NuGet 包 `Router.Contracts 2.0.0`。在插件仓库根目录运行：
+
+```powershell
+dotnet test tests/UniversalForward.Tests/UniversalForward.Tests.csproj -c Release
+./buildall.ps1
+```
+
+可选地使用官方 Router2API 2.1.0 源码联编和运行宿主集成测试，验证公开接口兼容性，无需修改或发布宿主：
+
+```powershell
+$contractsProject = 'D:\path\Router2API\src\Router.Contracts\Router.Contracts.csproj'
+dotnet test tests/UniversalForward.Tests/UniversalForward.Tests.csproj -c Release "-p:RouterContractsProject=$contractsProject"
+dotnet test tests/UniversalForward.HostIntegration/UniversalForward.HostIntegration.csproj -c Release '-p:RouterHostRoot=D:\path\Router2API' "-p:RouterContractsProject=$contractsProject"
+./buildall.ps1 -RouterContractsProject $contractsProject
+```
+
+插件安装包不包含 `Router.Contracts.dll`，运行时由官方宿主提供。本次发布只包含 UniversalForward 插件；代理选择和响应体预算修复使用宿主现有公开接口。

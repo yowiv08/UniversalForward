@@ -2,10 +2,17 @@
 
 Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配置和连接测试。
 
+当前源码版本为 **0.3.0**，兼容官方 **Router2API 2.1.0 / Router.Contracts 2.0.0**。直接更新 UniversalForward 插件即可，原渠道配置不需要数据库迁移。
+
 ## 渠道管理
 
 - 添加、编辑、删除和启停渠道。
 - 配置渠道地址、权重、API Key 和允许端点。
+- 按渠道选择直连、全部代理、指定订阅或指定节点；订阅中可单独选择「手动节点」。代理选择统一用于 HTTP、Responses WebSocket、模型获取及连接测试。
+- 指定节点仍须属于所选来源且处于可用状态；节点删除、禁用、冷却或订阅停用时明确报错，不切换其他节点或回退直连。一次请求及其重试固定使用同一个节点。
+- 代理目录可手动刷新；已失效的选择保留并提示，直到管理员主动调整。获取模型使用表单草稿，刷新模型和连接测试使用已保存配置。
+- 代理目录由插件通过宿主现有公开服务生成，只返回节点 ID、来源、状态和无认证地址等白名单字段；代理 HTTP 请求复用宿主已有连接池。
+- 请求日志及连接测试详情显示实际代理 ID、来源和地址，不展示代理认证信息。旧渠道仍沿用原来的直连或全部代理池设置。
 - 按渠道名称、地址或模型筛选。
 - 分页签管理基础设置、Key、模型与协议、请求头、重试与映射。
 
@@ -45,7 +52,9 @@ Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配�
 - 输出前检测到上游错误时保留原始状态码、Content-Type 和响应体，不转换为 429/502 JSON；关闭重试不关闭错误识别。
 - 已输出的 SSE 字节不改写；缺失结束事件、流错误或超时按失败结束并记录原因，不伪造完成事件、不重放请求。
 - 收到完整的 `response.completed`、`response.done`、`message_stop` 或 `[DONE]` 后结束读取，不再等待上游关闭连接；内容块结束或 `finish_reason` 不会提前截掉后续输出与用量。
-- 响应头、总请求和流空闲超时：1–3600秒。
+- 渠道响应头、总请求和流空闲超时可配置 1–3600 秒，同时受宿主执行预算限制；页面展示实际建立响应及响应读取上限。
+- 成功 SSE 响应头或 WebSocket 握手后，通过现有执行接口通知宿主切换到响应体预算，再开始首个有效片段探测或非流式汇总；避免已经开始响应的请求继续消耗建立响应预算。
+- 建立响应尝试策略最多 300 秒、建立响应总策略最多 180 秒，实际再取宿主配置的较小值。响应体预算默认 10 分钟，和渠道总时限中先到的截止时间生效；连接测试沿用宿主 Job 预算和渠道超时。
 - 总时限包含等待、重试和完整流式输出，到期会中断已开始的流；流空闲超时只限制连续无数据的时间。
 - 流超时日志区分 `total_timeout`（总时限）和 `stream_idle_timeout`（持续无数据），外部取消记录 `request_cancelled`，并注明取消信号来源、是否已有输出及是否收到结束事件。
 - 自定义重试状态码和响应状态码映射。
@@ -102,7 +111,7 @@ Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`。�
 }
 ```
 
-模型或接口条目缺失表示继承；`mode` 为 `off`、`map` 或 `fixed`。配置仍保存在现有渠道 settings JSON 中，无需升级宿主 Contracts 或迁移数据库。
+模型或接口条目缺失表示继承；`mode` 为 `off`、`map` 或 `fixed`。配置仍保存在现有渠道 settings JSON 中；思考映射规则本身无需额外 Contracts 变更或数据库迁移。
 
 ## 请求头配置
 
@@ -147,3 +156,30 @@ Codex 覆盖预设保留固定 User-Agent 和协议头，不重复填写会话�
 - 展示模型、Key、状态码、耗时、重试次数和错误详情。
 
 连接测试和重试会发送实际模型请求，可能产生费用。
+
+## 本地构建与验证
+
+独立构建使用已发布的 NuGet 包 `Router.Contracts 2.0.0`，不需要宿主源码。在插件仓库根目录运行：
+
+```powershell
+dotnet test tests/UniversalForward.Tests/UniversalForward.Tests.csproj -c Release
+./buildall.ps1
+```
+
+需要对官方 Router2API 2.1.0 源码进行兼容性验证时，可选用 Contracts 项目联编；无需修改宿主：
+
+```powershell
+$contractsProject = 'D:\path\Router2API\src\Router.Contracts\Router.Contracts.csproj'
+dotnet test tests/UniversalForward.Tests/UniversalForward.Tests.csproj -c Release "-p:RouterContractsProject=$contractsProject"
+./buildall.ps1 -RouterContractsProject $contractsProject
+```
+
+插件安装包不包含 `Router.Contracts.dll`，运行时由官方宿主提供。代理选择和响应体预算修复均使用现有公开接口，本次发布只包含 UniversalForward 插件。
+
+可选的宿主集成测试针对官方 Router2API 2.1.0 源码运行，使用真实执行器、连接池及本地 HTTP/WS 上游，验证慢首片段、非流式汇总和取消；无需修改宿主，也不读取生产配置或访问真实模型服务：
+
+```powershell
+dotnet test tests/UniversalForward.HostIntegration/UniversalForward.HostIntegration.csproj -c Release '-p:RouterHostRoot=D:\path\Router2API' "-p:RouterContractsProject=$contractsProject"
+```
+
+浏览器测试位于 `tests/browser`，使用 Playwright；模块不在默认查找路径时，通过 `PLAYWRIGHT_MODULE` 指向其目录。

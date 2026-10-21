@@ -76,8 +76,8 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         builder.ProxyPolicy(policy => policy
             .OnTransportFailure(() => new PluginAttemptDecision { Retry = PluginRetryAction.None, AccountAction = PluginAccountAction.None, ProxyAction = PluginProxyAction.None })
             .MaxAttempts(1)
-            .AttemptTimeoutSeconds(3600)
-            .TotalTimeoutSeconds(3600));
+            .AttemptTimeoutSeconds(300)
+            .TotalTimeoutSeconds(180));
     }
     public async ValueTask StartAsync(PluginStartContext context, CancellationToken cancellationToken)
     {
@@ -216,6 +216,8 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
             if (settings.RequestPolicy is null || settings.Endpoints is null) return false;
             settings.RequestPolicy.Validate();
             ValidateNetworkMode(settings.NetworkMode);
+            settings.ProxySubscriptionIds = NormalizeProxySubscriptionIds(settings.ProxySubscriptionIds);
+            settings.ProxyId = NormalizeProxyId(settings.ProxyId);
             UpstreamWebSocket.ValidateTransport(settings.ResponsesTransport);
             ChannelKeys.Validate(ReadKeys(settings), settings.KeySelectionMode);
             HeaderOverrides.ValidateConfiguration(settings.HeaderOverrideMode, settings.HeaderOverride, settings.EndpointHeaderOverrides);
@@ -288,6 +290,8 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         public ForwardApiSettings() { }
         public string BaseUrl { get; set; } = string.Empty;
         public string NetworkMode { get; set; } = "direct";
+        public string[] ProxySubscriptionIds { get; set; } = [];
+        public string? ProxyId { get; set; }
         public string ResponsesTransport { get; set; } = "http";
         public string ApiKey { get; set; } = string.Empty;
         public List<ChannelKey>? Keys { get; set; }

@@ -10,6 +10,7 @@ const row = {
   id: 'log-one', started: Date.now(), channel: 'channel', channelLabel: 'Log channel', model: 'model',
   endpoint: '/v1/responses', kind: 'forward', network: 'proxyPool', trace: 'trace-one', state: 'completed',
   status: 200, retries: 1, firstByteMs: 30, durationMs: 80, reasoningChanged: true,
+  proxy: { id: 'node-one', subscriptionId: 'manual', address: 'socks5://127.0.0.1:1080', state: 'Active', available: true },
   receivedReasoning: { 'reasoning.effort': 'xhigh' }, extensionReasoning: { reasoning_effort: 'low' },
   sentReasoning: { 'reasoning.effort': 'low' },
   reportedReasoning: { 'reasoning.effort': 'max', 'usage.output_tokens_details.reasoning_tokens': 34 }
@@ -54,12 +55,15 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     ]);
     assert.equal(await effort.locator('strong').count(), 0);
     assert.equal((await frame.locator('#journalRows').textContent()).includes('raw-secret'), false);
+    assert.match(await frame.locator('#journalRows').innerText(), /socks5:\/\/127\.0\.0\.1:1080/);
+    assert.match(await frame.locator('#journalRows').innerText(), /node-one/);
     await frame.locator('#journalRows').getByRole('button', { name: '详情' }).click();
     await frame.locator('#journalBody').filter({ hasText: 'raw-secret' }).waitFor();
     assert.equal(await frame.locator('#journalBody').textContent(), raw);
     assert.equal(await frame.locator('#journalBody img').count(), 0);
     assert.match(await frame.locator('#journalOverview').innerText(), /WebSocket/);
     assert.match(await frame.locator('#journalOverview').innerText(), /101/);
+    assert.match(await frame.locator('#journalOverview').innerText(), /实际代理.*socks5:\/\/127\.0\.0\.1:1080.*node-one/s);
     assert.match(await frame.locator('#journalPart option:checked').innerText(), /WebSocket 原始消息/);
     await page.screenshot({ path: path.resolve(__dirname, '../../artifacts/journal-redesign-desktop.png'), fullPage: true });
     await frame.locator('#journalCopy').click();

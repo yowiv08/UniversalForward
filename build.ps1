@@ -1,7 +1,8 @@
 #requires -Version 7
 param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot 'artifacts/plugins')
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot 'artifacts/plugins'),
+    [string]$RouterContractsProject
 )
 $ErrorActionPreference = 'Stop'
 $project = Join-Path $PSScriptRoot 'src/Plugins.UniversalForward/Plugins.UniversalForward.csproj'
@@ -10,8 +11,13 @@ if ((Test-Path -LiteralPath $output) -and @(Get-ChildItem -LiteralPath $output -
     throw "发行目录必须为空：$output"
 }
 $source = Join-Path $PSScriptRoot "artifacts/builds/$([Guid]::NewGuid().ToString('N'))"
-& dotnet publish $project -c $Configuration --no-self-contained -o $source `
-    --disable-build-servers -p:CopyLocalLockFileAssemblies=true
+$buildArguments = @('publish', $project, '-c', $Configuration, '--no-self-contained', '-o', $source,
+    '--disable-build-servers', '-p:CopyLocalLockFileAssemblies=true')
+if ($RouterContractsProject) {
+    $contractsPath = (Resolve-Path -LiteralPath $RouterContractsProject).Path
+    $buildArguments += "-p:RouterContractsProject=$contractsPath"
+}
+& dotnet @buildArguments
 if ($LASTEXITCODE -ne 0) { throw '插件构建失败。' }
 
 New-Item -ItemType Directory -Force -Path $output | Out-Null

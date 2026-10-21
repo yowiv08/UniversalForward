@@ -123,10 +123,7 @@ public sealed class NetworkModeTests
     {
         var account = Account("proxyPool");
         var host = ChannelKeysTests.Host(account);
-        var pool = new Mock<IProxyPoolHttpClientFactory>(MockBehavior.Strict);
-        pool.Setup(x => x.CreateClientAsync(It.IsAny<ProxyPoolHttpClientOptions>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new ProxyPoolUnavailableException());
-        Mock.Get(host.Services.Http).SetupGet(x => x.Pool).Returns(pool.Object);
+        PluginTestHost.ConfigureProxyServices(host, proxies: []);
         using var terminal = new UniversalForwardTerminal(host);
         var direct = new Mock<IPluginHttpClient>(MockBehavior.Strict);
         var invoke = await terminal.InvokeAsync(ChannelKeysTests.Attempt(account, direct.Object));
@@ -141,7 +138,7 @@ public sealed class NetworkModeTests
         }
         Assert.AreEqual(0, direct.Invocations.Count);
         Mock.Get(host.Services.Http).Verify(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()), Times.Never);
-        VerifyPool(host, 3);
+        VerifyPool(host, 0);
     }
 
     [TestMethod]
@@ -188,13 +185,10 @@ public sealed class NetworkModeTests
             return first;
         }, timeout.Token);
         var host = PluginTestHost.Create("universalforward");
-        var pool = new Mock<IProxyPoolHttpClientFactory>();
-        pool.Setup(x => x.CreateClientAsync(It.IsAny<ProxyPoolHttpClientOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => new HttpClient(new HttpClientHandler
+        PluginTestHost.ConfigureProxyServices(host, _ => new HttpClient(new HttpClientHandler
             {
                 UseProxy = true, Proxy = new WebProxy($"http://127.0.0.1:{endpoint.Port}")
             }));
-        Mock.Get(host.Services.Http).SetupGet(x => x.Pool).Returns(pool.Object);
         using var terminal = new UniversalForwardTerminal(host);
         var result = await terminal.DiscoverModelsAsync(ChannelKeysTests.Context(new
         { baseUrl = "http://upstream.invalid", apiKey = "test", networkMode = "proxyPool" }));
@@ -217,16 +211,11 @@ public sealed class NetworkModeTests
 
     private static void ConfigurePool(IPluginHost host, Handler handler)
     {
-        var pool = new Mock<IProxyPoolHttpClientFactory>(MockBehavior.Strict);
-        pool.Setup(x => x.CreateClientAsync(It.IsAny<ProxyPoolHttpClientOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => new HttpClient(handler));
-        Mock.Get(host.Services.Http).SetupGet(x => x.Pool).Returns(pool.Object);
+        PluginTestHost.ConfigureProxyServices(host, _ => new HttpClient(handler));
     }
 
     private static void VerifyPool(IPluginHost host, int times)
-        => Mock.Get(host.Services.Http.Pool).Verify(x => x.CreateClientAsync(
-            It.Is<ProxyPoolHttpClientOptions>(o => !o.AllowDirectFallback && o.SubscriptionIds == null),
-            It.IsAny<CancellationToken>()), Times.Exactly(times));
+        => PluginTestHost.ProxyClients(host).Verify(x => x.CreateClient(It.IsAny<ProxyEndpoint>(), "universalforward"), Times.Exactly(times));
 
     private static HttpResponseMessage Reply(HttpStatusCode status, string body, string type = "application/json")
         => new(status) { Content = new StringContent(body, Encoding.UTF8, type) };

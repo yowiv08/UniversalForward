@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <RouterContractsProject Condition="'$(RouterHostRoot)' != ''">$(RouterHostRoot)/src/Router.Contracts/Router.Contracts.csproj</RouterContractsProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../../src/Plugins.UniversalForward/Plugins.UniversalForward.csproj" />
+    <ProjectReference Include="$(RouterHostRoot)/src/Router.Host/Router.Host.csproj" Condition="'$(RouterHostRoot)' != ''" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="MSTest.TestAdapter" Version="4.4.1" />
+    <PackageReference Include="MSTest.TestFramework" Version="4.4.1" />
+    <PackageReference Include="Moq" Version="4.20.72" />
+  </ItemGroup>
+  <Target Name="RequireHostSource" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(RouterHostRoot)' == ''" Text="请使用 -p:RouterHostRoot=公开 Router2API 源码绝对路径运行宿主集成测试。" />
+  </Target>
+</Project>

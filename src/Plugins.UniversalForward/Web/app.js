@@ -52,6 +52,105 @@
     const b = el('button', text, cls); b.type = 'button'; b.addEventListener('click', work); return b;
   };
   const option = (value, title) => { const n = el('option', title); n.value = value; return n; };
+  let proxyCatalog = null, proxyCatalogError = '', proxyLoading = false, proxyRequest = 0;
+  let proxySourcesDraft = [], proxyIdDraft = '';
+  const sameId = (left, right) => String(left || '').toLowerCase() === String(right || '').toLowerCase();
+  const uniqueIds = values => [...new Map((values || []).filter(x => typeof x === 'string' && x.trim())
+    .map(x => [x.trim().toLowerCase(), x.trim()])).values()];
+  function readNetwork(validate = true) {
+    const networkMode = form.elements.networkMode.value, scope = $('proxyScope').value;
+    const proxySubscriptionIds = scope === 'manual' ? ['manual']
+      : scope === 'subscriptions' || scope === 'node' ? uniqueIds(proxySourcesDraft) : [];
+    const proxyId = scope === 'node' ? proxyIdDraft.trim() : '';
+    if (validate && networkMode === 'proxyPool') {
+      if (scope === 'subscriptions' && !proxySubscriptionIds.length) throw Error('请选择至少一个订阅来源，或使用全部可用代理');
+      if (scope === 'node' && !proxyId) throw Error('请选择固定代理节点');
+    }
+    return { networkMode, proxySubscriptionIds, proxyId: proxyId || null };
+  }
+  function networkChanged(account) {
+    const draft = readNetwork(false);
+    const sources = values => uniqueIds(values).map(x => x.toLowerCase()).sort();
+    return draft.networkMode !== (account.networkMode || 'direct') ||
+      !sameId(draft.proxyId, account.proxyId) ||
+      JSON.stringify(sources(draft.proxySubscriptionIds)) !== JSON.stringify(sources(account.proxySubscriptionIds));
+  }
+  function renderProxySettings() {
+    const pool = form.elements.networkMode.value === 'proxyPool', scope = $('proxyScope').value;
+    $('proxySettings').hidden = !pool;
+    $('refreshProxies').disabled = proxyLoading;
+    $('proxySubscriptionsField').hidden = !['subscriptions', 'node'].includes(scope);
+    $('proxyNodeField').hidden = scope !== 'node';
+    $('proxySubscriptionsLabel').textContent = scope === 'node' ? '节点来源（可选，留空表示全部来源）' : '订阅来源';
+    const sources = proxyCatalog?.subscriptions || [];
+    const root = $('proxySubscriptions'); root.replaceChildren();
+    const entries = [...sources];
+    if (!entries.some(x => sameId(x.id, 'manual'))) entries.push({ id: 'manual', name: '手动节点', enabled: true });
+    for (const id of proxySourcesDraft) if (!entries.some(x => sameId(x.id, id)))
+      entries.push({ id, name: id, enabled: false, missing: true });
+    for (const source of entries) {
+      const label = el('label', undefined, 'proxy-source'), input = el('input'); input.type = 'checkbox'; input.value = source.id;
+      input.checked = proxySourcesDraft.some(id => sameId(id, source.id));
+      const state = source.missing ? '（目录中不存在）' : source.enabled ? '' : '（已禁用）';
+      label.append(input, el('span', (source.name || source.id) + state));
+      input.onchange = () => {
+        proxySourcesDraft = input.checked ? uniqueIds([...proxySourcesDraft, source.id])
+          : proxySourcesDraft.filter(id => !sameId(id, source.id));
+        renderProxySettings();
+      };
+      root.append(label);
+    }
+    const nodes = proxyCatalog?.nodes || [];
+    const filtered = nodes.filter(node => !proxySourcesDraft.length || proxySourcesDraft.some(id => sameId(id, node.subscriptionId)));
+    const selectedNode = nodes.find(node => sameId(node.id, proxyIdDraft));
+    const select = $('proxyNode'); select.replaceChildren(option('', proxyLoading ? '正在读取代理目录…' : '请选择节点'));
+    for (const node of filtered) {
+      const source = sources.find(x => sameId(x.id, node.subscriptionId));
+      const state = node.available ? '' : ` · 不可用（${node.state || '未知状态'}）`;
+      select.append(option(node.id, `${node.address} · ${source?.name || node.subscriptionId}${state}`));
+    }
+    if (proxyIdDraft && !filtered.some(node => sameId(node.id, proxyIdDraft))) {
+      const title = selectedNode ? `${selectedNode.address} · 不在当前来源范围内`
+        : `${proxyIdDraft} · ${proxyCatalog ? '节点已删除或不在目录中' : '待核对目录'}`;
+      select.append(option(proxyIdDraft, title));
+    }
+    select.value = [...select.options].find(o => sameId(o.value, proxyIdDraft))?.value || '';
+    let hint = scope === 'all' ? '使用全部启用订阅及手动节点中的可用代理。'
+      : scope === 'manual' ? '只使用手动添加的可用节点，不混入订阅节点。'
+      : scope === 'subscriptions' ? '只使用勾选来源中的可用节点。' : '每次请求固定使用指定节点。';
+    let warning = false;
+    if (scope === 'node' && proxyIdDraft && proxyCatalog &&
+        (!selectedNode || !selectedNode.available || !filtered.some(node => sameId(node.id, proxyIdDraft)))) {
+      hint = '已保留当前节点选择，但该节点已失效、不可用或不在所选来源内。请求会报错，请检查选择。'; warning = true;
+    } else if (scope === 'subscriptions' && proxySourcesDraft.some(id => !entries.find(x => sameId(x.id, id))?.enabled)) {
+      hint = '已保留禁用或失效的订阅来源；这些来源不会提供可用节点。'; warning = true;
+    }
+    $('proxySelectionHint').textContent = hint;
+    $('proxySelectionHint').className = 'proxy-hint' + (warning ? ' is-warning' : '');
+    feedback('proxyCatalogStatus', proxyLoading ? '正在读取宿主代理目录…' : proxyCatalogError ||
+      (proxyCatalog ? `目录中有 ${nodes.length} 个节点，${nodes.filter(x => x.available).length} 个当前可用。` : ''), !!proxyCatalogError);
+  }
+  async function loadProxyCatalog() {
+    const epoch = editorEpoch, request = ++proxyRequest;
+    proxyLoading = true; proxyCatalogError = ''; renderProxySettings();
+    try {
+      const data = await api('GET', 'network/proxies');
+      if (epoch !== editorEpoch || request !== proxyRequest || !dialog.open) return;
+      proxyCatalog = { subscriptions: Array.isArray(data.subscriptions) ? data.subscriptions : [], nodes: Array.isArray(data.nodes) ? data.nodes : [] };
+      const execution = data.execution;
+      if (execution && ['setupTimeoutSeconds', 'totalSetupTimeoutSeconds', 'responseTimeoutSeconds'].every(k => Number.isFinite(execution[k]) && execution[k] > 0))
+        $('hostTimeoutHint').textContent = `宿主当前限制：单次建立响应 ${execution.setupTimeoutSeconds} 秒，建立响应总预算 ${execution.totalSetupTimeoutSeconds} 秒，进入响应后的读取预算 ${execution.responseTimeoutSeconds} 秒。渠道设置只能进一步缩短这些预算；填写 3600 秒不会覆盖宿主限制。`;
+    } catch (error) {
+      if (epoch !== editorEpoch || request !== proxyRequest || !dialog.open) return;
+      proxyCatalogError = '无法读取代理目录：' + error.message + '。已有选择会保留，可重试刷新。';
+    } finally {
+      if (epoch === editorEpoch && request === proxyRequest && dialog.open) { proxyLoading = false; renderProxySettings(); }
+    }
+  }
+  $('networkMode').onchange = renderProxySettings;
+  $('proxyScope').onchange = renderProxySettings;
+  $('proxyNode').onchange = () => { proxyIdDraft = $('proxyNode').value; renderProxySettings(); };
+  $('refreshProxies').onclick = loadProxyCatalog;
   const modelIds = () => [...new Set(form.elements.models.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean))];
   const objectJson = (text, label) => {
     let value;
@@ -201,6 +300,13 @@
     $('formTitle').textContent = account ? '编辑渠道' : '添加渠道';
     for (const name of ['id', 'label', 'baseUrl']) form.elements[name].value = account?.[name] || '';
     form.elements.networkMode.value = account?.networkMode || 'direct';
+    proxySourcesDraft = uniqueIds(account?.proxySubscriptionIds);
+    proxyIdDraft = account?.proxyId || '';
+    $('proxyScope').value = proxyIdDraft ? 'node' : proxySourcesDraft.length === 1 && sameId(proxySourcesDraft[0], 'manual')
+      ? 'manual' : proxySourcesDraft.length ? 'subscriptions' : 'all';
+    proxyCatalog = null; proxyCatalogError = ''; proxyLoading = false;
+    $('hostTimeoutHint').textContent = '渠道超时还受宿主的建立响应和响应读取预算限制。填写 3600 秒不代表每个阶段都能等待 3600 秒。';
+    renderProxySettings();
     form.elements.responsesTransport.value = account?.responsesTransport || 'http';
     form.elements.weight.value = account?.weight ?? 100;
     form.elements.enabled.checked = account?.enabled ?? true;
@@ -230,6 +336,7 @@
     $('refreshModels').disabled = !account;
     renderKeys(); showCandidates(); renderProtocols(); renderHeaders(); renderMappings(); updateModes(); summary();
     selectTab('basic'); if (!dialog.open) dialog.showModal();
+    loadProxyCatalog();
   }
   function closeEditor() { if (saving) return; editorEpoch++; dialog.close(); }
   $('close').onclick = closeEditor; $('cancel').onclick = closeEditor;
@@ -323,13 +430,13 @@
       const key = keyId ? keyDraft.find(k => (k.id || k.uiId) === keyId && k.enabled) : keyDraft.find(k => k.enabled);
       if (!key) throw Error('请先在 Key 管理中添加并启用 Key');
       const baseUrl = form.elements.baseUrl.value.trim();
-      const networkMode = form.elements.networkMode.value;
+      const network = readNetwork();
       if (!/^https?:\/\//i.test(baseUrl)) throw Error('请先填写有效的 Base URL');
       let body, route;
       if (refresh) {
         if (!savedAccount) throw Error('刷新候选需要先保存渠道');
-        if (networkMode !== (savedAccount.networkMode || 'direct'))
-          throw Error('出站方式尚未保存，请使用获取候选模型或先保存渠道');
+        if (networkChanged(savedAccount))
+          throw Error('出站方式或代理选择尚未保存，请使用获取候选模型或先保存渠道');
         if (!key.id || key.secret.trim() || baseUrl.replace(/\/+$/, '') !== savedAccount.baseUrl.replace(/\/+$/, ''))
           throw Error('当前连接配置尚未保存，请使用获取候选模型');
         const canonical = value => JSON.stringify(Object.keys(value || {}).sort().map(k =>
@@ -342,7 +449,7 @@
         route = 'models/refresh'; body = { id: savedAccount.id, keyId: key.id };
       } else {
         route = 'models/discover';
-        body = { id: savedAccount?.id || null, baseUrl, networkMode, headerOverride: commonHeaderDraft, extraParams };
+        body = { id: savedAccount?.id || null, baseUrl, ...network, headerOverride: commonHeaderDraft, extraParams };
         if (key.secret.trim()) body.apiKey = key.secret.trim(); else body.keyId = key.id;
       }
       const data = await api('POST', route, body);
@@ -617,10 +724,12 @@
       const requestPolicy = { statusCodeMapping };
       for (const name of ['rateLimitRetryEnabled', 'emptyResponseRetryEnabled']) requestPolicy[name] = form.elements[name].checked;
       for (const name of Object.keys(defaults)) requestPolicy[name] = name === 'retryStatusCodes' ? form.elements[name].value : Number(form.elements[name].value);
+      let network;
+      try { network = readNetwork(); } catch (e) { fail(e.message, 'basic', 'proxyScope'); }
       saving = true; $('save').disabled = true; $('save').textContent = '保存中…';
       const saved = await api('POST', 'accounts/save', {
         id: form.elements.id.value || null, label: form.elements.label.value.trim(), baseUrl: form.elements.baseUrl.value.trim(),
-        networkMode: form.elements.networkMode.value,
+        ...network,
         responsesTransport: form.elements.responsesTransport.value,
         keys, deletedKeyIds, keyRevision, keySelectionMode: $('keySelectionMode').value, weight: Number(form.elements.weight.value),
         enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, reasoningPolicy, requestPolicy, headerOverride,
@@ -677,7 +786,7 @@
       const ops = el('td'), run = button('测试', () => startTests([model])); run.disabled = testBusy(); ops.append(run);
       if (results.length) ops.append(button('详情', () => {
         $('testDetails').textContent = results.map(r =>
-          `${r.keyName || r.keyId || '按策略'} · 出站方式：${r.networkMode === 'proxyPool' ? '代理池' : '直连'} · 上游连接：${r.transport === 'websocket' ? 'WebSocket' : 'HTTP'}\n${r.response || r.error || '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
+          `${r.keyName || r.keyId || '按策略'} · 出站方式：${r.networkMode === 'proxyPool' ? '代理池' : '直连'} · 上游连接：${r.transport === 'websocket' ? 'WebSocket' : 'HTTP'}${r.proxy ? `\n实际代理：${r.proxy.address} · ${r.proxy.id}` : ''}\n${r.response || r.error || '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
         ).join('\n\n');
         const overview = $('testDetailOverview'); overview.replaceChildren();
         for (const r of results) {
@@ -685,6 +794,7 @@
           section.append(el('h4', r.keyName || r.keyId || '按渠道策略'));
           for (const [label, value] of [['模型', model], ['状态', r.cancelled ? '已取消' : r.success ? '成功' : '失败'],
             ['出站方式', r.networkMode === 'proxyPool' ? '代理池' : '直连'], ['上游连接', r.transport === 'websocket' ? 'WebSocket' : 'HTTP'],
+            ...(r.proxy ? [['实际代理', r.proxy.address], ['代理 ID', r.proxy.id], ['代理来源', r.proxy.subscriptionId]] : []),
             ['状态码', `${r.originalStatus ?? '—'} → ${r.mappedStatus ?? '—'}`],
             ['响应时间', `${r.durationMs ?? '—'} ms`], ['重试次数', String(r.retries ?? 0)]]) values.append(el('dt', label), el('dd', value));
           section.append(values); overview.append(section);
@@ -699,7 +809,7 @@
   }
   function openTests(account) {
     if (dialog.open && savedAccount?.id === account.id &&
-        (form.elements.networkMode.value !== (account.networkMode || 'direct') ||
+        (networkChanged(account) ||
          form.elements.responsesTransport.value !== (account.responsesTransport || 'http'))) {
       feedback('formError', '连接设置尚未保存，请先保存渠道再测试', true); return;
     }

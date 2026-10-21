@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Net;
 using System.Runtime.CompilerServices;
@@ -93,12 +94,18 @@ public sealed partial class UniversalForwardTerminal
             var clientHeaders = isTest ? new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
                 : ForwardHeaders.ReadClientHeaders(context.Request, extra);
             var clientHeaderText = clientHeaders.ToDictionary(p => p.Key, p => string.Join(", ", p.Value), StringComparer.OrdinalIgnoreCase);
+            var selectedProxy = (context.HttpClient as ConnectionTestClient)?.Proxy;
+            capture?.SelectedProxy(selectedProxy);
             var websocket = settings.ResponsesTransport == "websocket" && upstreamEndpoint == "/v1/responses";
             if ((settings.NetworkMode == "proxyPool" || websocket) && !isTest)
-                networkClient = await CreateNetworkClientAsync(settings.NetworkMode, false, total.Token);
+                networkClient = await CreateNetworkClientAsync(settings, total.Token, proxy =>
+                {
+                    selectedProxy = proxy;
+                    capture?.SelectedProxy(proxy);
+                });
             await TryLogAsync("request.network.selected", $"出站方式: {settings.NetworkMode}",
                 traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
-                details: new { networkMode = settings.NetworkMode });
+                details: new { networkMode = settings.NetworkMode, proxy = selectedProxy });
             var headerConfig = HeaderOverrides.Select(settings.HeaderOverrideMode, settings.HeaderOverride,
                 settings.EndpointHeaderOverrides, upstreamEndpoint);
             HeaderOverrides.Validate(headerConfig);
@@ -151,6 +158,7 @@ public sealed partial class UniversalForwardTerminal
                 capture?.MappedReasoning(reasoningMapping);
             }
             if (websocket) payload = UpstreamWebSocket.CreatePayload(payload);
+            var responseStarted = false;
             var targetEndpoint = profile == "claude" && upstreamEndpoint == "/v1/messages"
                 ? upstreamEndpoint + "?beta=true" : upstreamEndpoint;
             for (var attempt = 0; ;)
@@ -175,6 +183,13 @@ public sealed partial class UniversalForwardTerminal
                         ? await networkClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headerBudget.Token)
                         : await context.HttpClient.SendAsync(request, false,
                             HttpCompletionOption.ResponseHeadersRead, headerBudget.Token);
+                    // 独立代理池和 WebSocket 不经过宿主 attempt client，必须在读取响应体前切换预算。
+                    if (!responseStarted && response.IsSuccessStatusCode
+                        && string.Equals(response.Content.Headers.ContentType?.MediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase))
+                    {
+                        context.NotifyUpstreamResponseStarted?.Invoke();
+                        responseStarted = true;
+                    }
                     capture?.Received(logAttempt, response);
                 }
                 catch (Exception error) when (error is HttpRequestException or OperationCanceledException)
@@ -349,6 +364,11 @@ public sealed partial class UniversalForwardTerminal
                 return Completed(output, originalCode);
             }
         }
+        catch (ProxyServicesUnavailableException error)
+        {
+            return Completed(RawResponse(503, JsonSerializer.SerializeToUtf8Bytes(new
+            { error = new { message = error.Message, code = "proxy_selection_not_supported" } }), "application/json"), 0, PluginFailureKind.Plugin);
+        }
         catch (ProxyPoolUnavailableException)
         {
             await TryLogAsync("request.network.failed", ProxyUnavailableMessage, "Error", context.TraceId,
@@ -500,56 +520,61 @@ public sealed partial class UniversalForwardTerminal
         using (var probe = verifySse ? new ForwardStreamProbe() : null)
         {
             var stream = await lifetime.Response.Content.ReadAsStreamAsync(linked.Token);
-            var buffer = new byte[16384];
-            linked.Token.ThrowIfCancellationRequested();
-            if (!prefix.IsEmpty) yield return prefix;
-            if (!prefix.IsEmpty) await ObserveAsync(prefix, false);
-            // Resume once after yielding the final bytes so the writer can still
-            // report a failed write. Do not wait for TCP EOF after a protocol end.
-            while (probe?.Completed != true)
+            var buffer = ArrayPool<byte>.Shared.Rent(16384);
+            try
             {
-                using var idle = CancellationTokenSource.CreateLinkedTokenSource(linked.Token);
-                idle.CancelAfter(TimeSpan.FromSeconds(idleSeconds));
-                int count;
-                try { count = await stream.ReadAsync(buffer, idle.Token); }
-                catch (Exception error) when (error is OperationCanceledException or IOException or HttpRequestException)
+                linked.Token.ThrowIfCancellationRequested();
+                if (!prefix.IsEmpty) yield return prefix;
+                if (!prefix.IsEmpty) await ObserveAsync(prefix, false);
+                // Resume once after yielding the final bytes so the writer can still
+                // report a failed write. Do not wait for TCP EOF after a protocol end.
+                while (probe?.Completed != true)
                 {
-                    var reason = context.CancellationToken.IsCancellationRequested || cancellationToken.IsCancellationRequested
-                        ? "request_cancelled" : lifetime.Token.IsCancellationRequested ? "total_timeout"
-                        : idle.IsCancellationRequested ? "stream_idle_timeout" : "stream_interrupted";
-                    var cancellationSource = cancellationToken.IsCancellationRequested ? "downstream"
-                        : context.CancellationToken.IsCancellationRequested ? "host_or_caller"
-                        : lifetime.Token.IsCancellationRequested ? "plugin_total_timeout"
-                        : idle.IsCancellationRequested ? "stream_idle_timeout" : "upstream";
-                    var message = reason + ": " + (reason switch
+                    using var idle = CancellationTokenSource.CreateLinkedTokenSource(linked.Token);
+                    idle.CancelAfter(TimeSpan.FromSeconds(idleSeconds));
+                    int count;
+                    try { count = await stream.ReadAsync(buffer.AsMemory(0, 16384), idle.Token); }
+                    catch (Exception error) when (error is OperationCanceledException or IOException or HttpRequestException)
                     {
-                        "total_timeout" => $"请求总时限 {settings.RequestPolicy.TotalTimeoutSeconds} 秒已耗尽，尚未收到完整结束事件",
-                        "stream_idle_timeout" => $"上游连续 {idleSeconds} 秒未发送数据，尚未收到完整结束事件",
-                        "request_cancelled" => cancellationSource == "downstream" ? "下游已取消请求或停止读取响应" : "宿主或调用方已取消转发请求",
-                        _ => "上游响应流异常中断"
-                    });
-                    await TryLogAsync("request.stream.failed", message, "Error", context.TraceId,
-                        context.Account.Id, context.Request.Model, (int)lifetime.Response.StatusCode,
-                        details: new { reason, cancellationSource, idleSeconds, totalSeconds = settings.RequestPolicy.TotalTimeoutSeconds,
-                            hasOutput = probe?.Analysis.HasOutput, terminalReceived = probe?.Analysis.StreamEnded });
-                    if (error is OperationCanceledException)
-                    {
-                        if (reason is "total_timeout" or "stream_idle_timeout") throw new TimeoutException(message, error);
-                        if (reason == "request_cancelled") throw new OperationCanceledException(message, error,
-                            cancellationToken.IsCancellationRequested ? cancellationToken : context.CancellationToken);
-                        throw new IOException(message, error);
+                        var reason = context.CancellationToken.IsCancellationRequested || cancellationToken.IsCancellationRequested
+                            ? "request_cancelled" : lifetime.Token.IsCancellationRequested ? "total_timeout"
+                            : idle.IsCancellationRequested ? "stream_idle_timeout" : "stream_interrupted";
+                        var cancellationSource = cancellationToken.IsCancellationRequested ? "downstream"
+                            : context.CancellationToken.IsCancellationRequested ? "host_or_caller"
+                            : lifetime.Token.IsCancellationRequested ? "plugin_total_timeout"
+                            : idle.IsCancellationRequested ? "stream_idle_timeout" : "upstream";
+                        var message = reason + ": " + (reason switch
+                        {
+                            "total_timeout" => $"请求总时限 {settings.RequestPolicy.TotalTimeoutSeconds} 秒已耗尽，尚未收到完整结束事件",
+                            "stream_idle_timeout" => $"上游连续 {idleSeconds} 秒未发送数据，尚未收到完整结束事件",
+                            "request_cancelled" => cancellationSource == "downstream" ? "下游已取消请求或停止读取响应" : "宿主或调用方已取消转发请求",
+                            _ => "上游响应流异常中断"
+                        });
+                        await TryLogAsync("request.stream.failed", message, "Error", context.TraceId,
+                            context.Account.Id, context.Request.Model, (int)lifetime.Response.StatusCode,
+                            details: new { reason, cancellationSource, idleSeconds, totalSeconds = settings.RequestPolicy.TotalTimeoutSeconds,
+                                hasOutput = probe?.Analysis.HasOutput, terminalReceived = probe?.Analysis.StreamEnded });
+                        if (error is OperationCanceledException)
+                        {
+                            if (reason is "total_timeout" or "stream_idle_timeout") throw new TimeoutException(message, error);
+                            if (reason == "request_cancelled") throw new OperationCanceledException(message, error,
+                                cancellationToken.IsCancellationRequested ? cancellationToken : context.CancellationToken);
+                            throw new IOException(message, error);
+                        }
+                        throw;
                     }
-                    throw;
+                    if (count == 0)
+                    {
+                        await ObserveAsync(default, true);
+                        yield break;
+                    }
+                    // 本块借用本流缓冲区，调用方必须在下一次 MoveNextAsync 前消费完毕。
+                    yield return buffer.AsMemory(0, count);
+                    await ObserveAsync(buffer.AsMemory(0, count), false);
                 }
-                if (count == 0)
-                {
-                    await ObserveAsync(default, true);
-                    yield break;
-                }
-                yield return buffer.AsMemory(0, count).ToArray();
-                await ObserveAsync(buffer.AsMemory(0, count), false);
+                onCompleted?.Invoke();
             }
-            onCompleted?.Invoke();
+            finally { ArrayPool<byte>.Shared.Return(buffer); }
 
             async Task ObserveAsync(ReadOnlyMemory<byte> bytes, bool end)
             {

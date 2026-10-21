@@ -77,7 +77,15 @@
             <div class="field"><label for="label">渠道名称</label><input id="label" name="label" placeholder="例如：主力推理渠道" required maxlength="120"></div>
             <div class="field"><label for="baseUrl">Base URL</label><input id="baseUrl" name="baseUrl" type="url" placeholder="https://api.example.com/v1" required></div>
             <div class="field"><label for="responsesTransport">Responses 上游连接</label><select id="responsesTransport" name="responsesTransport"><option value="http">HTTP / SSE</option><option value="websocket">WebSocket</option></select><small>WebSocket 仅用于上游 Responses；Messages 和模型获取仍使用 HTTP。每次请求独立连接，失败不回退 HTTP。</small></div>
-            <div class="field"><label for="networkMode">出站方式</label><select id="networkMode" name="networkMode"><option value="direct">直连</option><option value="proxyPool">代理池</option></select><small>代理池使用宿主全部启用订阅中的可用节点；无可用节点时报错，不回退直连。适用于转发、模型获取和连接测试。</small></div>
+            <div class="field"><label for="networkMode">出站方式</label><select id="networkMode" name="networkMode"><option value="direct">直连</option><option value="proxyPool">代理池</option></select><small>适用于转发、WebSocket、模型获取和连接测试。代理不可用时明确报错，不回退直连。</small></div>
+            <div id="proxySettings" class="proxy-settings" hidden>
+              <div class="between"><label for="proxyScope">代理选择</label><button id="refreshProxies" type="button" class="text-button">刷新代理目录</button></div>
+              <div class="field"><select id="proxyScope"><option value="all">全部可用代理</option><option value="subscriptions">指定订阅</option><option value="manual">仅手动节点</option><option value="node">指定节点</option></select><small>全池或订阅范围内随机选择；同一次请求及重试固定使用选中的节点。</small></div>
+              <div id="proxySubscriptionsField" class="field" hidden><label id="proxySubscriptionsLabel">订阅来源</label><div id="proxySubscriptions" class="proxy-subscriptions" role="group" aria-labelledby="proxySubscriptionsLabel"></div></div>
+              <div id="proxyNodeField" class="field" hidden><label for="proxyNode">固定代理节点</label><select id="proxyNode"></select><small>节点被删除、停用或冷却后请求会失败，不会自动换节点。</small></div>
+              <div id="proxySelectionHint" class="proxy-hint" role="status"></div>
+              <div id="proxyCatalogStatus" class="feedback" role="status" hidden></div>
+            </div>
             <div class="field-row"><div class="field"><label for="weight">渠道权重</label><input id="weight" name="weight" type="number" min="0" max="1000" value="100" required><small>0–1000</small></div><div class="field"><label>渠道状态</label><label class="switch-card"><input name="enabled" type="checkbox" checked><span>启用渠道</span></label></div></div>
             <div class="field"><label>允许端点</label><div id="endpoints" class="endpoint-grid"></div></div>
           </section>
@@ -140,6 +148,7 @@
             <div class="section-heading"><h3>重试与映射</h3><p>设置请求时限、重试条件和返回状态</p></div>
             <div class="field-row"><div class="field"><label for="maxRetries">重试次数</label><input id="maxRetries" name="maxRetries" type="number" min="0" max="10" value="0" required><small>0–10次</small></div><div class="field"><label for="headerTimeoutSeconds">响应头超时</label><div class="input-unit"><input id="headerTimeoutSeconds" name="headerTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div></div><div class="field"><label for="totalTimeoutSeconds">总时限</label><div class="input-unit"><input id="totalTimeoutSeconds" name="totalTimeoutSeconds" type="number" min="1" max="3600" value="180" required><span>秒</span></div></div><div class="field"><label for="streamIdleTimeoutSeconds">流空闲超时</label><div class="input-unit"><input id="streamIdleTimeoutSeconds" name="streamIdleTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div></div></div>
             <p class="field-hint">总时限包含等待、重试和完整流式输出，到期会中断已开始的流；流空闲超时只限制连续无数据的时间。</p>
+            <p id="hostTimeoutHint" class="field-hint muted">渠道超时还受宿主的建立响应和响应读取预算限制。填写 3600 秒不代表每个阶段都能等待 3600 秒。</p>
             <div class="field"><label for="retryStatusCodes">自动重试状态码</label><input id="retryStatusCodes" name="retryStatusCodes" placeholder="例如 429,500-503"><small>用逗号分隔状态码或区间</small></div>
             <section class="response-retry-card" aria-labelledby="responseRetryTitle">
               <div class="section-heading"><h4 id="responseRetryTitle">响应异常重试</h4><p>首次有效输出前重试，开始输出后实时透传</p></div>

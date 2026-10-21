@@ -101,6 +101,7 @@ public sealed partial class UniversalForwardTerminal
             string? keyName = null;
             ConnectionTestClient? captureClient = null;
             string? networkMode = null;
+            ProxyPoolNode? selectedProxy = null;
             try
             {
                 var account = await _host.Accounts.GetAsync(input.AccountId, job.CancellationToken)
@@ -110,9 +111,9 @@ public sealed partial class UniversalForwardTerminal
                 var selectedKey = _keySelector.Select(account.Id, ReadKeys(settings), settings.KeySelectionMode, requestedKeyId);
                 keyId = selectedKey.Id; keyName = selectedKey.Name;
                 var endpoint = TestEndpoint(settings, model, input.Endpoint);
-                using var http = await CreateNetworkClientAsync(settings.NetworkMode, false, job.CancellationToken);
+                using var http = await CreateNetworkClientAsync(settings, job.CancellationToken, proxy => selectedProxy = proxy);
                 http.Timeout = Timeout.InfiniteTimeSpan;
-                using var client = new ConnectionTestClient(http, () => sends++, keyId);
+                using var client = new ConnectionTestClient(http, () => sends++, keyId, selectedProxy);
                 captureClient = client;
                 var body = CreateTestBody(model, endpoint, input.Stream, input.Content, input.MaxOutputTokens);
                 var result = await InvokeAsync(new PluginAttemptContext
@@ -206,7 +207,7 @@ public sealed partial class UniversalForwardTerminal
                 var status = result.Attempt.StatusCode ?? result.Response.StatusCode;
                 rows.Add(new
                 {
-                    model, keyId, keyName, endpoint, networkMode, transport = client.Transport, success = status is >= 200 and < 300 && valid,
+                    model, keyId, keyName, endpoint, networkMode, proxy = selectedProxy, transport = client.Transport, success = status is >= 200 and < 300 && valid,
                     originalStatus = status, mappedStatus = result.Response.StatusCode,
                     durationMs = watch.ElapsedMilliseconds, firstEventMs, retries = Math.Max(0, sends - 1), error,
                     response = client.RawBody, responseTruncated = client.Truncated
@@ -215,10 +216,11 @@ public sealed partial class UniversalForwardTerminal
             catch (OperationCanceledException) when (job.CancellationToken.IsCancellationRequested) { throw; }
             catch (Exception error)
             {
-                rows.Add(new { model, keyId, keyName, networkMode, transport = captureClient?.Transport, success = false, durationMs = watch.ElapsedMilliseconds,
+                rows.Add(new { model, keyId, keyName, networkMode, proxy = selectedProxy, transport = captureClient?.Transport, success = false, durationMs = watch.ElapsedMilliseconds,
                     firstEventMs, retries = Math.Max(0, sends - 1),
-                    mappedStatus = error is ProxyPoolUnavailableException ? 503 : (int?)null,
-                    code = error is ProxyPoolUnavailableException ? "proxy_pool_unavailable" : null,
+                    mappedStatus = error is ProxyPoolUnavailableException or ProxyServicesUnavailableException ? 503 : (int?)null,
+                    code = error is ProxyServicesUnavailableException ? "proxy_selection_not_supported"
+                        : error is ProxyPoolUnavailableException ? "proxy_pool_unavailable" : null,
                     error = error is ProxyPoolUnavailableException ? ProxyUnavailableMessage : error.Message,
                     response = captureClient?.RawBody, responseTruncated = captureClient?.Truncated ?? false });
             }
@@ -315,7 +317,7 @@ public sealed partial class UniversalForwardTerminal
         public string?[]? KeyIds { get; init; }
     }
 
-    private sealed class ConnectionTestClient(HttpClient client, Action sent, string? keyId) : IPluginHttpClient, IDisposable
+    private sealed class ConnectionTestClient(HttpClient client, Action sent, string? keyId, ProxyPoolNode? proxy = null) : IPluginHttpClient, IDisposable
     {
         private readonly MemoryStream _capture = new();
         public string RawBody => Encoding.UTF8.GetString(_capture.ToArray());
@@ -324,6 +326,7 @@ public sealed partial class UniversalForwardTerminal
         public void Dispose() => _capture.Dispose();
         public string? KeyId { get; } = keyId;
         public ChannelKey? SelectedKey { get; set; }
+        public ProxyPoolNode? Proxy { get; } = proxy;
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption option, CancellationToken ct)
             => SendAsync(request, false, option, ct);
         public async Task<HttpResponseMessage> SendWebSocketAsync(HttpRequestMessage request, byte[] payload,

@@ -399,9 +399,7 @@ public sealed class UpstreamWebSocketTests
         StringAssert.StartsWith(proxyHead, $"CONNECT upstream.invalid:{(tls ? 443 : 80)} HTTP/1.1\r\n");
         Assert.AreEqual("GET /v1/responses HTTP/1.1", requestLine);
         Mock.Get(host.Services.Http).Verify(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()), Times.Never);
-        Mock.Get(host.Services.Http.Pool).Verify(x => x.CreateClientAsync(
-            It.Is<ProxyPoolHttpClientOptions>(options => !options.AllowDirectFallback && !options.AllowAutoRedirect),
-            It.IsAny<CancellationToken>()), Times.Once);
+        PluginTestHost.ProxyClients(host).Verify(x => x.CreateClient(It.IsAny<ProxyEndpoint>(), "universalforward"), Times.Once);
 
         async Task<string> ProxyAsync()
         {
@@ -423,8 +421,7 @@ public sealed class UpstreamWebSocketTests
     {
         var account = Account(new Uri("https://upstream.invalid/v1/responses"), "proxyPool");
         var host = ChannelKeysTests.Host(account);
-        Mock.Get(host.Services.Http.Pool).Setup(x => x.CreateClientAsync(It.IsAny<ProxyPoolHttpClientOptions>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new ProxyPoolUnavailableException());
+        PluginTestHost.ConfigureProxyServices(host, proxies: []);
         using var terminal = new UniversalForwardTerminal(host);
         Assert.AreEqual(503, (await terminal.InvokeAsync(Context(account, true))).Response.StatusCode);
         Mock.Get(host.Services.Http).Verify(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()), Times.Never);
@@ -544,8 +541,7 @@ public sealed class UpstreamWebSocketTests
     {
         var host = ChannelKeysTests.Host(account);
         if (mode == "proxyPool")
-            Mock.Get(host.Services.Http.Pool).Setup(x => x.CreateClientAsync(It.IsAny<ProxyPoolHttpClientOptions>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(create);
+            PluginTestHost.ConfigureProxyServices(host, _ => create());
         else
             Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>())).Returns(create);
         return host;

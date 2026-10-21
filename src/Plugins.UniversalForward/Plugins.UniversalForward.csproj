@@ -1,12 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <RootNamespace>Plugins.UniversalForward</RootNamespace>
-    <Version>0.2.9</Version>
+    <Version>0.3.0</Version>
     <AssemblyName>Plugins.UniversalForward</AssemblyName>
-    <Description>上游渠道管理、多 Key 分配、模型与协议配置、思考等级映射、JSON/SSE 转发、请求头覆盖及连接测试。</Description>
+    <Description>上游渠道管理、多 Key 分配、指定代理节点与订阅、模型与协议配置、JSON/SSE 和 WebSocket 转发、思考映射及连接测试。</Description>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Router.Contracts" Version="2.0.0" />
+    <PackageReference Include="Router.Contracts" Version="2.0.0" Condition="'$(RouterContractsProject)' == ''" />
+    <!-- 联调公开宿主源码时显式传入路径；独立发行默认使用 NuGet 契约包。 -->
+    <ProjectReference Include="$(RouterContractsProject)" Condition="'$(RouterContractsProject)' != ''" />
     <EmbeddedResource Include="Web\*" />
     <EmbeddedResource Include="Contracts\*" />
     <Content Include="Contracts\CODEX-LICENSE.txt;Contracts\CODEX-NOTICE.md" CopyToPublishDirectory="PreserveNewest" />

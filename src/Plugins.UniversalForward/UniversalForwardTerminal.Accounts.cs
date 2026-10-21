@@ -80,7 +80,15 @@ public sealed partial class UniversalForwardTerminal
         catch (FormatException error) { return context.BadRequest(error.Message); }
         var policy = input.RequestPolicy ?? previous.RequestPolicy;
         var networkMode = input.NetworkMode ?? previous.NetworkMode;
-        try { ValidateNetworkMode(networkMode); }
+        string[] proxySubscriptionIds;
+        string? proxyId;
+        try
+        {
+            ValidateNetworkMode(networkMode);
+            proxySubscriptionIds = NormalizeProxySubscriptionIds(BodyContainsProperty(context.Body, "proxySubscriptionIds")
+                ? input.ProxySubscriptionIds : previous.ProxySubscriptionIds);
+            proxyId = NormalizeProxyId(BodyContainsProperty(context.Body, "proxyId") ? input.ProxyId : previous.ProxyId);
+        }
         catch (FormatException error) { return context.BadRequest(error.Message); }
         try { policy.Validate(); } catch (FormatException error) { return context.BadRequest(error.Message); }
         var headerOverride = input.HeaderOverride ?? previous.HeaderOverride;
@@ -92,6 +100,8 @@ public sealed partial class UniversalForwardTerminal
         {
             HeaderOverride = headerOverride,
             NetworkMode = networkMode,
+            ProxySubscriptionIds = proxySubscriptionIds,
+            ProxyId = proxyId,
             ResponsesTransport = responsesTransport,
             HeaderOverrideMode = headerOverrideMode,
             EndpointHeaderOverrides = endpointHeaderOverrides,
@@ -218,7 +228,15 @@ public sealed partial class UniversalForwardTerminal
 
         var headerOverride = input.HeaderOverride ?? previous.HeaderOverride;
         var networkMode = input.NetworkMode ?? previous.NetworkMode;
-        try { ValidateNetworkMode(networkMode); }
+        string[] proxySubscriptionIds;
+        string? proxyId;
+        try
+        {
+            ValidateNetworkMode(networkMode);
+            proxySubscriptionIds = NormalizeProxySubscriptionIds(BodyContainsProperty(context.Body, "proxySubscriptionIds")
+                ? input.ProxySubscriptionIds : previous.ProxySubscriptionIds);
+            proxyId = NormalizeProxyId(BodyContainsProperty(context.Body, "proxyId") ? input.ProxyId : previous.ProxyId);
+        }
         catch (FormatException error) { return context.BadRequest(error.Message); }
         try { HeaderOverrides.Validate(headerOverride); }
         catch (FormatException error) { return context.BadRequest(error.Message); }
@@ -227,6 +245,8 @@ public sealed partial class UniversalForwardTerminal
             BaseUrl = baseUrl,
             ApiKey = apiKey,
             NetworkMode = networkMode,
+            ProxySubscriptionIds = proxySubscriptionIds,
+            ProxyId = proxyId,
             HeaderOverride = headerOverride,
             ExtraParams = extraParams
         };
@@ -245,6 +265,10 @@ public sealed partial class UniversalForwardTerminal
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (ProxyServicesUnavailableException error)
+        {
+            return context.Json(503, new { error = error.Message, code = "proxy_selection_not_supported" });
         }
         catch (ProxyPoolUnavailableException)
         {
@@ -353,6 +377,10 @@ public sealed partial class UniversalForwardTerminal
         {
             throw;
         }
+        catch (ProxyServicesUnavailableException error)
+        {
+            return context.Json(503, new { error = error.Message, code = "proxy_selection_not_supported" });
+        }
         catch (ProxyPoolUnavailableException)
         {
             await TryLogAsync("models.refresh.failed", ProxyUnavailableMessage, "Error", accountId: account.Id, statusCode: 503,
@@ -395,6 +423,8 @@ public sealed partial class UniversalForwardTerminal
             headerOverride = settings.HeaderOverride,
             headerOverrideMode = settings.HeaderOverrideMode,
             networkMode = settings.NetworkMode,
+            proxySubscriptionIds = settings.ProxySubscriptionIds,
+            proxyId = settings.ProxyId,
             responsesTransport = settings.ResponsesTransport,
             endpointHeaderOverrides = settings.EndpointHeaderOverrides,
             modelProtocols = settings.ModelProtocols,
@@ -426,21 +456,29 @@ public sealed partial class UniversalForwardTerminal
     {
         if (!TryReadReplaceHeaders(ReadExtraParams(settings), out var replaceHeaders, out var error))
             return (null, 400, error);
-        using var client = await CreateNetworkClientAsync(settings.NetworkMode, true, cancellationToken);
+        using var client = await CreateNetworkClientAsync(settings, cancellationToken, proxy => capture?.SelectedProxy(proxy));
         client.Timeout = TimeSpan.FromSeconds(60);
-        using var request = new HttpRequestMessage(HttpMethod.Get, BuildUri(settings.BaseUrl, "/v1/models"));
-        ApplyApiKeyHeader(request, settings);
-        ApplyReplaceHeaders(request, replaceHeaders);
-        ApplyReplaceHeaders(request, HeaderOverrides.Resolve(settings.HeaderOverride, new Dictionary<string, string>(), settings.ApiKey, channelTest: true));
-        var logAttempt = capture?.Sending(request, []) ?? 0;
+        var headerOverrides = HeaderOverrides.Resolve(settings.HeaderOverride, new Dictionary<string, string>(), settings.ApiKey, channelTest: true);
+        var origin = BuildUri(settings.BaseUrl, "/v1/models");
+        var request = CreateRequest(origin);
+        var logAttempt = 0;
         HttpResponseMessage? response = null;
         try
         {
-            response = await client.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
-            capture?.Received(logAttempt, response);
+            for (var redirects = 0; ; redirects++)
+            {
+                logAttempt = capture?.Sending(request, []) ?? 0;
+                response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                capture?.Received(logAttempt, response);
+                if ((int)response.StatusCode is not (301 or 302 or 303 or 307 or 308)) break;
+                var location = response.Headers.Location;
+                var target = location is null ? null : location.IsAbsoluteUri ? location : new Uri(request.RequestUri!, location);
+                if (target is null || redirects >= 5 || !SameOrigin(origin, target) || !string.IsNullOrEmpty(target.UserInfo))
+                    return (null, 502, ModelResponseDiagnostic(settings, request, response, null,
+                        "模型目录仅允许最多 5 次同源重定向；跨源地址请直接更新渠道 Base URL"));
+                response.Dispose(); response = null;
+                request.Dispose(); request = CreateRequest(target);
+            }
             var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
                 return (null, (int)response.StatusCode, ModelResponseDiagnostic(settings, request, response, responseText));
@@ -467,8 +505,20 @@ public sealed partial class UniversalForwardTerminal
             return (null, 502, ModelResponseDiagnostic(settings, request, response, null,
                 $"{exception.GetType().Name}: {exception.Message}"));
         }
-        finally { response?.Dispose(); }
+        finally { response?.Dispose(); request.Dispose(); }
+
+        HttpRequestMessage CreateRequest(Uri uri)
+        {
+            var message = new HttpRequestMessage(HttpMethod.Get, uri);
+            ApplyApiKeyHeader(message, settings);
+            ApplyReplaceHeaders(message, replaceHeaders);
+            ApplyReplaceHeaders(message, headerOverrides);
+            return message;
+        }
     }
+    private static bool SameOrigin(Uri left, Uri right)
+        => left.Scheme.Equals(right.Scheme, StringComparison.OrdinalIgnoreCase)
+            && left.Host.Equals(right.Host, StringComparison.OrdinalIgnoreCase) && left.Port == right.Port;
     private static string MaskSecret(string value)
         => string.IsNullOrWhiteSpace(value)
             ? string.Empty
@@ -491,6 +541,9 @@ public sealed partial class UniversalForwardTerminal
         input = null!;
         return false;
     }
+    private static bool BodyContainsProperty(object? body, string name)
+        => body is JsonElement { ValueKind: JsonValueKind.Object } element
+            && element.EnumerateObject().Any(property => property.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     private static bool TryReadExtraParams(
         JsonElement? requested,
         string fallback,
@@ -538,6 +591,8 @@ public sealed partial class UniversalForwardTerminal
         public AccountSaveInput() { }
         public string? ResponsesTransport { get; init; }
         public string? NetworkMode { get; init; }
+        public string[]? ProxySubscriptionIds { get; init; }
+        public string? ProxyId { get; init; }
         public List<ChannelKey>? Keys { get; init; }
         public string[]? DeletedKeyIds { get; init; }
         public string? KeySelectionMode { get; init; }
@@ -564,6 +619,8 @@ public sealed partial class UniversalForwardTerminal
     {
         public ModelDiscoveryInput() { }
         public string? NetworkMode { get; init; }
+        public string[]? ProxySubscriptionIds { get; init; }
+        public string? ProxyId { get; init; }
         public string? Id { get; init; }
         public string? BaseUrl { get; init; }
         public string? ApiKey { get; init; }

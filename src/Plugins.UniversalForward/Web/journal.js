@@ -63,6 +63,10 @@
           el('div', row.channelLabel || row.channel || '未保存渠道', 'record-channel'), trace);
         model.append(el('strong', row.model || '—', 'record-model'), el('code', row.endpoint || '—', 'record-endpoint'),
           el('small', `${journalKinds[row.kind] || row.kind} · ${row.network === 'proxyPool' ? '代理池' : '直连'}`));
+        if (row.proxy) {
+          const proxy = el('small', row.proxy.address, 'record-proxy'); proxy.title = '代理 ID：' + row.proxy.id;
+          model.append(proxy, el('small', row.proxy.id, 'record-proxy-id'));
+        }
         stateCell.append(el('div', `${journalStates[row.state] || row.state} · HTTP ${row.status ?? '—'}${row.incomplete ? ' · 日志不完整' : ''}`, 'console-badge ' + (row.state === 'completed' ? 'is-success' : row.state === 'failed' ? 'is-error' : row.state === 'running' ? 'is-active' : 'is-neutral')),
           el('div', '', 'record-metrics'));
         for (const [label, value] of [['首字', `${row.firstByteMs ?? '—'} ms`], ['耗时', `${row.durationMs ?? '—'} ms`], ['重试', String(row.retries || 0)]]) {
@@ -127,6 +131,7 @@
       ['耗时', `${detail.durationMs ?? '—'} ms · 首字 ${detail.firstByteMs ?? '—'} ms`]]);
     group('请求信息', [['接口', detail.endpoint], ['请求类型', journalKinds[detail.kind] || detail.kind],
       ['状态码', detail.status], ['重试次数', detail.retries || 0]]);
+    if (detail.proxy) group('实际代理', [['节点地址', detail.proxy.address], ['代理 ID', detail.proxy.id], ['来源 ID', detail.proxy.subscriptionId]]);
     group('思考参数', [...(detail.reasoningMapping ? [
       ['客户端', journalEffort(detail.receivedReasoning)], ['命中规则', journalMappingSource(detail.reasoningMapping)]] : []),
       [detail.reasoningMapping ? '实际发送' : '请求', journalEffort(detail.sentReasoning)],

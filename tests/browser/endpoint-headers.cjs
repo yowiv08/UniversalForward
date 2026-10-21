@@ -64,7 +64,7 @@ const output = path.resolve(__dirname, '../../artifacts');
     await page.locator('#networkMode').selectOption('proxyPool');
     await page.locator('#tab-models').click();
     await page.locator('#refreshModels').click();
-    await page.locator('#discoveryResponse').filter({ hasText: '出站方式尚未保存' }).waitFor();
+    await page.locator('#discoveryResponse').filter({ hasText: '出站方式或代理选择尚未保存' }).waitFor();
     assert.equal(await page.evaluate(() => window.calls.filter(c => c.route === 'models/refresh').length), 0);
     await page.locator('#discover').click();
     await page.locator('#discoveryStatus').filter({ hasText: '已获取' }).waitFor();

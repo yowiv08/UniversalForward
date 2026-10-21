@@ -100,10 +100,7 @@ public sealed class ConnectionTestsTests
         });
         Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
             .Returns(() => new HttpClient(handler, false));
-        var pool = new Mock<IProxyPoolHttpClientFactory>();
-        pool.Setup(x => x.CreateClientAsync(It.IsAny<ProxyPoolHttpClientOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => new HttpClient(handler, false));
-        Mock.Get(host.Services.Http).SetupGet(x => x.Pool).Returns(pool.Object);
+        var pool = PluginTestHost.ConfigureProxyServices(host, _ => new HttpClient(handler, false));
         using var terminal = new UniversalForwardTerminal(host);
         var registration = Registration(terminal);
         var progress = new List<JsonElement>();
@@ -112,8 +109,7 @@ public sealed class ConnectionTestsTests
             value => progress.Add(value!.Value), CancellationToken.None));
         var rows = result!.Value.GetProperty("rows");
         Assert.AreEqual(proxy ? "proxyPool" : "direct", rows[0].GetProperty("networkMode").GetString());
-        pool.Verify(x => x.CreateClientAsync(It.Is<ProxyPoolHttpClientOptions>(o => !o.AllowDirectFallback),
-            It.IsAny<CancellationToken>()), proxy ? Times.Exactly(2) : Times.Never());
+        pool.Verify(x => x.CreateClient(It.IsAny<ProxyEndpoint>(), "universalforward"), proxy ? Times.Exactly(2) : Times.Never());
         if (proxy) Mock.Get(host.Services.Http).Verify(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()), Times.Never);
         Assert.AreEqual(2, sent);
         Assert.AreEqual(2, rows.GetArrayLength());
@@ -133,10 +129,7 @@ public sealed class ConnectionTestsTests
         settings["networkMode"] = "proxyPool";
         fields["settings"] = settings.ToJsonString();
         account.Credential = new CustomCredential(fields);
-        var pool = new Mock<IProxyPoolHttpClientFactory>();
-        pool.Setup(x => x.CreateClientAsync(It.IsAny<ProxyPoolHttpClientOptions>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new ProxyPoolUnavailableException());
-        Mock.Get(host.Services.Http).SetupGet(x => x.Pool).Returns(pool.Object);
+        PluginTestHost.ConfigureProxyServices(host, proxies: []);
         using var terminal = new UniversalForwardTerminal(host);
         var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel }),
