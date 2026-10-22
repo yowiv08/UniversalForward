@@ -18,7 +18,7 @@ public sealed class UpstreamWebSocketTests
     private static readonly string[] Models = ["model"];
     private const string Created = """{"type":"response.created","response":{"id":"pending"}}""";
     private const string Delta = """{"type":"response.output_text.delta","delta":"你好😀"}""";
-    private const string Done = """{"type":"response.completed","response":{"id":"resp_ws","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"你好😀"}]}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}""";
+    private const string Done = """{"type":"response.completed","response":{"id":"resp_ws","model":"upstream-ws-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"你好😀"}]}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}""";
     private const string Limited = """{"type":"error","status":429,"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"busy"}}""";
 
     [TestMethod]
@@ -78,6 +78,11 @@ public sealed class UpstreamWebSocketTests
         var id = FirstLogId(store);
         var detail = store.Detail(id)!;
         var attempt = detail["attempts"]![0]!;
+        Assert.AreEqual("model", detail["requestedModel"]!.ToString());
+        Assert.AreEqual("model", detail["sentModel"]!.ToString());
+        Assert.AreEqual("upstream-ws-model", detail["reportedModel"]!.ToString());
+        Assert.AreEqual("model", attempt["sentModel"]!.ToString());
+        Assert.AreEqual("upstream-ws-model", attempt["reportedModel"]!.ToString());
         Assert.AreEqual(101, attempt["status"]!.GetValue<int>());
         Assert.AreEqual("websocket", attempt["transport"]!.ToString());
         StringAssert.StartsWith(attempt["finalUrl"]!.ToString(), tls ? "wss://" : "ws://");

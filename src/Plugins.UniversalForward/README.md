@@ -2,7 +2,7 @@
 
 Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配置和连接测试。
 
-**0.3.1 兼容官方 Router2API 2.1.0（Router.Contracts 2.0.0）。** 更新 UniversalForward 插件即可，原渠道默认行为保留，无需数据库迁移。
+**0.3.2 兼容官方 Router2API 2.1.0（Router.Contracts 2.0.0）。** 更新 UniversalForward 插件即可，原渠道默认行为保留，无需数据库迁移。
 
 ## 渠道管理
 
@@ -57,6 +57,8 @@ Codex Responses 和 Claude Messages 模板使用上游流式传输；客户端�
 - 建立响应尝试策略最多 300 秒、建立响应总策略最多 180 秒，且不能超过宿主配置。响应体预算默认 10 分钟，与渠道总时限中先到的截止时间生效。连接测试另受宿主 Job 时限约束。
 - 自定义重试状态码和响应状态码映射。
 - 响应异常重试：首次有效输出前支持限流与空回重试，SSE 实时透传。
+- 开启空回重试后，完整结束但没有任何输出的 Responses 也会按现有预算重试，耗尽返回 `502 empty_response`；关闭时保留原始完整响应。`usage.output_tokens_details.reasoning_tokens` 缺失、为 0 或为 10 都不决定是否重试。
+- 已输出的推理摘要、密文或工具调用同样阻止重放；只有推理而没有正文的响应仍会透传。`incomplete`、失败事件及单独的 `[DONE]` 保留原有处理。
 - 输出前检测到上游错误时保留原始状态码、Content-Type 和响应体，不转换为 429/502 JSON；关闭重试不关闭错误识别。
 - 已输出的 SSE 字节不改写；缺失结束事件、流错误或超时按失败结束并记录原因，不伪造完成事件、不重放请求。
 - 收到完整的 `response.completed`、`response.done`、`message_stop` 或 `[DONE]` 后结束读取，不再等待上游关闭连接；内容块结束或 `finish_reason` 不会提前截掉后续输出与用量。
@@ -85,16 +87,18 @@ HTTP 200 表示上游已开始正常响应，宿主尝试详情中的 `Healthy` 
 开启后，仅对最终路由到 `/v1/responses` 的请求，在模板补全和思考映射之后、发送之前删除：
 
 - 顶层 `previous_response_id`。
-- `input` 数组中每个直接对象条目的 `id`。
-- 同一条目中名称以 `encrypted` 开头的字段，例如 `encrypted_content`，区分大小写。
+- `input` 数组中的全部直接 `reasoning` 条目，包括密文、摘要和推理正文；避免留下严格 Responses 上游不接受的无密文推理条目。
+- 其他直接对象条目的 `id`，以及名称以 `encrypted` 开头的字段，例如 `encrypted_content`，区分大小写。
 
-不递归删除嵌套字段；消息正文、工具调用的 `call_id`、参数、工具结果和 `include` 保留。保留条目本身，不改写响应。HTTP、WebSocket、流式、非流式及连接测试共用处理，重试复用已剥离的请求体；Messages 和模型获取不受影响。
+不递归删除嵌套字段；消息正文、assistant `phase`、工具调用的 `call_id`、参数、工具结果和 `include` 保留。响应原样返回，历史推理条目仅在下一次发送时移除。HTTP、WebSocket、流式、非流式及连接测试共用处理，重试复用已剥离的请求体；Messages 和模型获取不受影响。
 
-客户端需要携带完整对话历史；仅靠 `previous_response_id` 或条目引用恢复的历史无法由插件补回。模型每轮重新推理，不再跨轮接续加密的隐藏推理状态。原生 `compaction` 加密检查点可能包含已经移除的历史，不能通过删除密文恢复，跨中转续接这类会话不在本功能保证范围内。
+客户端需要携带完整对话历史；仅靠 `previous_response_id` 恢复的历史无法由插件补回。模型每轮重新推理，不再跨轮接续隐藏推理状态或历史推理摘要。若直接历史包含 `compaction` 加密检查点或 `item_reference` 引用，插件会在发送前返回 400，提示恢复完整历史；这些条目无法在删除密文或 ID 后恢复原内容，不能静默丢弃。
 
-渠道查询和 `accounts/save` 使用可选布尔字段 `stripResponsesResourceState`。传 `true` 开启，传 `false` 关闭，省略或传 `null` 保留已有设置；仍保存在渠道 settings JSON 中，无需宿主升级或数据库迁移。诊断事件 `request.responses.state.stripped` 记录删除字段数，现有请求日志可查看收到与实际发送的请求体。
+渠道查询和 `accounts/save` 使用可选布尔字段 `stripResponsesResourceState`。传 `true` 开启，传 `false` 关闭，省略或传 `null` 保留已有设置；仍保存在渠道 settings JSON 中，无需宿主升级或数据库迁移。诊断事件 `request.responses.state.stripped` 分别记录 `strippedFields`（其他字段删除数）和 `removedReasoningItems`（推理条目移除数），现有请求日志可查看收到与实际发送的请求体。
 
 剥离规则参考 [codex-strip-proxy](https://github.com/AnnaofArendelle/codex-strip-proxy)。
+
+0.3.2 增补的推理条目移除参考 [AnyRouter 无密文 reasoning 报错记录](https://github.com/yetone/magpie/issues/1044)。仅删除密文会留下这种条目；开启资源状态剥离后同时移除，避免跨中转续聊继续被拒。
 
 ## 思考等级映射
 
@@ -184,7 +188,10 @@ Codex 覆盖预设保留固定 User-Agent 和协议头，不重复填写会话�
 
 - 「请求日志」提供筛选、原始请求与响应、重试记录、一键复制和分段导出。
 - 列表默认每页 10 条，可切换为 25、50 或 100 条，并显示当前页和总页数；删除或清理日志后自动回到有效页。
+- 列表显示「本地请求模型」和「上游响应模型」，详情另显示「实际发送模型」。各次重试保留自己的发送与响应模型，摘要使用最后一次尝试。支持 JSON、Responses / Messages / Chat Completions SSE 和 Responses WebSocket，导出包含这些模型字段。
+- 上游响应模型取自响应正文中的有效 `model`；未返回时显示「未返回」，不使用请求模型补填。这是上游声明的名称，不能据此验证其内部实际运行的模型。
 - 思考参数分别显示插件收到的请求体、宿主扩展参数、实际发送内容和上游明确报告的值；未返回的值不作推断。
+- 模型和思考参数沿用 1 MiB 字符解析缓冲限制；超大 JSON 或单个 SSE 帧可能无法提取这些字段，正文保存受独立的正文限额控制。
 - 原文包含密钥、Cookie 和对话内容，不脱敏；仅通过管理员插件端点访问，导出文件应妥善保管。
 - 日志及日志设置仅保存在本次运行内存，不写入磁盘，重启或重新加载插件后清空。
 - 默认最多保留 1000 条，正文容量 64 MiB，每份正文最多 4 MiB；超限优先清理最旧的已结束日志。活动日志占满容量时丢弃新采集内容并提示，不影响转发。

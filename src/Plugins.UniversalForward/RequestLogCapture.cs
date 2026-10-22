@@ -29,7 +29,7 @@ internal sealed class RequestLogCapture
         _info = new JsonObject
         {
             ["id"] = Id, ["started"] = started, ["kind"] = kind, ["channel"] = channel,
-            ["channelLabel"] = label, ["model"] = model, ["endpoint"] = endpoint,
+            ["channelLabel"] = label, ["model"] = model, ["requestedModel"] = model, ["endpoint"] = endpoint,
             ["network"] = network, ["trace"] = trace, ["state"] = "running", ["retries"] = 0
         };
         var json = _info.ToJsonString();
@@ -48,7 +48,11 @@ internal sealed class RequestLogCapture
         Observe(name, bytes); EndPart(name, true);
         lock (_gate)
         {
-            if (name == "incoming") _info["receivedReasoning"] = Reasoning(text);
+            if (name == "incoming")
+            {
+                _info["receivedReasoning"] = Reasoning(text);
+                _info["requestedModel"] = Model(text) ?? _info["model"]?.ToString();
+            }
             if (name == "extensions") _info["extensionReasoning"] = Reasoning(text);
         }
     }
@@ -114,12 +118,16 @@ internal sealed class RequestLogCapture
                 ["number"] = number, ["method"] = request.Method.Method, ["url"] = request.RequestUri?.ToString(),
                 ["transport"] = transport,
                 ["proxy"] = _info["proxy"]?.DeepClone(),
-                ["startedMs"] = _watch.ElapsedMilliseconds, ["sentReasoning"] = Reasoning(text)
+                ["startedMs"] = _watch.ElapsedMilliseconds, ["sentReasoning"] = Reasoning(text),
+                ["sentModel"] = Model(text)
             };
             if (transport == "websocket") info["url"] = UpstreamWebSocket.Address(request.RequestUri!).ToString();
             _attempts.Add(info);
             _info["retries"] = number - 1;
             _info["sentReasoning"] = info["sentReasoning"]?.DeepClone();
+            _info["sentModel"] = info["sentModel"]?.DeepClone();
+            _info.Remove("reportedModel");
+            _info.Remove("reportedReasoning");
             _info["reasoningChanged"] = !JsonNode.DeepEquals(_info["receivedReasoning"], _info["sentReasoning"]);
             if (transport != "websocket")
                 AddText($"attempt-{number}-request-headers", JsonSerializer.Serialize(RequestHeaders(request), RequestLogStore.Json));
@@ -219,18 +227,42 @@ internal sealed class RequestLogCapture
         catch (JsonException) { }
         return result;
     }
+    private static string? Model(JsonNode? node)
+        => node is JsonObject obj && obj["model"] is JsonValue value
+            && value.TryGetValue<string>(out var model) && !string.IsNullOrWhiteSpace(model) ? model : null;
+
+    private static string? Model(string text)
+    {
+        try { return Model(JsonNode.Parse(text)); }
+        catch (JsonException) { return null; }
+    }
+
     private void Report(int number, string text)
     {
         try
         {
             var node = JsonNode.Parse(text);
-            if (node is JsonObject obj && obj["response"] is JsonObject response) text = response.ToJsonString();
+            var payload = node;
+            if (node is JsonObject obj)
+            {
+                if (obj["response"] is JsonObject response) payload = response;
+                else if (obj["message"] is JsonObject message) payload = message;
+            }
+            var model = Model(payload) ?? Model(node);
+            if (payload != node) text = payload!.ToJsonString();
             var report = Reasoning(text);
-            if (report.Count == 0) return;
+            if (report.Count == 0 && model is null) return;
             lock (_gate)
             {
-                _attempts[number - 1]["reportedReasoning"] = report;
-                _info["reportedReasoning"] = report.DeepClone(); SaveAttempt(number); Save();
+                var attempt = _attempts[number - 1];
+                if (report.Count > 0) attempt["reportedReasoning"] = report;
+                if (model is not null) attempt["reportedModel"] = model;
+                if (number == _attempts.Count)
+                {
+                    if (report.Count > 0) _info["reportedReasoning"] = report.DeepClone();
+                    if (model is not null) _info["reportedModel"] = model;
+                }
+                SaveAttempt(number); Save();
             }
         }
         catch (JsonException) { }
@@ -248,10 +280,10 @@ internal sealed class RequestLogCapture
         private Stream? _stream;
         protected override async Task<Stream> CreateContentReadStreamAsync()
             => _stream ??= new CapturedStream(await _original.ReadAsStreamAsync(), _capture, _number,
-                _original.Headers.ContentType?.MediaType == "text/event-stream");
+                string.Equals(_original.Headers.ContentType?.MediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase));
         protected override async Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken)
             => _stream ??= new CapturedStream(await _original.ReadAsStreamAsync(cancellationToken), _capture, _number,
-                _original.Headers.ContentType?.MediaType == "text/event-stream");
+                string.Equals(_original.Headers.ContentType?.MediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase));
         protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
             => await (await CreateContentReadStreamAsync()).CopyToAsync(stream);
         protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context, CancellationToken cancellationToken)

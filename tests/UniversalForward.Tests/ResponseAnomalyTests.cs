@@ -11,7 +11,8 @@ namespace UniversalForward.Tests;
 public sealed class ResponseAnomalyTests
 {
     private const string Limit = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"token rate limit\"}}}\n\n";
-    private const string Done = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n";
+    private const string Done = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]}}\n\n";
+    private const string EmptyDone = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n";
 
     [TestMethod]
     [DataRow("data: {\"type\":\"response.output_text.delta\",\"delta\":\"rate limit exceeded\"}\n\ndata: [DONE]\n\n", false, true, true)]
@@ -28,7 +29,8 @@ public sealed class ResponseAnomalyTests
     [DataRow("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"custom_tool_call\",\"id\":\"id\"}}\n\n", false, true, false)]
     [DataRow("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"id\"}]},\"finish_reason\":null}]}\n\n", false, true, false)]
     [DataRow("data: {\"choices\":[{\"text\":\"text\",\"finish_reason\":\"stop\"}]}\n\n", false, true, true)]
-    [DataRow(Done, false, false, true)]
+    [DataRow(Done, false, true, true)]
+    [DataRow(EmptyDone, false, false, true)]
     [DataRow("event: error\ndata: {\"message\":\"token rate limit\"}\n\n", true, false, true)]
     [DataRow("data: {\"type\":\"response.completed\",\ndata: \"response\":{\"status\":\"completed\",\"output\":[]}}\r\n\r\n", false, false, true)]
     public void SeparatesOutputUsageAndOutcome(string data, bool limited, bool output, bool terminal)
@@ -361,6 +363,128 @@ public sealed class ResponseAnomalyTests
         Assert.AreEqual(200, result.Response.StatusCode);
         Assert.AreEqual(1, client.Invocations.Count);
         if (result.Response.RawStream is { } stream) await foreach (var _ in stream) { }
+    }
+
+    [TestMethod]
+    [DataRow(false, false, -1)]
+    [DataRow(false, false, 0)]
+    [DataRow(false, false, 10)]
+    [DataRow(false, true, -1)]
+    [DataRow(false, true, 0)]
+    [DataRow(false, true, 10)]
+    [DataRow(true, false, -1)]
+    [DataRow(true, false, 0)]
+    [DataRow(true, false, 10)]
+    [DataRow(true, true, -1)]
+    [DataRow(true, true, 0)]
+    [DataRow(true, true, 10)]
+    public async Task CompletedOutputRatherThanReasoningTokenCountControlsEmptyRetry(bool sse, bool hasText, int reasoningTokens)
+    {
+        var calls = 0;
+        string Response(bool text)
+        {
+            var output = text ? "[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]" : "[]";
+            var details = reasoningTokens < 0 ? "" : $",\"output_tokens_details\":{{\"reasoning_tokens\":{reasoningTokens}}}";
+            var response = $"{{\"status\":\"completed\",\"output\":{output},\"usage\":{{\"input_tokens\":3,\"output_tokens\":2{details}}}}}";
+            return sse ? $"data: {{\"type\":\"response.completed\",\"response\":{response}}}\n\n" : response;
+        }
+        var client = Client(_ =>
+        {
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(Response(hasText || calls > 1), Encoding.UTF8, sse ? "text/event-stream" : "application/json") });
+        });
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", sse, policy: Policy(1)));
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual(hasText ? 1 : 2, calls);
+        using var body = new MemoryStream();
+        if (result.Response.RawStream is { } stream)
+            await foreach (var chunk in stream) await body.WriteAsync(chunk);
+        else await body.WriteAsync(result.Response.RawContent!);
+        Assert.AreEqual(Response(true), Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [TestMethod]
+    [DataRow(false, "response.completed")]
+    [DataRow(false, "response.done")]
+    [DataRow(true, "response.completed")]
+    [DataRow(true, "response.done")]
+    public async Task CompletedEmptyResponsesWithoutUsageExhaustExistingBudget(bool sse, string type)
+    {
+        var calls = 0;
+        var response = "{\"status\":\"completed\",\"output\":[]}";
+        var payload = sse ? $"data: {{\"type\":\"{type}\",\"response\":{response}}}\n\n" : response;
+        var client = Client(_ =>
+        {
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(payload, Encoding.UTF8, sse ? "text/event-stream" : "application/json") });
+        });
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var policy = Policy(1);
+        policy.MaxRetries = 10;
+        policy.RetryStatusCodes = "200";
+        var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", sse, policy: policy));
+        Assert.AreEqual(2, calls);
+        Assert.AreEqual(502, result.Response.StatusCode);
+        StringAssert.Contains(Encoding.UTF8.GetString(result.Response.RawContent!), "empty_response");
+    }
+
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    public async Task CompletedEmptyResponsesPassThroughWhenRetryIsDisabled(bool sse, bool stream)
+    {
+        const string response = "{\"status\":\"completed\",\"output\":[]}";
+        var client = Client(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(sse ? EmptyDone : response, Encoding.UTF8, sse ? "text/event-stream" : "application/json") }));
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var policy = Policy(3);
+        policy.EmptyResponseRetryEnabled = false;
+        var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", stream, policy: policy));
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual(1, client.Invocations.Count);
+        using var body = new MemoryStream();
+        if (result.Response.RawStream is { } chunks)
+            await foreach (var chunk in chunks) await body.WriteAsync(chunk);
+        else await body.WriteAsync(result.Response.RawContent!);
+        Assert.AreEqual(stream ? EmptyDone : response, Encoding.UTF8.GetString(body.ToArray()));
+    }
+
+    [TestMethod]
+    [DataRow("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call\",\"name\":\"lookup\",\"arguments\":\"{}\"}}\n\n")]
+    [DataRow("data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"thinking\"}\n\n")]
+    [DataRow("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"encrypted_content\":\"encrypted\"}}\n\n")]
+    public async Task CompletedEmptyTerminalNeverReplaysPreviouslyEmittedOutput(string prefix)
+    {
+        var payload = prefix + EmptyDone;
+        var client = Client(_ => Reply(payload));
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true, policy: Policy(3)));
+        Assert.AreEqual(200, result.Response.StatusCode);
+        using var body = new MemoryStream();
+        await foreach (var chunk in result.Response.RawStream!) await body.WriteAsync(chunk);
+        Assert.AreEqual(payload, Encoding.UTF8.GetString(body.ToArray()));
+        Assert.AreEqual(1, client.Invocations.Count);
+    }
+
+    [TestMethod]
+    [DataRow("data: [DONE]\n\n")]
+    [DataRow("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"status\":\"completed\",\"summary\":[]}}\n\ndata: [DONE]\n\n")]
+    public async Task DoneMarkerAndCompletedItemDoNotBecomeCompletedEmptyResponses(string payload)
+    {
+        var analysis = ForwardResponseAnalysis.Read(Encoding.UTF8.GetBytes(payload), true, false);
+        Assert.IsFalse(analysis.CompletedResponses);
+        var client = Client(_ => Reply(payload));
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", true, policy: Policy(3)));
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual(1, client.Invocations.Count);
+        using var body = new MemoryStream();
+        await foreach (var chunk in result.Response.RawStream!) await body.WriteAsync(chunk);
+        Assert.AreEqual(payload, Encoding.UTF8.GetString(body.ToArray()));
     }
 
     [TestMethod]

@@ -118,6 +118,37 @@ public sealed class ResponsesResourceStateForwardingTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task StrictRelayRejectsReasoningShellsButAcceptsSanitizedConversation(bool enabled)
+    {
+        const string rejected = """{"error":{"message":"bad response status code 400","type":"invalid_request_error","param":"input","code":null}}""";
+        const string accepted = """{"id":"resp_reply","status":"completed","output":[{"id":"rs_reply","type":"reasoning","encrypted_content":"reply-state","summary":[]},{"id":"msg_reply","type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}]}""";
+        var client = Client(async (request, ct) =>
+        {
+            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject();
+            Assert.AreEqual("call_1", body["input"]!.AsArray().Single(item => item?["type"]?.ToString() == "function_call")!["call_id"]!.ToString());
+            Assert.AreEqual("call_1", body["input"]!.AsArray().Single(item => item?["type"]?.ToString() == "function_call_output")!["call_id"]!.ToString());
+            var hasReasoning = body["input"]!.AsArray().Any(item => item?["type"]?.ToString() == "reasoning");
+            return new HttpResponseMessage(hasReasoning ? HttpStatusCode.BadRequest : HttpStatusCode.OK)
+            {
+                Content = new StringContent(hasReasoning ? rejected : accepted, Encoding.UTF8, "application/json")
+            };
+        });
+        var original = History();
+        var before = original.ToJsonString();
+        var account = Account(new Uri("https://strict-relay.example"), enabled, codex: true);
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+
+        var result = await terminal.InvokeAsync(Context(account, client.Object, original));
+
+        Assert.AreEqual(enabled ? 200 : 400, result.Response.StatusCode);
+        Assert.AreEqual(enabled ? accepted : rejected, Encoding.UTF8.GetString(result.Response.RawContent!));
+        Assert.AreEqual(1, client.Invocations.Count);
+        Assert.AreEqual(before, original.ToJsonString());
+    }
+
+    [TestMethod]
     [DataRow(false, false, false)]
     [DataRow(true, false, false)]
     [DataRow(false, true, true)]
@@ -167,6 +198,67 @@ public sealed class ResponsesResourceStateForwardingTests
         Assert.AreEqual(0, client.Invocations.Count);
     }
 
+    [TestMethod]
+    [DataRow("compaction", false, false)]
+    [DataRow("compaction", false, true)]
+    [DataRow("compaction", true, false)]
+    [DataRow("compaction", true, true)]
+    [DataRow("item_reference", false, false)]
+    [DataRow("item_reference", false, true)]
+    [DataRow("item_reference", true, false)]
+    [DataRow("item_reference", true, true)]
+    public async Task OpaqueHistoryIsRejectedBeforeHttpOrWebSocketSendOnlyWhenEnabled(string type, bool enabled, bool websocket)
+    {
+        JsonObject? sent = null;
+        await using var server = new WebSocketLoopback(async (peer, _, ct) =>
+        {
+            Assert.IsFalse(enabled);
+            using var socket = await peer.AcceptAsync(ct);
+            sent = JsonNode.Parse(await WebSocketLoopback.ReceiveAsync(socket, ct))!.AsObject();
+            await WebSocketLoopback.SendAsync(socket, Completed, ct);
+        });
+        var account = Account(websocket ? server.Address : new Uri("https://upstream.example"), enabled, codex: true, websocket: websocket);
+        var host = ChannelKeysTests.Host(account);
+        Mock.Get(host.Services.Http).Setup(value => value.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
+            .Returns(() => server.CreateClient());
+        var calls = 0;
+        var client = Client(async (request, ct) =>
+        {
+            calls++;
+            Assert.IsFalse(enabled);
+            sent = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject();
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ResponseBody, Encoding.UTF8, "application/json") };
+        });
+        var original = History();
+        original["input"]!.AsArray().Add(new JsonObject { ["type"] = type, ["id"] = "opaque-id", ["encrypted_content"] = "opaque-state" });
+        var before = original.ToJsonString();
+        var context = Context(account, client.Object, original);
+        using var terminal = new UniversalForwardTerminal(host);
+
+        var result = await terminal.InvokeAsync(context);
+
+        Assert.AreEqual(before, original.ToJsonString());
+        Assert.AreEqual(before, context.Request.OriginalBody!.Value.GetRawText());
+        Assert.AreEqual(enabled ? 400 : 200, result.Response.StatusCode);
+        Assert.AreEqual(!enabled && !websocket ? 1 : 0, calls);
+        if (enabled)
+        {
+            Assert.IsNull(sent);
+            Assert.AreEqual(0, server.Requests);
+            var error = result.Response.Error!;
+            StringAssert.Contains(error, "完整历史");
+            Assert.IsFalse(error.Contains("opaque-id", StringComparison.Ordinal));
+            Assert.IsFalse(error.Contains("opaque-state", StringComparison.Ordinal));
+        }
+        else
+        {
+            if (websocket) await server.Completion;
+            Assert.IsNotNull(sent);
+            AssertHistory(sent, stripped: false, opaque: true);
+            Assert.IsTrue(JsonNode.DeepEquals(original["input"]!.AsArray().Last(), sent["input"]!.AsArray().Last()));
+        }
+    }
+
     private static JsonObject History(bool stream = false)
     {
         var body = JsonNode.Parse("""
@@ -175,8 +267,11 @@ public sealed class ResponsesResourceStateForwardingTests
          "input":[
            {"role":"user","content":[{"type":"input_text","text":"question","id":"keep nested id","encrypted_content":"keep nested encrypted"}]},
            {"type":"reasoning","id":"rs_old","encrypted_content":"old ciphertext","encrypted_extra":"other ciphertext","summary":[{"type":"summary_text","text":"Keep summary"}],"Encrypted_content":"keep case variant"},
+           {"type":"reasoning","id":"rs_bare","summary":[]},
+           {"type":"reasoning","id":"rs_foreign","encrypted_content":"foreign state","content":[{"type":"reasoning_text","text":"foreign thinking"}]},
            {"type":"function_call","id":"fc_old","call_id":"call_1","name":"lookup","arguments":"{\"id\":\"keep argument id\",\"encrypted_content\":\"keep argument encrypted\"}"},
-           {"type":"function_call_output","id":"output_old","call_id":"call_1","output":{"id":"keep output id","encrypted_content":"keep output encrypted"},"previous_response_id":"keep item reference"}],
+           {"type":"function_call_output","id":"output_old","call_id":"call_1","output":{"id":"keep output id","encrypted_content":"keep output encrypted"},"previous_response_id":"keep item reference"},
+           {"type":"message","id":"assistant_old","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Keep assistant answer"}]}],
          "messages":[{"role":"user","content":"question","id":"keep messages id","encrypted_content":"keep messages encrypted"}],
          "tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"string"}}}}]}
         """)!.AsObject();
@@ -184,18 +279,23 @@ public sealed class ResponsesResourceStateForwardingTests
         return body;
     }
 
-    private static void AssertHistory(JsonObject body, bool stripped)
+    private static void AssertHistory(JsonObject body, bool stripped, bool opaque = false)
     {
         Assert.AreEqual("keep top id", body["id"]!.ToString());
         var input = body["input"]!.AsArray();
+        var call = input.Single(item => item?["type"]?.ToString() == "function_call")!.AsObject();
+        var output = input.Single(item => item?["type"]?.ToString() == "function_call_output")!.AsObject();
+        var assistant = input.Single(item => item?["role"]?.ToString() == "assistant")!.AsObject();
         if (stripped)
         {
             Assert.IsFalse(body.ContainsKey("previous_response_id"));
-            Assert.IsFalse(input[1]!.AsObject().ContainsKey("id"));
-            Assert.IsFalse(input[1]!.AsObject().ContainsKey("encrypted_content"));
-            Assert.IsFalse(input[1]!.AsObject().ContainsKey("encrypted_extra"));
-            Assert.IsFalse(input[2]!.AsObject().ContainsKey("id"));
-            Assert.IsFalse(input[3]!.AsObject().ContainsKey("id"));
+            Assert.IsFalse(input.Any(item => item?["type"]?.ToString() == "reasoning"));
+            Assert.IsFalse(call.ContainsKey("id"));
+            Assert.IsFalse(output.ContainsKey("id"));
+            Assert.IsFalse(assistant.ContainsKey("id"));
+            Assert.AreEqual(4, input.Count);
+            Assert.AreEqual("function_call", input[1]!["type"]!.ToString());
+            Assert.AreEqual("function_call_output", input[2]!["type"]!.ToString());
         }
         else
         {
@@ -203,20 +303,26 @@ public sealed class ResponsesResourceStateForwardingTests
             Assert.AreEqual("rs_old", input[1]!["id"]!.ToString());
             Assert.AreEqual("old ciphertext", input[1]!["encrypted_content"]!.ToString());
             Assert.AreEqual("other ciphertext", input[1]!["encrypted_extra"]!.ToString());
-            Assert.AreEqual("fc_old", input[2]!["id"]!.ToString());
-            Assert.AreEqual("output_old", input[3]!["id"]!.ToString());
+            Assert.AreEqual("keep case variant", input[1]!["Encrypted_content"]!.ToString());
+            Assert.AreEqual("Keep summary", input[1]!["summary"]![0]!["text"]!.ToString());
+            Assert.AreEqual("rs_bare", input[2]!["id"]!.ToString());
+            Assert.AreEqual("foreign thinking", input[3]!["content"]![0]!["text"]!.ToString());
+            Assert.AreEqual("fc_old", call["id"]!.ToString());
+            Assert.AreEqual("output_old", output["id"]!.ToString());
+            Assert.AreEqual("assistant_old", assistant["id"]!.ToString());
+            Assert.AreEqual(opaque ? 8 : 7, input.Count);
         }
         Assert.AreEqual("keep nested id", input[0]!["content"]![0]!["id"]!.ToString());
         Assert.AreEqual("keep nested encrypted", input[0]!["content"]![0]!["encrypted_content"]!.ToString());
-        Assert.AreEqual("keep case variant", input[1]!["Encrypted_content"]!.ToString());
-        Assert.AreEqual("Keep summary", input[1]!["summary"]![0]!["text"]!.ToString());
-        Assert.AreEqual("call_1", input[2]!["call_id"]!.ToString());
-        Assert.AreEqual("lookup", input[2]!["name"]!.ToString());
-        Assert.AreEqual("{\"id\":\"keep argument id\",\"encrypted_content\":\"keep argument encrypted\"}", input[2]!["arguments"]!.ToString());
-        Assert.AreEqual("call_1", input[3]!["call_id"]!.ToString());
-        Assert.AreEqual("keep output id", input[3]!["output"]!["id"]!.ToString());
-        Assert.AreEqual("keep output encrypted", input[3]!["output"]!["encrypted_content"]!.ToString());
-        Assert.AreEqual("keep item reference", input[3]!["previous_response_id"]!.ToString());
+        Assert.AreEqual("call_1", call["call_id"]!.ToString());
+        Assert.AreEqual("lookup", call["name"]!.ToString());
+        Assert.AreEqual("{\"id\":\"keep argument id\",\"encrypted_content\":\"keep argument encrypted\"}", call["arguments"]!.ToString());
+        Assert.AreEqual("call_1", output["call_id"]!.ToString());
+        Assert.AreEqual("keep output id", output["output"]!["id"]!.ToString());
+        Assert.AreEqual("keep output encrypted", output["output"]!["encrypted_content"]!.ToString());
+        Assert.AreEqual("keep item reference", output["previous_response_id"]!.ToString());
+        Assert.AreEqual("final_answer", assistant["phase"]!.ToString());
+        Assert.AreEqual("Keep assistant answer", assistant["content"]![0]!["text"]!.ToString());
         Assert.AreEqual("keep messages id", body["messages"]![0]!["id"]!.ToString());
         Assert.AreEqual("keep messages encrypted", body["messages"]![0]!["encrypted_content"]!.ToString());
     }

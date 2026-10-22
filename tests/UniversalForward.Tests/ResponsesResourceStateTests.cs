@@ -30,14 +30,14 @@ public sealed class ResponsesResourceStateTests
               "include": ["reasoning.encrypted_content"],
               "input": [
                 {"role":"user","content":[{"type":"input_text","text":"继续处理中文消息"}]},
-                {"type":"reasoning","summary":[{"type":"summary_text","text":"Use the tool"}]},
                 {"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"id\":\"business-id\"}"},
                 {"type":"function_call_output","call_id":"call_1","output":"found"}
               ]
             }
             """);
 
-        Assert.AreEqual(7, ResponsesResourceState.Strip(body));
+        Assert.AreEqual(4, ResponsesResourceState.Strip(body, out var removedReasoningItems));
+        Assert.AreEqual(1, removedReasoningItems);
         Assert.IsTrue(JsonNode.DeepEquals(expected, body));
         Assert.AreEqual(0, ResponsesResourceState.Strip(body));
         Assert.IsTrue(JsonNode.DeepEquals(expected, body));
@@ -114,16 +114,66 @@ public sealed class ResponsesResourceStateTests
     }
 
     [TestMethod]
-    public void IgnoresNonObjectArrayItemsAndRetainsReasoningItems()
+    public void IgnoresNonObjectArrayItemsAndRemovesReasoningItems()
     {
         var body = Object("""
             {"input":[null,"plain",12,[{"id":"nested-id","encrypted_content":"keep"}],{"type":"reasoning","id":"rs_1","encrypted_content":"cipher"},{}]}
             """);
         var expected = Object("""
-            {"input":[null,"plain",12,[{"id":"nested-id","encrypted_content":"keep"}],{"type":"reasoning"},{}]}
+            {"input":[null,"plain",12,[{"id":"nested-id","encrypted_content":"keep"}],{}]}
             """);
 
-        Assert.AreEqual(2, ResponsesResourceState.Strip(body));
+        Assert.AreEqual(0, ResponsesResourceState.Strip(body, out var removedReasoningItems));
+        Assert.AreEqual(1, removedReasoningItems);
         Assert.IsTrue(JsonNode.DeepEquals(expected, body));
+    }
+
+    [TestMethod]
+    public void RemovesBareAndForeignReasoningWithoutChangingMessagesOrTools()
+    {
+        var body = Object("""
+            {"input":[
+              {"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Working"}]},
+              {"type":"reasoning","summary":[]},
+              {"type":"reasoning","summary":[{"type":"summary_text","text":"summary"}]},
+              {"type":"reasoning","encrypted_content":"foreign","content":[{"type":"reasoning_text","text":"foreign thinking"}]},
+              {"type":"custom_tool_call","call_id":"call","input":{"type":"compaction","encrypted_content":"business"}},
+              {"type":"custom_tool_call_output","call_id":"call","output":{"type":"item_reference","id":"business"}},
+              {"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done"}]}
+            ]}
+            """);
+        var expected = body.DeepClone().AsObject();
+        var input = expected["input"]!.AsArray();
+        input.RemoveAt(3);
+        input.RemoveAt(2);
+        input.RemoveAt(1);
+
+        Assert.AreEqual(0, ResponsesResourceState.Strip(body, out var removedReasoningItems));
+        Assert.AreEqual(3, removedReasoningItems);
+        Assert.IsTrue(JsonNode.DeepEquals(expected, body));
+        Assert.AreEqual(0, ResponsesResourceState.Strip(body, out removedReasoningItems));
+        Assert.AreEqual(0, removedReasoningItems);
+    }
+
+    [TestMethod]
+    [DataRow("compaction")]
+    [DataRow("item_reference")]
+    public void RejectsOpaqueHistoryBeforeAnyMutation(string type)
+    {
+        var body = Object("""
+            {"previous_response_id":"resp","input":[
+              {"type":"message","id":"msg","encrypted_content":"message-state","content":[]},
+              {"type":"reasoning","id":"rs","encrypted_content":"reasoning-state"}
+            ]}
+            """);
+        body["input"]!.AsArray().Add(new JsonObject { ["type"] = type, ["id"] = "opaque-id", ["encrypted_content"] = "opaque-state" });
+        var before = body.ToJsonString();
+
+        var error = Assert.ThrowsExactly<FormatException>(() => ResponsesResourceState.Strip(body));
+
+        StringAssert.Contains(error.Message, "完整历史");
+        Assert.IsFalse(error.Message.Contains("opaque-id", StringComparison.Ordinal));
+        Assert.IsFalse(error.Message.Contains("opaque-state", StringComparison.Ordinal));
+        Assert.AreEqual(before, body.ToJsonString());
     }
 }

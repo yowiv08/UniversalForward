@@ -12,6 +12,8 @@
   };
   const journalEffort = value => value && Object.keys(value).length
     ? Object.entries(value).map(([key, v]) => `${key}=${JSON.stringify(v)}`).join('；') : '未提供';
+  const journalModel = (value, fallback = '未提供') => typeof value === 'string' && value.trim() ? value : fallback;
+  const journalRequestedModel = value => journalModel(value.requestedModel, journalModel(value.model));
   const journalMappingSource = mapping => (mapping.source === 'model' ? '模型规则：' + mapping.model : '渠道默认规则')
     + ' · ' + (mapping.reason === 'default' ? '未提供时使用缺省值' : mapping.mode === 'fixed' ? '固定等级' : '按值映射');
   function journalError(error) { feedback('journalStatus', error.message || String(error), true); }
@@ -61,7 +63,9 @@
         identity.append(el('strong', stamp.toLocaleTimeString('zh-CN', { hour12: false }), 'record-time'),
           el('span', stamp.toLocaleDateString(), 'record-date'),
           el('div', row.channelLabel || row.channel || '未保存渠道', 'record-channel'), trace);
-        model.append(el('strong', row.model || '—', 'record-model'), el('code', row.endpoint || '—', 'record-endpoint'),
+        model.append(el('small', '本地请求模型'), el('strong', journalRequestedModel(row), 'record-model'),
+          el('div', '上游响应模型：' + journalModel(row.reportedModel, '未返回')),
+          el('code', row.endpoint || '—', 'record-endpoint'),
           el('small', `${journalKinds[row.kind] || row.kind} · ${row.network === 'proxyPool' ? '代理池' : '直连'}`));
         if (row.proxy) {
           const proxy = el('small', row.proxy.address, 'record-proxy'); proxy.title = '代理 ID：' + row.proxy.id;
@@ -126,11 +130,13 @@
       section.append(list); root.append(section);
     };
     group('', [['请求 ID', detail.id], ['Trace ID', detail.trace], ['渠道', detail.channelLabel || detail.channel],
-      ['模型', detail.model], ['执行状态', journalStates[detail.state] || detail.state],
+      ['执行状态', journalStates[detail.state] || detail.state],
       ['出站方式', detail.network === 'proxyPool' ? '代理池' : '直连'],
       ['耗时', `${detail.durationMs ?? '—'} ms · 首字 ${detail.firstByteMs ?? '—'} ms`]]);
     group('请求信息', [['接口', detail.endpoint], ['请求类型', journalKinds[detail.kind] || detail.kind],
       ['状态码', detail.status], ['重试次数', detail.retries || 0]]);
+    group('模型信息', [['本地请求模型', journalRequestedModel(detail)],
+      ['实际发送模型', journalModel(detail.sentModel)], ['上游响应模型', journalModel(detail.reportedModel, '未返回')]]);
     if (detail.proxy) group('实际代理', [['节点地址', detail.proxy.address], ['代理 ID', detail.proxy.id], ['来源 ID', detail.proxy.subscriptionId]]);
     group('思考参数', [...(detail.reasoningMapping ? [
       ['客户端', journalEffort(detail.receivedReasoning)], ['命中规则', journalMappingSource(detail.reasoningMapping)]] : []),
@@ -138,6 +144,7 @@
       ['上游', detail.reportedReasoning && Object.keys(detail.reportedReasoning).length ? journalEffort(detail.reportedReasoning) : '未返回']]);
     for (const attempt of detail.attempts || []) group(`上游尝试 ${attempt.number}`, [
       ['连接方式', attempt.transport === 'websocket' ? 'WebSocket' : 'HTTP'],
+      ['实际发送模型', journalModel(attempt.sentModel)], ['上游响应模型', journalModel(attempt.reportedModel, '未返回')],
       ['请求地址', attempt.url], ['最终地址', attempt.finalUrl], ['状态码', attempt.status],
       ['重试原因', attempt.retryReason || '无']]);
   }

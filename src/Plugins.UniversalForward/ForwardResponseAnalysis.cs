@@ -11,6 +11,7 @@ internal sealed class ForwardResponseAnalysis
     internal bool RateLimited { get; private set; }
     internal bool PermanentError { get; private set; }
     internal bool Terminal { get; private set; }
+    internal bool CompletedResponses { get; private set; }
     internal bool StreamEnded { get; private set; }
     internal string State { get; private set; } = "missing_terminal";
     internal string IncompleteReason { get; private set; } = "";
@@ -110,6 +111,7 @@ internal sealed class ForwardResponseAnalysis
                 IncompleteReason = Text(incomplete, "reason");
             if (type is "response.completed" or "response.done" or "message_stop" || status == "completed")
             { Terminal = true; if (!HasError) State = "completed"; }
+            if (type is "response.completed" or "response.done" || status == "completed") CompletedResponses = true;
         }
         if (e.TryGetProperty("response", out var response) && response.ValueKind == JsonValueKind.Object) Observe(response, outcome: outcome);
         if (e.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object) Observe(message, outcome: false);

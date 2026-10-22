@@ -8,6 +8,7 @@ const raw = '{"Authorization":"Bearer raw-secret","input":"中文😀","html":"<
 const bytes = Buffer.from(raw);
 const row = {
   id: 'log-one', started: Date.now(), channel: 'channel', channelLabel: 'Log channel', model: 'model',
+  requestedModel: 'local-alias', sentModel: 'routed-model', reportedModel: 'upstream-version-20261022',
   endpoint: '/v1/responses', kind: 'forward', network: 'proxyPool', trace: 'trace-one', state: 'completed',
   status: 200, retries: 1, firstByteMs: 30, durationMs: 80, reasoningChanged: true,
   proxy: { id: 'node-one', subscriptionId: 'manual', address: 'socks5://127.0.0.1:1080', state: 'Active', available: true },
@@ -15,17 +16,21 @@ const row = {
   sentReasoning: { 'reasoning.effort': 'low' },
   reportedReasoning: { 'reasoning.effort': 'max', 'usage.output_tokens_details.reasoning_tokens': 34 }
 };
-const detail = { ...row, attempts: [{ number: 1, transport: 'websocket', status: 101, url: 'wss://upstream.example/v1/responses' }],
+const detail = { ...row, attempts: [
+  { number: 1, transport: 'websocket', status: 101, url: 'wss://upstream.example/v1/responses', sentModel: 'first-routed-model', reportedModel: 'first-upstream-model', retryReason: '空响应' },
+  { number: 2, transport: 'websocket', status: 101, url: 'wss://upstream.example/v1/responses', sentModel: row.sentModel, reportedModel: row.reportedModel }
+],
   parts: [{ name: 'attempt-1-websocket-events', savedBytes: bytes.length, observedBytes: bytes.length, truncated: false }] };
 const chunks = [...bytes].map((value, i) => ({ sequence: i, base64: Buffer.from([value]).toString('base64') }));
 const mock = `<script>
 window.calls=[];window.logSettings={enabled:true,maxRecords:1000,capacityBytes:67108864,bodyLimitBytes:4194304};
+window.logRow=${JSON.stringify(row)};window.logDetail=${JSON.stringify(detail)};
 window.Router2API={request:async(method,route,body)=>{
  window.calls.push({method,route,body});
  if(route==='accounts')return {accounts:[{id:'channel',label:'Log channel',baseUrl:'https://upstream.example',models:['model'],keys:[],enabled:true}]};
  if(route==='logs/status')return {available:true,storage:'memory',settings:window.logSettings};
- if(route.startsWith('logs?'))return {rows:window.deleted?[]:[${JSON.stringify(row)}],page:1,pageSize:25,total:window.deleted?0:1};
- if(route.startsWith('logs/detail?'))return ${JSON.stringify(detail)};
+ if(route.startsWith('logs?'))return {rows:window.deleted?[]:[window.logRow],page:1,pageSize:25,total:window.deleted?0:1};
+ if(route.startsWith('logs/detail?'))return window.logDetail;
  if(route.startsWith('logs/body?')){const after=+new URLSearchParams(route.split('?')[1]).get('after');const chunks=${JSON.stringify(chunks)};const selected=chunks.filter(c=>c.sequence>after).slice(0,4);return {chunks:selected,next:selected.at(-1)?.sequence??after,done:selected.length<4};}
  if(route==='logs/settings'){window.logSettings=body;return{success:true};}
  if(route==='logs/delete'||route==='logs/clear'){window.deleted=true;return{success:true};}
@@ -57,6 +62,8 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.equal((await frame.locator('#journalRows').textContent()).includes('raw-secret'), false);
     assert.match(await frame.locator('#journalRows').innerText(), /socks5:\/\/127\.0\.0\.1:1080/);
     assert.match(await frame.locator('#journalRows').innerText(), /node-one/);
+    assert.match(await frame.locator('#journalRows').innerText(), /本地请求模型\s+local-alias/);
+    assert.match(await frame.locator('#journalRows').innerText(), /上游响应模型：upstream-version-20261022/);
     await frame.locator('#journalRows').getByRole('button', { name: '详情' }).click();
     await frame.locator('#journalBody').filter({ hasText: 'raw-secret' }).waitFor();
     assert.equal(await frame.locator('#journalBody').textContent(), raw);
@@ -64,6 +71,12 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.match(await frame.locator('#journalOverview').innerText(), /WebSocket/);
     assert.match(await frame.locator('#journalOverview').innerText(), /101/);
     assert.match(await frame.locator('#journalOverview').innerText(), /实际代理.*socks5:\/\/127\.0\.0\.1:1080.*node-one/s);
+    const modelGroup = frame.locator('#journalOverview .detail-group').filter({ has: frame.getByRole('heading', { name: '模型信息', exact: true }) });
+    assert.deepEqual(await modelGroup.locator('dt').allTextContents(), ['本地请求模型', '实际发送模型', '上游响应模型']);
+    assert.deepEqual(await modelGroup.locator('dd').allTextContents(), [row.requestedModel, row.sentModel, row.reportedModel]);
+    const firstAttempt = frame.locator('#journalOverview .detail-group').filter({ has: frame.getByRole('heading', { name: '上游尝试 1', exact: true }) });
+    assert.match(await firstAttempt.innerText(), /实际发送模型\s+first-routed-model/);
+    assert.match(await firstAttempt.innerText(), /上游响应模型\s+first-upstream-model/);
     assert.match(await frame.locator('#journalPart option:checked').innerText(), /WebSocket 原始消息/);
     await page.screenshot({ path: path.resolve(__dirname, '../../artifacts/journal-redesign-desktop.png'), fullPage: true });
     await frame.locator('#journalCopy').click();
@@ -78,6 +91,10 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     await download.saveAs(exportPath);
     const exported = JSON.parse(fs.readFileSync(exportPath, 'utf8'));
     assert.equal(exported.format, 'universalforward-request-log-v1');
+    assert.equal(exported.requestedModel, row.requestedModel);
+    assert.equal(exported.sentModel, row.sentModel);
+    assert.equal(exported.reportedModel, row.reportedModel);
+    assert.equal(exported.attempts[0].reportedModel, 'first-upstream-model');
     assert.equal(Buffer.concat(exported.bodyChunks.map(c => Buffer.from(c.base64, 'base64'))).toString(), raw);
     await page.bringToFront();
     await frame.locator('#journalDelete').click();
@@ -90,13 +107,42 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     await frame.locator('#journalSettings [name=maxRecords]').fill('14');
     await frame.locator('#journalSettings button').click();
     await frame.locator('#journalStatus').filter({ hasText: '日志设置已生效，仅限本次运行' }).waitFor();
+    await frame.locator('body').evaluate(() => {
+      window.deleted = false;
+      const legacy = { ...window.logRow, model: 'legacy-model' };
+      delete legacy.requestedModel; delete legacy.sentModel; delete legacy.reportedModel;
+      window.logRow = legacy;
+      window.logDetail = { ...legacy, attempts: [{ number: 1, transport: 'http', status: 200 }], parts: [] };
+      document.getElementById('journalFilters').requestSubmit();
+    });
+    await frame.locator('#journalRows .record-model').filter({ hasText: 'legacy-model' }).waitFor();
+    assert.match(await frame.locator('#journalRows').innerText(), /上游响应模型：未返回/);
+    await frame.locator('#journalRows').getByRole('button', { name: '详情' }).click();
+    await modelGroup.waitFor();
+    assert.deepEqual(await modelGroup.locator('dd').allTextContents(), ['legacy-model', '未提供', '未返回']);
+    await frame.locator('#journalDetailClose').click();
+    const longModel = '<img src=x onerror=window.injected=true>' + 'very-long-upstream-model-name-'.repeat(16);
+    await frame.locator('body').evaluate((element, model) => {
+      window.logRow = { ...window.logRow, requestedModel: model, sentModel: 'sent-model', reportedModel: model };
+      window.logDetail = { ...window.logRow, attempts: [{ number: 1, sentModel: 'sent-model', reportedModel: model }], parts: [] };
+      document.getElementById('journalFilters').requestSubmit();
+    }, longModel);
+    await frame.locator('#journalRows .record-model').filter({ hasText: longModel }).waitFor();
+    assert.equal(await frame.locator('#journalRows img').count(), 0);
+    await frame.locator('#journalRows').getByRole('button', { name: '详情' }).click();
+    await modelGroup.waitFor();
+    assert.deepEqual(await modelGroup.locator('dd').allTextContents(), [longModel, 'sent-model', longModel]);
+    assert.equal(await frame.locator('#journalOverview img').count(), 0);
+    assert.equal(await frame.locator('body').evaluate(() => !!window.injected), false);
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await frame.locator('#journal').evaluate(n => n.scrollWidth <= n.clientWidth + 1), true);
+    assert.equal(await frame.locator('#journalDetail').evaluate(n => n.scrollWidth <= n.clientWidth + 1), true);
     await page.screenshot({ path: path.resolve(__dirname, '../../artifacts/journal-redesign-mobile.png'), fullPage: true });
+    await frame.locator('#journalDetailClose').click();
     await frame.locator('#journalClose').click();
     assert.equal(await frame.locator('#journalBody').textContent(), '');
     assert.deepEqual(errors, []);
     await context.close();
-    console.log('Journal UI passed: channel filtering, reasoning evidence, chunk decoding, raw secrets, safe HTML, real copy/export, confirmations, settings, mobile.');
+    console.log('Journal UI passed: requested/sent/reported models, per-attempt identity, legacy/missing model fallback, channel filtering, reasoning evidence, chunk decoding, safe HTML and long models, real copy/export, confirmations, settings, mobile.');
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

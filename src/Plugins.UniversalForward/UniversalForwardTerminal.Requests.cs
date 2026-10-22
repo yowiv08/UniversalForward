@@ -160,11 +160,11 @@ public sealed partial class UniversalForwardTerminal
             if (settings.StripResponsesResourceState && upstreamEndpoint == "/v1/responses")
             {
                 var body = JsonNode.Parse(payload)!.AsObject();
-                var strippedFields = ResponsesResourceState.Strip(body);
+                var strippedFields = ResponsesResourceState.Strip(body, out var removedReasoningItems);
                 payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
                 await TryLogAsync("request.responses.state.stripped", "已剥离 Responses 资源状态",
                     traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
-                    details: new { strippedFields });
+                    details: new { strippedFields, removedReasoningItems });
             }
             if (websocket) payload = UpstreamWebSocket.CreatePayload(payload);
             var responseStarted = false;
@@ -237,8 +237,10 @@ public sealed partial class UniversalForwardTerminal
                             ? ForwardResponseAnalysis.Read(bytesRead, sse, buffered.Interrupted)
                             : new ForwardResponseAnalysis();
                         var limited = !analysis.PermanentError && (originalCode == 429 || analysis.RateLimited);
+                        var completedEmpty = policy.EmptyResponseRetryEnabled && upstreamEndpoint == "/v1/responses"
+                            && analysis.CompletedResponses && !analysis.HasOutput;
                         var empty = !analysis.HasError && response.IsSuccessStatusCode
-                            && (blank || sse && !analysis.Terminal || buffered.Interrupted);
+                            && (blank || completedEmpty || sse && !analysis.Terminal || buffered.Interrupted);
                         var retryKind = limited && !analysis.HasOutput && policy.RateLimitRetryEnabled ? "rate_limit"
                             : empty && !analysis.HasOutput && policy.EmptyResponseRetryEnabled ? "empty_response" : null;
                         skipOrdinaryRetry = analysis.PermanentError || retryKind != null;
@@ -264,7 +266,7 @@ public sealed partial class UniversalForwardTerminal
                                     return Completed(lastRateLimit, lastRateLimit.StatusCode);
                                 }
                                 return ResponseAnomalyFailure(buffered.Interrupted ? "stream_interrupted"
-                                    : blank ? "empty_response" : "missing_terminal");
+                                    : blank || completedEmpty ? "empty_response" : "missing_terminal");
                             }
                             anomalyRetries++;
                             capture?.Retry(retryKind);
@@ -282,7 +284,7 @@ public sealed partial class UniversalForwardTerminal
                         if (buffered.Interrupted || empty && analysis.HasOutput)
                             return ResponseAnomalyFailure("stream_interrupted");
                         if (empty)
-                            return ResponseAnomalyFailure(blank ? "empty_response" : "missing_terminal");
+                            return ResponseAnomalyFailure(blank || completedEmpty ? "empty_response" : "missing_terminal");
                         await TryLogAsync("request.response.analyzed", analysis.State, traceId: context.TraceId,
                             accountId: context.Account.Id, model: context.Request.Model, statusCode: originalCode,
                             details: new { analysis.State, analysis.IncompleteReason, analysis.HasOutput, analysis.HasUsage,
