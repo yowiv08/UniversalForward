@@ -103,6 +103,7 @@ public sealed partial class UniversalForwardTerminal
             ProxySubscriptionIds = proxySubscriptionIds,
             ProxyId = proxyId,
             ResponsesTransport = responsesTransport,
+            StripResponsesResourceState = input.StripResponsesResourceState ?? previous.StripResponsesResourceState,
             HeaderOverrideMode = headerOverrideMode,
             EndpointHeaderOverrides = endpointHeaderOverrides,
             ModelProtocols = input.ModelProtocols ?? previous.ModelProtocols,
@@ -426,6 +427,7 @@ public sealed partial class UniversalForwardTerminal
             proxySubscriptionIds = settings.ProxySubscriptionIds,
             proxyId = settings.ProxyId,
             responsesTransport = settings.ResponsesTransport,
+            stripResponsesResourceState = settings.StripResponsesResourceState,
             endpointHeaderOverrides = settings.EndpointHeaderOverrides,
             modelProtocols = settings.ModelProtocols,
             models = ReadModels(account),
@@ -590,6 +592,7 @@ public sealed partial class UniversalForwardTerminal
     {
         public AccountSaveInput() { }
         public string? ResponsesTransport { get; init; }
+        public bool? StripResponsesResourceState { get; init; }
         public string? NetworkMode { get; init; }
         public string[]? ProxySubscriptionIds { get; init; }
         public string? ProxyId { get; init; }

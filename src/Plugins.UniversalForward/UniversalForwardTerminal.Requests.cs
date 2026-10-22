@@ -157,6 +157,15 @@ public sealed partial class UniversalForwardTerminal
                 payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
                 capture?.MappedReasoning(reasoningMapping);
             }
+            if (settings.StripResponsesResourceState && upstreamEndpoint == "/v1/responses")
+            {
+                var body = JsonNode.Parse(payload)!.AsObject();
+                var strippedFields = ResponsesResourceState.Strip(body);
+                payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
+                await TryLogAsync("request.responses.state.stripped", "已剥离 Responses 资源状态",
+                    traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
+                    details: new { strippedFields });
+            }
             if (websocket) payload = UpstreamWebSocket.CreatePayload(payload);
             var responseStarted = false;
             var targetEndpoint = profile == "claude" && upstreamEndpoint == "/v1/messages"

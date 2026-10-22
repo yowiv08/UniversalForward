@@ -308,6 +308,7 @@
     $('hostTimeoutHint').textContent = '渠道超时还受宿主的建立响应和响应读取预算限制。填写 3600 秒不代表每个阶段都能等待 3600 秒。';
     renderProxySettings();
     form.elements.responsesTransport.value = account?.responsesTransport || 'http';
+    form.elements.stripResponsesResourceState.checked = account?.stripResponsesResourceState ?? false;
     form.elements.weight.value = account?.weight ?? 100;
     form.elements.enabled.checked = account?.enabled ?? true;
     form.elements.models.value = (account?.models || []).join('\n');
@@ -731,6 +732,7 @@
         id: form.elements.id.value || null, label: form.elements.label.value.trim(), baseUrl: form.elements.baseUrl.value.trim(),
         ...network,
         responsesTransport: form.elements.responsesTransport.value,
+        stripResponsesResourceState: form.elements.stripResponsesResourceState.checked,
         keys, deletedKeyIds, keyRevision, keySelectionMode: $('keySelectionMode').value, weight: Number(form.elements.weight.value),
         enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, reasoningPolicy, requestPolicy, headerOverride,
         headerOverrideMode: headerPolicyMode, endpointHeaderOverrides: endpointHeaderDraft, extraParams
@@ -810,7 +812,8 @@
   function openTests(account) {
     if (dialog.open && savedAccount?.id === account.id &&
         (networkChanged(account) ||
-         form.elements.responsesTransport.value !== (account.responsesTransport || 'http'))) {
+         form.elements.responsesTransport.value !== (account.responsesTransport || 'http') ||
+         form.elements.stripResponsesResourceState.checked !== (account.stripResponsesResourceState ?? false))) {
       feedback('formError', '连接设置尚未保存，请先保存渠道再测试', true); return;
     }
     if (testBusy() && testState.account?.id !== account.id) { message('请先取消或等待当前渠道测试完成', true); return; }

@@ -2,7 +2,7 @@
 
 Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配置和连接测试。
 
-**0.3.0 兼容官方 Router2API 2.1.0（Router.Contracts 2.0.0）。** 更新 UniversalForward 插件即可，原渠道默认行为保留，无需数据库迁移。
+**0.3.1 兼容官方 Router2API 2.1.0（Router.Contracts 2.0.0）。** 更新 UniversalForward 插件即可，原渠道默认行为保留，无需数据库迁移。
 
 ## 渠道管理
 
@@ -75,6 +75,26 @@ HTTP 200 表示上游已开始正常响应，宿主尝试详情中的 `Healthy` 
 连接失败不回退 HTTP；首次有效输出前沿用渠道重试设置，输出后不重放。HTTP 4xx/5xx 握手拒绝保留上游响应；普通 HTTP 2xx 不算握手成功，按连接失败处理。WS 事件按顺序转换为 SSE。连接测试详情显示上游连接方式，日志保留真实握手状态、响应头和原始 WS 消息。
 
 配置地址继续填写 `http://` 或 `https://`，连接时自动使用对应的 `ws://` 或 `wss://`。协议参考：[OpenAI WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)。
+
+## Responses 资源状态剥离
+
+在渠道基础设置中开启「剥离 Responses 资源状态」，可兼容跨资源、账号或中转续聊，避免回传其他来源的历史条目 ID 或加密推理状态。适用于 AnyRouter 等返回标准 `reasoning.encrypted_content` 的 Responses 上游，以及多个 Azure OpenAI 资源轮换的上游。新渠道和旧配置默认关闭，无需额外本地代理或修改客户端地址。
+
+规则作用于当前接收请求的目标渠道，不按密文来源或域名判断。例如 DeepSeek → AnyRouter 时，在 AnyRouter 渠道开启；AnyRouter → 其他中转时，在切换后的目标渠道开启。需要双向切换时，两边都开启。响应中的加密字段仍原样返回，后续发送历史时才剥离。
+
+开启后，仅对最终路由到 `/v1/responses` 的请求，在模板补全和思考映射之后、发送之前删除：
+
+- 顶层 `previous_response_id`。
+- `input` 数组中每个直接对象条目的 `id`。
+- 同一条目中名称以 `encrypted` 开头的字段，例如 `encrypted_content`，区分大小写。
+
+不递归删除嵌套字段；消息正文、工具调用的 `call_id`、参数、工具结果和 `include` 保留。保留条目本身，不改写响应。HTTP、WebSocket、流式、非流式及连接测试共用处理，重试复用已剥离的请求体；Messages 和模型获取不受影响。
+
+客户端需要携带完整对话历史；仅靠 `previous_response_id` 或条目引用恢复的历史无法由插件补回。模型每轮重新推理，不再跨轮接续加密的隐藏推理状态。原生 `compaction` 加密检查点可能包含已经移除的历史，不能通过删除密文恢复，跨中转续接这类会话不在本功能保证范围内。
+
+渠道查询和 `accounts/save` 使用可选布尔字段 `stripResponsesResourceState`。传 `true` 开启，传 `false` 关闭，省略或传 `null` 保留已有设置；仍保存在渠道 settings JSON 中，无需宿主升级或数据库迁移。诊断事件 `request.responses.state.stripped` 记录删除字段数，现有请求日志可查看收到与实际发送的请求体。
+
+剥离规则参考 [codex-strip-proxy](https://github.com/AnnaofArendelle/codex-strip-proxy)。
 
 ## 思考等级映射
 

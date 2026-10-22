@@ -293,6 +293,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         public string[] ProxySubscriptionIds { get; set; } = [];
         public string? ProxyId { get; set; }
         public string ResponsesTransport { get; set; } = "http";
+        public bool StripResponsesResourceState { get; set; }
         public string ApiKey { get; set; } = string.Empty;
         public List<ChannelKey>? Keys { get; set; }
         public string KeySelectionMode { get; set; } = "roundRobin";
