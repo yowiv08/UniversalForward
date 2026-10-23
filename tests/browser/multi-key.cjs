@@ -53,7 +53,7 @@ const html = require('./page-source.cjs')();
           if (cancelled) return { state: 4, progress: { rows: [], total: targets.length, completed: 0 } };
           if (job !== 2 && polls > 1) return { state: 2, result: { rows: targets.map(row => ({
             ...row, keyName: account.keys.find(key => key.id === row.keyId).name, success: true,
-            originalStatus: 200, mappedStatus: 200, durationMs: 24, retries: 0, transport: account.responsesTransport
+            originalStatus: 200, mappedStatus: 200, durationMs: 24, retries: 0, transport: account.responsesTransport, endpoint: '/v1/responses'
           })) } };
           return { state: 1, progress: { rows: [], completed: 0, total: targets.length, running: targets[0].model } };
         }
@@ -158,6 +158,7 @@ const html = require('./page-source.cjs')();
     assert.match(await firstRow.innerText(), /Custom name/);
     assert.doesNotMatch(await firstRow.innerText(), /Alpha/);
     assert.equal(await firstRow.locator('.result-line').count(), 3);
+    assert.deepEqual(await firstRow.locator('.result-endpoint').allTextContents(), ['/v1/responses']);
     assert.equal(await page.locator('#testConfiguration').evaluate(details => details.open), false, 'Submitted tests should focus the results');
     for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 660 }]) {
       await page.setViewportSize(viewport);
@@ -193,6 +194,8 @@ const html = require('./page-source.cjs')();
     assert.equal(await page.locator('#testDetailDialog').isVisible(), true);
     assert.match(await page.locator('#testDetailOverview').innerText(), /model-a/);
     assert.match(await page.locator('#testDetailOverview').innerText(), /WebSocket/);
+    assert.match(await page.locator('#testDetailOverview').innerText(), /测试端点\s+\/v1\/responses/);
+    assert.match(await page.locator('#testDetails').innerText(), /测试端点：\/v1\/responses/);
     await page.screenshot({ path: path.join(output, 'connection-detail-desktop.png'), fullPage: true });
     await page.locator('#testDetailTitle').click();
     assert.equal(await page.locator('#testDetailDialog').isVisible(), true);

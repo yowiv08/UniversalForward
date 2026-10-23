@@ -1,7 +1,9 @@
+using System.Text.RegularExpressions;
+
 namespace Plugins.UniversalForward;
 
 /// <summary>模型支持协议、首选协议和原生模式。</summary>
-public sealed class ModelProtocolOptions
+public sealed partial class ModelProtocolOptions
 {
     public string[] Protocols { get; set; } = ["responses"];
     public string PreferredProtocol { get; set; } = "responses";
@@ -13,6 +15,15 @@ public sealed class ModelProtocolOptions
         "messages" => "/v1/messages",
         _ => throw new FormatException("协议必须是 responses 或 messages。")
     };
+
+    // Defaults are suggestions for generated tests; forwarding keeps the incoming protocol.
+    internal static string DefaultTestEndpoint(string model, string[] endpoints)
+        => ClaudeModel().IsMatch(model) && endpoints.Contains("/v1/messages") ? "/v1/messages"
+            : endpoints.Contains("/v1/responses") ? "/v1/responses"
+            : endpoints.FirstOrDefault() ?? throw new FormatException("渠道没有允许端点");
+
+    [GeneratedRegex(@"(?:^|[/.])claude(?:$|[-_.:\[])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ClaudeModel();
 
     internal void Validate()
     {

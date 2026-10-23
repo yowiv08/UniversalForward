@@ -483,6 +483,7 @@ summary:hover { color: var(--text); }
 .test-configuration-body { margin-top: 18px; }
 .test-setup { display: grid; grid-template-columns: minmax(0,1fr) 150px 120px; gap: 18px; }
 .test-setup { margin-bottom: 16px; }
+.test-endpoint-hint { margin-bottom: 16px; line-height: 1.7; }
 .test-prompt textarea { display: block; min-height: 55px; max-height: 160px; font-size: 13px; }
 .test-prompt p { margin-top: 6px; }
 .stream-control { display: flex; align-items: center; gap: 9px; min-height: 38px; margin: 0; font-weight: 400; }
@@ -498,6 +499,7 @@ summary:hover { color: var(--text); }
 .console-model { font: 12px/1.7 var(--mono); }
 .result-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; padding: 4px 0; }
 .result-key { padding: 1px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--muted); }
+.result-endpoint { display: block; width: fit-content; max-width: 100%; margin-top: 4px; color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
 .result-duration { font: 500 12px var(--mono); }
 .result-retries, .result-empty { color: var(--muted); }
 

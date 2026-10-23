@@ -102,15 +102,16 @@ public sealed partial class UniversalForwardTerminal
             ConnectionTestClient? captureClient = null;
             string? networkMode = null;
             ProxyPoolNode? selectedProxy = null;
+            string? endpoint = input.Endpoint;
             try
             {
                 var account = await _host.Accounts.GetAsync(input.AccountId, job.CancellationToken)
                     ?? throw new InvalidOperationException("渠道已删除");
                 if (!TryReadSettings(account, out var settings)) throw new InvalidOperationException("渠道配置无效");
                 networkMode = settings.NetworkMode;
+                endpoint = TestEndpoint(settings, model, input.Endpoint);
                 var selectedKey = _keySelector.Select(account.Id, ReadKeys(settings), settings.KeySelectionMode, requestedKeyId);
                 keyId = selectedKey.Id; keyName = selectedKey.Name;
-                var endpoint = TestEndpoint(settings, model, input.Endpoint);
                 using var http = await CreateNetworkClientAsync(settings, job.CancellationToken, proxy => selectedProxy = proxy);
                 http.Timeout = Timeout.InfiniteTimeSpan;
                 using var client = new ConnectionTestClient(http, () => sends++, keyId, selectedProxy);
@@ -216,7 +217,7 @@ public sealed partial class UniversalForwardTerminal
             catch (OperationCanceledException) when (job.CancellationToken.IsCancellationRequested) { throw; }
             catch (Exception error)
             {
-                rows.Add(new { model, keyId, keyName, networkMode, proxy = selectedProxy, transport = captureClient?.Transport, success = false, durationMs = watch.ElapsedMilliseconds,
+                rows.Add(new { model, keyId, keyName, endpoint, networkMode, proxy = selectedProxy, transport = captureClient?.Transport, success = false, durationMs = watch.ElapsedMilliseconds,
                     firstEventMs, retries = Math.Max(0, sends - 1),
                     mappedStatus = error is ProxyPoolUnavailableException or ProxyServicesUnavailableException ? 503 : (int?)null,
                     code = error is ProxyServicesUnavailableException ? "proxy_selection_not_supported"
@@ -233,8 +234,7 @@ public sealed partial class UniversalForwardTerminal
     private static string TestEndpoint(ForwardApiSettings settings, string model, string? requested)
         => requested ?? (settings.ModelProtocols.TryGetValue(model, out var options)
             ? ModelProtocolOptions.Endpoint(options.PreferredProtocol)
-            : settings.Endpoints.Contains("/v1/responses") ? "/v1/responses"
-            : settings.Endpoints.FirstOrDefault() ?? throw new FormatException("渠道没有允许端点"));
+            : ModelProtocolOptions.DefaultTestEndpoint(model, settings.Endpoints));
 
     private static async IAsyncEnumerable<ReadOnlyMemory<byte>> CachedTestStream(byte[] bytes)
     {

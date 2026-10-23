@@ -220,6 +220,7 @@
     <div class="test-content">
       <details id="testConfiguration" class="test-configuration" open><summary>测试配置<span id="testConfigSummary">自动选择 · 非流式 · 32 Token</span></summary><div class="test-configuration-body">
       <div class="test-setup"><div><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div><label for="testMaxTokens">输出上限 · Token</label><input id="testMaxTokens" type="number" min="1" max="32768" value="32"></div><div><label for="testStream">流式模式</label><label class="stream-control"><input id="testStream" type="checkbox" role="switch"><span id="testStreamLabel">已禁用</span></label></div></div>
+      <p class="test-endpoint-hint muted">自动选择优先使用模型的首选协议；未配置时，Claude 优先使用 Messages，其他模型优先使用 Responses，仅选择渠道已启用的端点。</p>
       <div class="test-prompt"><label for="testContent">测试内容</label><textarea id="testContent" rows="2" maxlength="16000" placeholder="留空使用默认内容：Reply with OK."></textarea><p class="muted">提高输出上限可能增加费用。</p></div>
       </div></details>
       <div class="test-model-heading"><h3>渠道模型</h3><input id="testFilter" aria-label="筛选测试模型" placeholder="筛选模型…"></div>

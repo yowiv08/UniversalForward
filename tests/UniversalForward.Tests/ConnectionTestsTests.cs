@@ -260,6 +260,119 @@ public sealed class ConnectionTestsTests
     }
 
     [TestMethod]
+    [DataRow("claude-sonnet-4-6", "/v1/responses,/v1/messages", null, null, false, "/v1/messages")]
+    [DataRow("Claude-Opus-4-6", "/v1/messages,/v1/responses", null, null, true, "/v1/messages")]
+    [DataRow("anthropic/claude-haiku-4-5", "/v1/responses,/v1/messages", null, null, true, "/v1/messages")]
+    [DataRow("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "/v1/responses,/v1/messages", null, null, false, "/v1/messages")]
+    [DataRow("claude-sonnet-4-6[1m]", "/v1/responses,/v1/messages", null, null, false, "/v1/messages")]
+    [DataRow("gpt-5.4", "/v1/messages,/v1/responses", null, null, false, "/v1/responses")]
+    [DataRow("gpt-5.4", "/v1/responses,/v1/messages", null, null, true, "/v1/responses")]
+    [DataRow("claude-sonnet-4-6", "/v1/responses", null, null, false, "/v1/responses")]
+    [DataRow("gpt-5.4", "/v1/messages", null, null, false, "/v1/messages")]
+    [DataRow("claude-sonnet-4-6", "/v1/responses,/v1/messages", "responses", null, false, "/v1/responses")]
+    [DataRow("claude-sonnet-4-6", "/v1/responses,/v1/messages", "messages", null, true, "/v1/messages")]
+    [DataRow("gpt-5.4", "/v1/responses,/v1/messages", "messages", null, false, "/v1/messages")]
+    [DataRow("claude-sonnet-4-6", "/v1/responses,/v1/messages", "messages", "/v1/responses", false, "/v1/responses")]
+    [DataRow("gpt-5.4", "/v1/responses,/v1/messages", "responses", "/v1/messages", true, "/v1/messages")]
+    [DataRow("not-claude-model", "/v1/responses,/v1/messages", null, null, false, "/v1/responses")]
+    public async Task TestRequestsUseModelDefaultsAndRespectExplicitProtocols(string model, string endpoints,
+        string? preferredProtocol, string? requestedEndpoint, bool stream, string expectedEndpoint)
+    {
+        var host = Host();
+        var account = (await host.Services.Accounts.GetAsync("account", CancellationToken.None))!;
+        var fields = ((CustomCredential)account.Credential).Fields;
+        var settings = System.Text.Json.Nodes.JsonNode.Parse(fields["settings"]!)!.AsObject();
+        settings["endpoints"] = JsonSerializer.SerializeToNode(endpoints.Split(','));
+        if (preferredProtocol is not null)
+            settings["modelProtocols"] = JsonSerializer.SerializeToNode(new Dictionary<string, ModelProtocolOptions>
+            {
+                [model] = new() { Protocols = ["responses", "messages"], PreferredProtocol = preferredProtocol }
+            }, JsonSerializerOptions.Web);
+        account.Credential = new CustomCredential(new Dictionary<string, string?>(fields)
+        {
+            ["settings"] = settings.ToJsonString(), ["models"] = JsonSerializer.Serialize(new[] { model })
+        });
+        var sent = 0;
+        using var handler = new ProfileHandler(async request =>
+        {
+            sent++;
+            Assert.AreEqual(expectedEndpoint, request.RequestUri!.AbsolutePath);
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            var root = body.RootElement;
+            Assert.AreEqual(stream, root.GetProperty("stream").GetBoolean());
+            if (expectedEndpoint == "/v1/messages")
+            {
+                Assert.AreEqual("test-only", request.Headers.GetValues("x-api-key").Single());
+                Assert.IsFalse(root.TryGetProperty("input", out _));
+                Assert.AreEqual("Explain the connection test.", root.GetProperty("messages")[0].GetProperty("content").GetString());
+                Assert.AreEqual(96, root.GetProperty("max_tokens").GetInt32());
+            }
+            else
+            {
+                Assert.AreEqual("Bearer test-only", request.Headers.Authorization!.ToString());
+                Assert.IsFalse(root.TryGetProperty("messages", out _));
+                Assert.AreEqual("Explain the connection test.", root.GetProperty("input").GetString());
+                Assert.AreEqual(96, root.GetProperty("max_output_tokens").GetInt32());
+            }
+            var response = stream
+                ? expectedEndpoint == "/v1/messages"
+                    ? "data: {\"type\":\"message_start\"}\n\ndata: {\"type\":\"message_stop\"}\n\n"
+                    : "data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.completed\"}\n\n"
+                : expectedEndpoint == "/v1/messages"
+                    ? """{"content":[{"type":"text","text":"OK"}]}"""
+                    : """{"status":"completed","output":[{"type":"message"}]}""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(response, Encoding.UTF8, stream ? "text/event-stream" : "application/json") };
+        });
+        Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
+            .Returns(() => new HttpClient(handler, false));
+        using var terminal = new UniversalForwardTerminal(host);
+        var input = new
+        {
+            accountId = "account", models = new[] { model }, endpoint = requestedEndpoint, stream,
+            content = "Explain the connection test.", maxOutputTokens = 96
+        };
+        Assert.AreEqual(202, (await terminal.StartConnectionTestsAsync(Context(input))).StatusCode);
+        var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
+            JsonSerializer.SerializeToElement(input), _ => { }, CancellationToken.None));
+        var row = result!.Value.GetProperty("rows")[0];
+        Assert.AreEqual(1, sent);
+        Assert.IsTrue(row.GetProperty("success").GetBoolean(), row.ToString());
+        Assert.AreEqual(expectedEndpoint, row.GetProperty("endpoint").GetString());
+    }
+
+    [TestMethod]
+    public async Task AutomaticMixedBatchRoutesClaudeAndGptIndependently()
+    {
+        var host = Host();
+        var account = (await host.Services.Accounts.GetAsync("account", CancellationToken.None))!;
+        var fields = new Dictionary<string, string?>(((CustomCredential)account.Credential).Fields)
+        { ["models"] = """["claude-sonnet-4-6","gpt-5.4"]""" };
+        account.Credential = new CustomCredential(fields);
+        var paths = new List<string>();
+        using var handler = new InspectHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            paths.Add(path);
+            return path == "/v1/messages" ? """{"content":[{"type":"text","text":"OK"}]}"""
+                : """{"status":"completed","output":[{"type":"message"}]}""";
+        });
+        Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
+            .Returns(() => new HttpClient(handler, false));
+        using var terminal = new UniversalForwardTerminal(host);
+        var input = new { accountId = "account", models = new[] { "claude-sonnet-4-6", "gpt-5.4" } };
+        Assert.AreEqual(202, (await terminal.StartConnectionTestsAsync(Context(input))).StatusCode);
+        var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
+            JsonSerializer.SerializeToElement(input), _ => { }, CancellationToken.None));
+        CollectionAssert.AreEqual(PreferredPaths, paths);
+        var rows = result!.Value.GetProperty("rows");
+        Assert.AreEqual(2, rows.GetArrayLength());
+        Assert.AreEqual("/v1/messages", rows[0].GetProperty("endpoint").GetString());
+        Assert.AreEqual("/v1/responses", rows[1].GetProperty("endpoint").GetString());
+        Assert.IsTrue(rows.EnumerateArray().All(row => row.GetProperty("success").GetBoolean()));
+    }
+
+    [TestMethod]
     [DataRow("codex", "/v1/responses", false)]
     [DataRow("claude", "/v1/messages", false)]
     [DataRow("codex", "/v1/responses", true)]

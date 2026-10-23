@@ -92,9 +92,15 @@ function demoBridge() {
     if (endpoint === 'logs/settings') { settings = structuredClone(body); return {}; }
     if (endpoint === 'tests/start') {
       const account = accounts.find(item => item.id === body.accountId), keys = account.keys.filter(key => key.enabled);
+      const endpointFor = model => body.endpoint || (account.modelProtocols?.[model]?.preferredProtocol
+        ? '/v1/' + account.modelProtocols[model].preferredProtocol
+        : /(?:^|[/.])claude(?:$|[-_.:\[])/i.test(model) && account.endpoints.includes('/v1/messages') ? '/v1/messages'
+        : account.endpoints.includes('/v1/responses') ? '/v1/responses' : account.endpoints[0]);
       const targets = body.models.flatMap(model => (body.keyMode === 'all' ? keys : [keys.find(key => key.id === body.keyId) || keys[0]])
         .map(key => ({ model, keyId: key?.id, keyName: key?.name || '按策略', success: true, originalStatus: 200, mappedStatus: 200,
-          durationMs: 120 + Math.round(Math.random() * 400), retries: 0, response: '{"output":"OK"}', networkMode: account.networkMode, transport: account.responsesTransport || 'http' })));
+          endpoint: endpointFor(model), durationMs: 120 + Math.round(Math.random() * 400), retries: 0,
+          response: endpointFor(model) === '/v1/messages' ? '{"content":[{"type":"text","text":"OK"}]}' : '{"status":"completed","output":[{"type":"message"}]}',
+          networkMode: account.networkMode, transport: endpointFor(model) === '/v1/responses' ? account.responsesTransport || 'http' : 'http' })));
       const id = 'demo-job-' + Date.now(); jobs.set(id, { targets, polls: 0, cancelled: false }); return { id, state: 0 };
     }
     if (endpoint === 'tests/status') {

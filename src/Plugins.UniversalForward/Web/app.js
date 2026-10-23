@@ -517,6 +517,7 @@
     paths.forEach((path, index) => {
       const label = el('label', undefined, 'endpoint-option'), input = el('input'), text = el('span', Object.values(protocolLabels)[index]);
       input.type = 'checkbox'; input.name = 'endpoints'; input.value = path; input.checked = selected.has(path);
+      input.onchange = renderProtocols;
       text.append(el('code', path)); label.append(input, text); root.append(label);
     });
     $('refreshModels').disabled = !account;
@@ -690,8 +691,12 @@
     updateReasoningModels();
     const root = $('modelProtocols'); root.replaceChildren(); $('protocolCount').textContent = modelIds().length;
     if (!modelIds().length) { root.append(el('div', '添加模型后在这里配置协议', 'empty')); return; }
+    const endpoints = [...form.querySelectorAll('input[name=endpoints]:checked')].map(x => x.value);
     for (const model of modelIds()) {
-      const configured = modelProtocolDraft[model], value = configured || { protocols: ['responses'], preferredProtocol: 'responses', nativeOnly: false };
+      const configured = modelProtocolDraft[model];
+      const preferred = /(?:^|[/.])claude(?:$|[-_.:\[])/i.test(model) && endpoints.includes('/v1/messages') ? 'messages'
+        : endpoints.includes('/v1/responses') ? 'responses' : 'messages';
+      const value = configured || { protocols: [preferred], preferredProtocol: preferred, nativeOnly: false };
       const row = el('div', undefined, 'protocol-row'), header = el('div', undefined, 'protocol-summary'); header.append(el('strong', model));
       const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = !!configured;
       const label = el('label', undefined, 'inline-check'); label.append(enabled, document.createTextNode('指定支持协议')); header.append(label); row.append(header);
@@ -1001,14 +1006,14 @@
       const ops = el('td'), run = button('测试', () => startTests([model])); run.disabled = testBusy(); ops.append(run);
       if (results.length) ops.append(button('详情', () => {
         $('testDetails').textContent = results.map(r =>
-          `${r.keyName || r.keyId || '按策略'} · 出站方式：${r.networkMode === 'proxyPool' ? '代理池' : '直连'} · 上游连接：${r.transport === 'websocket' ? 'WebSocket' : 'HTTP'}${r.proxy ? `\n实际代理：${r.proxy.address} · ${r.proxy.id}` : ''}\n${r.response || r.error || '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
+          `${r.keyName || r.keyId || '按策略'} · 测试端点：${r.endpoint || '—'} · 出站方式：${r.networkMode === 'proxyPool' ? '代理池' : '直连'} · 上游连接：${r.transport === 'websocket' ? 'WebSocket' : 'HTTP'}${r.proxy ? `\n实际代理：${r.proxy.address} · ${r.proxy.id}` : ''}\n${r.response || r.error || '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
         ).join('\n\n');
         const overview = $('testDetailOverview'); overview.replaceChildren();
         for (const r of results) {
           const section = el('section', '', 'detail-group'), values = el('dl', '', 'detail-values detail-card');
           section.append(el('h4', r.keyName || r.keyId || '按渠道策略'));
           for (const [label, value] of [['模型', model], ['状态', r.cancelled ? '已取消' : r.success ? '成功' : '失败'],
-            ['出站方式', r.networkMode === 'proxyPool' ? '代理池' : '直连'], ['上游连接', r.transport === 'websocket' ? 'WebSocket' : 'HTTP'],
+            ['测试端点', r.endpoint || '—'], ['出站方式', r.networkMode === 'proxyPool' ? '代理池' : '直连'], ['上游连接', r.transport === 'websocket' ? 'WebSocket' : 'HTTP'],
             ...(r.proxy ? [['实际代理', r.proxy.address], ['代理 ID', r.proxy.id], ['代理来源', r.proxy.subscriptionId]] : []),
             ['状态码', `${r.originalStatus ?? '—'} → ${r.mappedStatus ?? '—'}`],
             ['响应时间', `${r.durationMs ?? '—'} ms`], ['重试次数', String(r.retries ?? 0)]]) values.append(el('dt', label), el('dd', value));
@@ -1019,6 +1024,8 @@
       const stateCell = el('td');
       stateCell.append(el('span', state, 'console-badge ' + (state === '成功' ? 'is-success' : state === '失败' ? 'is-error' : pending ? 'is-active' : 'is-neutral')));
       const modelCell = el('td', model, 'console-model');
+      for (const endpoint of new Set(results.map(r => r.endpoint).filter(Boolean)))
+        modelCell.append(el('code', endpoint, 'result-endpoint'));
       for (const [item, label] of [[cell, '选择'], [modelCell, '模型'], [stateCell, '状态'], [summaryCell, '结果'], [ops, '操作']]) item.dataset.label = label;
       row.append(cell, modelCell, stateCell, summaryCell, ops); root.append(row);
     }
