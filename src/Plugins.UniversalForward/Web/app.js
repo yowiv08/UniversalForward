@@ -8,6 +8,48 @@
     if (cls) n.className = cls;
     return n;
   };
+  const iconPaths = {
+    journal: ['M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3', 'M8 8h7M8 12h5M8 16h4', 'm16 3 5 5m-6 1 6-6'],
+    refresh: ['M20 7a8 8 0 0 0-14-2L3 8', 'M3 3v5h5', 'M4 17a8 8 0 0 0 14 2l3-3', 'M16 16h5v5'],
+    plus: ['M12 5v14M5 12h14'],
+    channels: ['M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'],
+    activity: ['M3 12h4l3-8 4 16 3-8h4'],
+    key: ['M15 3a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z', 'm10.5 13.5-8 8M3 21h4v-4h4', 'M16 7h.01'],
+    models: ['m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5'],
+    search: ['M10.5 3a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15Z', 'm16 16 5 5'],
+    list: ['M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'],
+    grid: ['M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z'],
+    settings: ['M4 7h7M15 7h5M4 17h3M11 17h9', 'M11 4v6M15 4v6M7 14v6M11 14v6', 'M11 4h4v6h-4ZM7 14h4v6H7Z'],
+    mapping: ['M4 6h5a3 3 0 0 1 3 3v6a3 3 0 0 0 3 3h5', 'm17 15 3 3-3 3', 'M4 18h5a3 3 0 0 0 3-3V9a3 3 0 0 1 3-3h5', 'm17 3 3 3-3 3'],
+    code: ['m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18'],
+    retry: ['M3 8h12a6 6 0 0 1 0 12h-3', 'm7 4-4 4 4 4'],
+    info: ['M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18Z', 'M12 11v6M12 7h.01'],
+    forward: ['M5 5h7a7 7 0 0 1 7 7v6', 'm15 14 4 4 4-4', 'M5 11h4a3 3 0 0 1 3 3v5', 'm8 15 4 4 4-4'],
+    panel: ['M3 4h18v16H3z', 'M9 4v16'],
+    'chevron-right': ['m9 5 7 7-7 7'],
+    'chevron-up': ['m5 15 7-7 7 7'],
+    'chevron-down': ['m5 9 7 7 7-7'],
+    'arrow-left': ['M20 12H4', 'm10 6-6 6 6 6'],
+    x: ['m6 6 12 12M6 18 18 6'],
+    check: ['m5 12 4 4L19 6'],
+    more: ['M5 12h.01M12 12h.01M19 12h.01'],
+    test: ['M6 3h12M9 3v7l-5 9a1 1 0 0 0 1 2h14a1 1 0 0 0 1-2l-5-9V3', 'M7 15h10'],
+    edit: ['m16 3 5 5-12 12-5 1 1-5 11-13Z', 'm14 5 5 5'],
+    trash: ['M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7'],
+    power: ['M12 3v9', 'M7 5a9 9 0 1 0 10 0'],
+    filter: ['M4 5h16l-6 7v6l-4 2v-8L4 5Z']
+  };
+  function icon(name) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    for (const [attribute, value] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+      'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: 'ui-icon', 'aria-hidden': 'true', focusable: 'false' }))
+      svg.setAttribute(attribute, value);
+    for (const d of iconPaths[name] || iconPaths.channels) {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('d', d); svg.append(path);
+    }
+    return svg;
+  }
+  for (const placeholder of document.querySelectorAll('[data-icon]')) placeholder.replaceChildren(icon(placeholder.dataset.icon));
   const feedback = (id, text = '', error = false) => {
     const n = $(id); n.textContent = text; n.hidden = !text;
     n.className = 'feedback' + (error ? ' error' : '');
@@ -18,6 +60,10 @@
     return window.Router2API.request(method, path, body);
   };
   const keyModes = { roundRobin: '轮询', random: '随机', priority: '主备顺序' };
+  const defaultKeyName = secret => (secret || '').trim().slice(-4);
+  const automaticKeyName = name => !name?.trim() || /^key\s*\d+$/i.test(name.trim()) || name.trim() === '默认 Key';
+  const effectiveKeySecret = key => key.secret.trim() || key.originalSecret || '';
+  const keySecretChanged = key => !key.id || !!key.secret.trim() && key.secret.trim() !== key.originalSecret;
   function updateResponseRetry() {
     $('responseRetrySettings').hidden = !$('rateLimitRetryEnabled').checked && !$('emptyResponseRetryEnabled').checked;
   }
@@ -51,6 +97,101 @@
   const button = (text, work, cls = 'secondary') => {
     const b = el('button', text, cls); b.type = 'button'; b.addEventListener('click', work); return b;
   };
+  let workspacePage = 'channels';
+  const smallNavigation = matchMedia('(max-width: 900px)');
+  function syncNavigation() {
+    const expanded = smallNavigation.matches ? document.body.classList.contains('sidebar-open') : !document.body.classList.contains('sidebar-collapsed');
+    $('navToggle').setAttribute('aria-expanded', String(expanded));
+    $('sidebarOverlay').hidden = !smallNavigation.matches || !expanded;
+    $('appSidebar').inert = smallNavigation.matches && !expanded;
+    document.querySelector('.app-main').inert = smallNavigation.matches && expanded;
+  }
+  function closeNavigation() {
+    const restoreFocus = smallNavigation.matches && document.body.classList.contains('sidebar-open') && $('appSidebar').contains(document.activeElement);
+    document.body.classList.remove('sidebar-open'); syncNavigation();
+    if (restoreFocus) $('navToggle').focus();
+  }
+  $('navToggle').onclick = () => {
+    document.body.classList.toggle(smallNavigation.matches ? 'sidebar-open' : 'sidebar-collapsed'); syncNavigation();
+    if (smallNavigation.matches && document.body.classList.contains('sidebar-open')) $('appSidebar').querySelector('[aria-current=page]')?.focus();
+  };
+  $('sidebarOverlay').onclick = closeNavigation;
+  smallNavigation.addEventListener('change', closeNavigation);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && document.body.classList.contains('sidebar-open')) { closeNavigation(); $('navToggle').focus(); }
+    else if (event.key === 'Tab' && smallNavigation.matches && document.body.classList.contains('sidebar-open')) {
+      const items = [...$('appSidebar').querySelectorAll('button:not(:disabled)')];
+      const current = items.indexOf(document.activeElement);
+      if (event.shiftKey && current <= 0) { event.preventDefault(); items.at(-1)?.focus(); }
+      else if (!event.shiftKey && (current < 0 || current === items.length - 1)) { event.preventDefault(); items[0]?.focus(); }
+    }
+  });
+  function setWorkspacePage(page) {
+    closeChannelMenu();
+    workspacePage = page;
+    $('channelsWorkspace').hidden = page !== 'channels';
+    $('journal').hidden = page !== 'journal';
+    $('workspaceTitle').textContent = page === 'journal' ? '请求日志' : '渠道管理';
+    for (const [id, active] of [['showChannels', page === 'channels'], ['openJournal', page === 'journal']]) {
+      if (active) $(id).setAttribute('aria-current', 'page'); else $(id).removeAttribute('aria-current');
+    }
+    closeNavigation();
+    window.scrollTo({ top: 0 });
+  }
+  $('showChannels').onclick = () => { closeJournal(); $('statusFilter').value = 'all'; render(); };
+  for (const [id, state] of [['showEnabled', 'enabled'], ['showDisabled', 'disabled']]) $(id).onclick = () => {
+    closeJournal(); $('statusFilter').value = state; render();
+  };
+  syncNavigation();
+
+  // A single viewport-positioned menu stays usable inside card grids and scrolled lists.
+  let activeChannelMenu = null;
+  function closeChannelMenu(restoreFocus = false) {
+    if (!activeChannelMenu) return;
+    const { menu, trigger } = activeChannelMenu; activeChannelMenu = null;
+    trigger.setAttribute('aria-expanded', 'false'); menu.hidden = true;
+    if (restoreFocus && trigger.isConnected) trigger.focus();
+  }
+  function openChannelMenu(menu, trigger) {
+    const wasOpen = activeChannelMenu?.menu === menu; closeChannelMenu();
+    if (wasOpen) return;
+    menu.hidden = false; trigger.setAttribute('aria-expanded', 'true'); activeChannelMenu = { menu, trigger };
+    const bounds = trigger.getBoundingClientRect(), size = menu.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(bounds.right - size.width, innerWidth - size.width - 8)) + 'px';
+    menu.style.top = (bounds.bottom + size.height + 8 <= innerHeight ? bounds.bottom + 6 : Math.max(8, bounds.top - size.height - 6)) + 'px';
+    menu.querySelector('button:not(:disabled)')?.focus();
+  }
+  document.addEventListener('pointerdown', event => {
+    if (activeChannelMenu && !activeChannelMenu.menu.contains(event.target) && !activeChannelMenu.trigger.contains(event.target)) closeChannelMenu();
+  });
+  document.addEventListener('keydown', event => {
+    if (!activeChannelMenu) return;
+    if (event.key === 'Escape') { event.preventDefault(); closeChannelMenu(true); }
+    else if (event.key === 'Tab') closeChannelMenu();
+    else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      const items = [...activeChannelMenu.menu.querySelectorAll('button:not(:disabled)')], current = items.indexOf(document.activeElement);
+      const index = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items[index]?.focus();
+    }
+  });
+  window.addEventListener('resize', () => closeChannelMenu());
+  document.addEventListener('scroll', () => closeChannelMenu(), true);
+  // Only explicit selections are remembered; the previous release also stored its initial list default.
+  const channelViewPreference = 'universalforward.channelViewPreference';
+  let channelView = 'grid';
+  try { if (localStorage.getItem(channelViewPreference) === 'list') channelView = 'list'; } catch { /* Sandboxed pages may not have storage. */ }
+  function selectChannelView(view, remember = true) {
+    channelView = view;
+    $('cards').dataset.view = view;
+    $('channelColumns').hidden = view !== 'list';
+    $('viewList').setAttribute('aria-pressed', String(view === 'list'));
+    $('viewGrid').setAttribute('aria-pressed', String(view === 'grid'));
+    if (remember) try { localStorage.setItem(channelViewPreference, view); } catch { /* The view still works without persistence. */ }
+  }
+  $('viewList').onclick = () => selectChannelView('list');
+  $('viewGrid').onclick = () => selectChannelView('grid');
+  selectChannelView(channelView, false);
   const option = (value, title) => { const n = el('option', title); n.value = value; return n; };
   let proxyCatalog = null, proxyCatalogError = '', proxyLoading = false, proxyRequest = 0;
   let proxySourcesDraft = [], proxyIdDraft = '';
@@ -199,11 +340,16 @@
   }
 
   function selectTab(name, focus = false) {
+    closeEffortPicker();
+    document.querySelector('.editor-nav').setAttribute('aria-orientation', matchMedia('(max-width: 600px)').matches ? 'horizontal' : 'vertical');
     for (const tab of document.querySelectorAll('[data-tab]')) {
       const selected = tab.dataset.tab === name;
       tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
       $('panel-' + tab.dataset.tab).hidden = !selected;
-      if (selected && focus) tab.focus();
+      if (selected) {
+        if (focus) tab.focus();
+        tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
     }
     document.querySelector('.editor-content').scrollTop = 0;
   }
@@ -225,52 +371,84 @@
     $('editorSummary').textContent = `${keyDraft.filter(k => k.enabled).length} 个启用 Key · ${modelIds().length} 个模型`;
   }
   function render() {
+    closeChannelMenu();
     $('metricChannels').textContent = accounts.length;
     $('metricEnabled').textContent = accounts.filter(a => a.enabled).length;
     $('metricKeys').textContent = accounts.reduce((sum, a) => sum + (a.keys || []).filter(k => k.enabled).length, 0);
     $('metricModels').textContent = new Set(accounts.flatMap(a => a.models || [])).size;
+    $('navChannelCount').textContent = accounts.length;
+    $('navEnabledCount').textContent = accounts.filter(a => a.enabled).length;
+    $('navDisabledCount').textContent = accounts.filter(a => !a.enabled).length;
     const q = $('filter').value.toLowerCase(), status = $('statusFilter').value;
+    $('showEnabled').setAttribute('aria-pressed', String(status === 'enabled'));
+    $('showDisabled').setAttribute('aria-pressed', String(status === 'disabled'));
     const visible = accounts.filter(a => [a.label, a.baseUrl, ...(a.models || [])].join(' ').toLowerCase().includes(q)
       && (status === 'all' || !!a.enabled === (status === 'enabled')));
     $('channelCount').textContent = visible.length;
+    $('channelResult').textContent = q || status !== 'all' ? `显示 ${visible.length} / ${accounts.length} 个渠道` : `共 ${accounts.length} 个渠道`;
     const root = $('cards'); root.replaceChildren();
-    if (!visible.length) { root.append(el('div', accounts.length ? '没有匹配的渠道' : '添加第一个渠道，开始配置上游连接', 'empty')); return; }
+    if (!visible.length) {
+      const empty = el('div', undefined, 'empty');
+      empty.append(icon(accounts.length ? 'search' : 'channels'), el('h3', accounts.length ? '没有匹配的渠道' : '添加你的第一个渠道'),
+        el('p', accounts.length ? '尝试其他关键词，或重置筛选条件。' : '填写上游地址和密钥，然后选择需要转发的模型。'));
+      empty.append(accounts.length ? button('重置筛选', () => { $('filter').value = ''; $('statusFilter').value = 'all'; render(); })
+        : button('添加渠道', () => open(null), 'primary'));
+      root.append(empty); return;
+    }
     for (const a of visible) {
       const card = el('article', undefined, 'channel-card'), top = el('div', undefined, 'channel-top');
+      card.dataset.enabled = String(!!a.enabled);
+      card.setAttribute('aria-busy', String(switchingChannels.has(a.id)));
+      const identity = el('div', undefined, 'channel-identity');
       const title = el('div', undefined, 'channel-title');
-      title.append(el('h3', a.label));
-      top.append(title,
-        el('span', a.enabled ? '已启用' : '已禁用', 'badge' + (a.enabled ? '' : ' off')));
+      const name = button(a.label, () => open(a), 'channel-name-button');
+      name.setAttribute('aria-label', `编辑渠道「${a.label}」`);
+      const heading = el('h3'); heading.append(name); title.append(heading);
+      const monogram = el('span', [...(a.label?.trim() || 'U')][0].toUpperCase(), 'channel-monogram'); monogram.setAttribute('aria-hidden', 'true');
+      top.append(monogram, title);
       const address = el('p', a.baseUrl, 'channel-url');
       address.title = a.baseUrl;
-      const meta = el('div', undefined, 'channel-meta');
-      for (const [label, value] of [['可用 Key', `${(a.keys || []).filter(k => k.enabled).length}/${a.keys?.length || 0}`],
-        ['分配', keyModes[a.keySelectionMode] || '轮询'], ['权重', a.weight]]) {
-        const item = el('span', label); item.append(el('b', value)); meta.append(item);
-      }
+      const keys = el('div', undefined, 'channel-keys'), keyCount = el('div', undefined, 'key-count');
+      keyCount.append(icon('key'), el('strong', String((a.keys || []).filter(k => k.enabled).length)), el('span', `/ ${a.keys?.length || 0} 启用`, 'muted'));
+      keys.append(keyCount, el('small', keyModes[a.keySelectionMode] || '轮询'));
+      const meta = el('div', undefined, 'channel-meta'), network = el('div', undefined, 'channel-network');
+      network.append(el('span', a.networkMode === 'proxyPool' ? '代理池' : '直连', 'route-label'), el('span', a.responsesTransport === 'websocket' ? 'WS' : 'HTTP', 'transport-label'));
+      meta.append(network, el('small', `权重 ${a.weight ?? 100}`));
       const tags = el('div', undefined, 'model-tags');
-      for (const model of (a.models || []).slice(0, 3)) tags.append(el('span', model, 'model-tag'));
+      for (const model of (a.models || []).slice(0, 3)) { const tag = el('span', model, 'model-tag'); tag.title = model; tags.append(tag); }
       if (a.models?.length > 3) tags.append(el('span', `+${a.models.length - 3}`, 'model-tag'));
       const endpoints = el('div', undefined, 'channel-endpoints');
       for (const endpoint of a.endpoints || []) endpoints.append(el('span', endpoint.replace(/^\/v1\//, ''), 'endpoint-tag'));
       const modelHeading = el('div', undefined, 'between channel-model-heading');
-      modelHeading.append(el('h4', '已配置模型'), el('strong', `${a.models?.length || 0} 个`));
+      const modelCount = button('', () => { open(a); selectTab('models'); }, 'model-count-button');
+      modelCount.append(el('strong', `${a.models?.length || 0} 个模型`), icon('chevron-right')); modelCount.setAttribute('aria-label', `配置「${a.label}」的 ${a.models?.length || 0} 个模型`);
+      modelHeading.append(modelCount);
       if (!a.models?.length) tags.append(el('span', '暂无模型', 'muted'));
-      const actions = el('div', undefined, 'actions');
-      const toggle = button(switchingChannels.has(a.id) ? '处理中…' : a.enabled ? '禁用' : '启用', () => setChannelEnabled(a));
+      const models = el('div', undefined, 'channel-models'); models.append(modelHeading, tags);
+      const actions = el('div', undefined, 'channel-actions');
+      const toggle = button(switchingChannels.has(a.id) ? '处理中…' : a.enabled ? '禁用' : '启用', () => setChannelEnabled(a), 'channel-toggle-button ' + (a.enabled ? 'secondary' : 'primary'));
+      toggle.prepend(icon('power'));
       toggle.setAttribute('aria-label', `${a.enabled ? '禁用' : '启用'}渠道「${a.label}」`);
       toggle.setAttribute('aria-busy', String(switchingChannels.has(a.id)));
-      actions.append(button('编辑', () => open(a)), button('测试连接', () => openTests(a)),
-        button('日志', () => openJournal(a.id)),
-        button('模型', () => { open(a); selectTab('models'); }),
-        toggle,
-        button('删除', async () => {
+      const edit = button('编辑', () => open(a), 'text-button channel-edit-button'), test = button('测试连接', () => openTests(a), 'channel-test-button');
+      test.prepend(icon('test'));
+      const trigger = button('', () => openChannelMenu(menu, trigger), 'icon-button channel-menu-trigger'); trigger.append(icon(switchingChannels.has(a.id) ? 'refresh' : 'more'));
+      trigger.setAttribute('aria-label', `更多操作「${a.label}」`); trigger.setAttribute('aria-haspopup', 'menu'); trigger.setAttribute('aria-expanded', 'false');
+      const menu = el('div', undefined, 'channel-menu'); menu.hidden = true; menu.setAttribute('role', 'menu'); menu.setAttribute('aria-label', `渠道「${a.label}」操作`);
+      const log = button('日志', () => { closeChannelMenu(); openJournal(a.id); }, 'menu-item'); log.prepend(icon('journal'));
+      const remove = button('删除', async () => {
+          closeChannelMenu();
           if (!await ask(`删除渠道「${a.label}」及其配置？`, '删除渠道')) return;
           try { await api('POST', 'accounts/delete', { id: a.id }); await load(); message('渠道已删除'); }
           catch (e) { message(e.message, true); }
-        }, 'text-button danger'));
-      if (switchingChannels.has(a.id)) for (const control of actions.querySelectorAll('button')) control.disabled = true;
-      card.append(top, address, meta, endpoints, modelHeading, tags, actions); root.append(card);
+        }, 'menu-item danger'); remove.prepend(icon('trash'));
+      for (const item of [log, remove]) item.setAttribute('role', 'menuitem');
+      menu.append(log, el('div', undefined, 'menu-separator'), remove);
+      actions.append(edit, test, toggle, trigger, menu);
+      if (switchingChannels.has(a.id)) for (const control of [...actions.querySelectorAll('button'), modelCount]) control.disabled = true;
+      const statusLine = el('div', undefined, 'channel-status-line'); statusLine.append(el('span', a.enabled ? '已启用' : '已禁用', 'badge' + (a.enabled ? '' : ' off')), endpoints);
+      title.append(address); identity.append(top, statusLine);
+      card.append(identity, models, keys, meta, actions); root.append(card);
     }
   }
   async function setChannelEnabled(account) {
@@ -286,18 +464,21 @@
   }
   async function load() {
     if (loading) return;
-    loading = true; $('reload').disabled = true;
+    loading = true; $('reload').disabled = true; $('cards').setAttribute('aria-busy', 'true'); $('channelResult').textContent = '正在读取渠道…';
     try { const data = await api('GET', 'accounts'); accounts = data.accounts || []; render(); }
-    catch (e) { message(e.message, true); }
-    finally { loading = false; $('reload').disabled = false; }
+    catch (e) { message(e.message, true); $('channelResult').textContent = '读取失败，请刷新重试';
+      if (!accounts.length) { const empty = el('div', undefined, 'empty'); empty.append(el('h3', '渠道加载失败'), el('p', '请检查连接后重新加载。'), button('重新加载', load)); $('cards').replaceChildren(empty); }
+    }
+    finally { loading = false; $('reload').disabled = false; $('cards').setAttribute('aria-busy', 'false'); }
   }
   function open(account) {
     editorEpoch++; savedAccount = account; form.reset(); saving = false;
+    for (const details of form.querySelectorAll('details')) details.open = false;
     $('discover').disabled = false;
     $('discoveryDetails').hidden = true;
     $('discoveryResponse').textContent = '';
     for (const id of ['formError', 'discoveryStatus', 'protocolStatus', 'headerStatus', 'mappingStatus']) feedback(id);
-    $('formTitle').textContent = account ? '编辑渠道' : '添加渠道';
+    $('formTitle').textContent = account ? '编辑渠道 · ' + account.label : '添加渠道';
     for (const name of ['id', 'label', 'baseUrl']) form.elements[name].value = account?.[name] || '';
     form.elements.networkMode.value = account?.networkMode || 'direct';
     proxySourcesDraft = uniqueIds(account?.proxySubscriptionIds);
@@ -313,7 +494,11 @@
     form.elements.enabled.checked = account?.enabled ?? true;
     form.elements.models.value = (account?.models || []).join('\n');
     extraParams = typeof account?.extraParams === 'string' ? objectJson(account.extraParams, '高级参数') : account?.extraParams || {};
-    keyDraft = (account?.keys || []).map(k => ({ ...k, secret: '', uiId: 'draft:' + ++keySequence }));
+    keyDraft = (account?.keys || []).map(k => {
+      const secret = k.secret || '', autoName = automaticKeyName(k.name) || k.name === defaultKeyName(secret);
+      return { ...k, secret, originalSecret: secret, autoName,
+        name: autoName && secret ? defaultKeyName(secret) : k.name || '', uiId: 'draft:' + ++keySequence };
+    });
     deletedKeyIds = []; keyRevision = account?.keyRevision ?? 0;
     modelProtocolDraft = Object.assign(Object.create(null), structuredClone(account?.modelProtocols || {}));
     loadReasoningPolicy(account?.reasoningPolicy);
@@ -339,7 +524,7 @@
     selectTab('basic'); if (!dialog.open) dialog.showModal();
     loadProxyCatalog();
   }
-  function closeEditor() { if (saving) return; editorEpoch++; dialog.close(); }
+  function closeEditor() { if (saving) return; closeEffortPicker(); editorEpoch++; dialog.close(); }
   $('close').onclick = closeEditor; $('cancel').onclick = closeEditor;
   dialog.addEventListener('cancel', e => { e.preventDefault(); closeEditor(); });
   $('add').onclick = () => open(null); $('reload').onclick = load;
@@ -350,7 +535,7 @@
     if (testing) select.append(option('strategy', '按渠道策略'), option('all', '全部启用 Key'));
     else select.append(option('', '第一个启用 Key'));
     for (const k of keys.filter(k => k.enabled))
-      select.append(option(testing ? 'key:' + k.id : k.id || k.uiId, `${k.name || '未命名 Key'}${k.masked ? ' · ' + k.masked : ''}`));
+      select.append(option(testing ? 'key:' + k.id : k.id || k.uiId, k.name?.trim() || defaultKeyName(k.secret) || '未命名 Key'));
     if ([...select.options].some(o => o.value === previous)) select.value = previous;
   }
   function keyHint() {
@@ -359,30 +544,41 @@
   function renderKeys() {
     const root = $('keyRows'); root.replaceChildren(); $('keyCount').textContent = keyDraft.length;
     if (!keyDraft.length) root.append(el('div', '在下方添加上游 Key', 'empty'));
+    else {
+      const columns = el('div', undefined, 'key-table-head'); columns.setAttribute('aria-hidden', 'true');
+      for (const label of ['密钥名称', '访问密钥', '启用', '操作']) columns.append(el('span', label));
+      root.append(columns);
+    }
     keyDraft.forEach((key, index) => {
-      const row = el('div', undefined, 'key-row card'), head = el('div', undefined, 'key-row-head');
+      const row = el('div', undefined, 'key-row card');
       const actions = el('div', undefined, 'actions');
       for (const [title, delta] of [['上移', -1], ['下移', 1]]) {
-        const b = button(title, () => { [keyDraft[index], keyDraft[index + delta]] = [keyDraft[index + delta], keyDraft[index]]; renderKeys(); });
+        const b = button('', () => { [keyDraft[index], keyDraft[index + delta]] = [keyDraft[index + delta], keyDraft[index]]; renderKeys(); }, 'icon-button');
+        b.append(icon(delta < 0 ? 'chevron-up' : 'chevron-down')); b.setAttribute('aria-label', title); b.title = title;
         b.disabled = index + delta < 0 || index + delta >= keyDraft.length; actions.append(b);
       }
-      actions.append(button('删除 Key', async () => {
+      const remove = button('', async () => {
         if (!await ask(`删除「${key.name || '未命名 Key'}」？`, '删除 Key')) return;
         if (key.id) deletedKeyIds.push(key.id);
         keyDraft = keyDraft.filter(k => k !== key); renderKeys();
-      }, 'text-button danger'));
-      head.append(el('strong', `${String(index + 1).padStart(2, '0')} · ${key.masked || '新 Key'}`), actions);
-      const fields = el('div', undefined, 'field-row'), name = el('input'), secret = el('input');
-      name.value = key.name; name.placeholder = 'Key 名称'; name.setAttribute('aria-label', `Key ${index + 1} 名称`);
-      name.oninput = () => { key.name = name.value; fillKeyOptions($('discoveryKey'), keyDraft, false); };
-      secret.type = 'password'; secret.autocomplete = 'new-password'; secret.value = key.secret;
-      secret.placeholder = key.id ? '留空保留密钥' : '输入密钥'; secret.setAttribute('aria-label', `Key ${index + 1} 密钥`);
-      secret.oninput = () => key.secret = secret.value;
-      fields.append(name, secret);
+      }, 'icon-button danger');
+      remove.append(icon('trash')); remove.setAttribute('aria-label', '删除 Key'); remove.title = '删除 Key'; actions.append(remove);
+      const nameCell = el('div', undefined, 'key-name-cell'), secretCell = el('div', undefined, 'key-secret-cell'), name = el('input'), secret = el('input');
+      name.value = key.name; name.placeholder = defaultKeyName(effectiveKeySecret(key)) || '默认取密钥末尾 4 位'; name.setAttribute('aria-label', `Key ${index + 1} 名称`);
+      name.oninput = () => { key.name = name.value; key.autoName = !name.value.trim(); fillKeyOptions($('discoveryKey'), keyDraft, false); };
+      secret.type = 'text'; secret.autocomplete = 'off'; secret.spellcheck = false; secret.value = key.secret;
+      secret.placeholder = key.id ? '留空保留原密钥' : '输入完整密钥'; secret.setAttribute('aria-label', `Key ${index + 1} 密钥`);
+      secret.oninput = () => {
+        key.secret = secret.value;
+        if (key.autoName) { key.name = defaultKeyName(effectiveKeySecret(key)); name.value = key.name; name.placeholder = key.name; }
+        fillKeyOptions($('discoveryKey'), keyDraft, false);
+      };
+      nameCell.append(el('span', String(index + 1).padStart(2, '0'), 'key-ordinal'), name);
+      secretCell.append(secret);
       const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = key.enabled;
       enabled.onchange = () => { key.enabled = enabled.checked; fillKeyOptions($('discoveryKey'), keyDraft, false); summary(); };
-      const label = el('label', undefined, 'inline-check'); label.style.marginTop = '10px';
-      label.append(enabled, document.createTextNode('启用 Key')); row.append(head, fields, label); root.append(row);
+      const label = el('label', undefined, 'inline-check key-enabled');
+      label.append(enabled, el('span', '启用 Key', 'key-enabled-label sr-only')); row.append(nameCell, secretCell, label, actions); root.append(row);
     });
     fillKeyOptions($('discoveryKey'), keyDraft, false); keyHint(); summary();
   }
@@ -392,20 +588,25 @@
       const lines = $('keyBatch').value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
       if (!lines.length) throw Error('请先填写 Key');
       if (keyDraft.length + lines.length > 100) throw Error('每渠道最多100个 Key');
-      const seen = new Set(keyDraft.map(k => k.secret.trim()).filter(Boolean));
+      const seen = new Set(keyDraft.map(effectiveKeySecret).filter(Boolean));
       for (const secret of lines) { if (seen.has(secret)) throw Error('批量内容含重复 Key'); seen.add(secret); }
-      for (const secret of lines) keyDraft.push({ id: '', uiId: 'draft:' + ++keySequence, name: 'Key ' + (keyDraft.length + 1), secret, enabled: true });
+      for (const secret of lines) keyDraft.push({ id: '', uiId: 'draft:' + ++keySequence,
+        name: defaultKeyName(secret), autoName: true, secret, originalSecret: '', enabled: true });
       $('keyBatch').value = ''; feedback('formError'); renderKeys();
     } catch (e) { feedback('formError', e.message, true); }
   };
   function readKeys() {
     if ($('keyBatch').value.trim()) fail('请先将批量 Key 添加到列表', 'keys', 'keyBatch');
     const seen = new Set();
-    return keyDraft.map(({ id, name, secret, enabled }) => {
-      secret = secret.trim();
+    return keyDraft.map(key => {
+      const { id, enabled } = key;
+      let secret = key.secret.trim();
       if (!id && !secret) fail('新增 Key 必须填写密钥', 'keys');
-      if (secret && seen.has(secret)) fail('Key 列表包含重复密钥', 'keys');
-      if (secret) seen.add(secret);
+      const effective = effectiveKeySecret(key);
+      if (effective && seen.has(effective)) fail('Key 列表包含重复密钥', 'keys');
+      if (effective) seen.add(effective);
+      const name = key.autoName || !key.name.trim() ? defaultKeyName(effective) : key.name.trim();
+      if (!keySecretChanged(key)) secret = '';
       return { id, name, secret, enabled };
     });
   }
@@ -438,7 +639,7 @@
         if (!savedAccount) throw Error('刷新候选需要先保存渠道');
         if (networkChanged(savedAccount))
           throw Error('出站方式或代理选择尚未保存，请使用获取候选模型或先保存渠道');
-        if (!key.id || key.secret.trim() || baseUrl.replace(/\/+$/, '') !== savedAccount.baseUrl.replace(/\/+$/, ''))
+        if (keySecretChanged(key) || baseUrl.replace(/\/+$/, '') !== savedAccount.baseUrl.replace(/\/+$/, ''))
           throw Error('当前连接配置尚未保存，请使用获取候选模型');
         const canonical = value => JSON.stringify(Object.keys(value || {}).sort().map(k =>
           [k, value[k] && typeof value[k] === 'object' ? canonical(value[k]) : value[k]]));
@@ -451,7 +652,7 @@
       } else {
         route = 'models/discover';
         body = { id: savedAccount?.id || null, baseUrl, ...network, headerOverride: commonHeaderDraft, extraParams };
-        if (key.secret.trim()) body.apiKey = key.secret.trim(); else body.keyId = key.id;
+        if (keySecretChanged(key)) body.apiKey = key.secret.trim(); else body.keyId = key.id;
       }
       const data = await api('POST', route, body);
       if (epoch !== editorEpoch || !dialog.open) return;
@@ -491,9 +692,9 @@
     if (!modelIds().length) { root.append(el('div', '添加模型后在这里配置协议', 'empty')); return; }
     for (const model of modelIds()) {
       const configured = modelProtocolDraft[model], value = configured || { protocols: ['responses'], preferredProtocol: 'responses', nativeOnly: false };
-      const row = el('div', undefined, 'protocol-row'); row.append(el('strong', model));
+      const row = el('div', undefined, 'protocol-row'), header = el('div', undefined, 'protocol-summary'); header.append(el('strong', model));
       const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = !!configured;
-      const label = el('label', undefined, 'inline-check'); label.append(enabled, document.createTextNode('指定支持协议')); row.append(label);
+      const label = el('label', undefined, 'inline-check'); label.append(enabled, document.createTextNode('指定支持协议')); header.append(label); row.append(header);
       enabled.onchange = () => { if (enabled.checked) modelProtocolDraft[model] = value; else delete modelProtocolDraft[model]; renderProtocols(); };
       if (configured) {
         const options = el('div', undefined, 'protocol-options');
@@ -747,6 +948,13 @@
   const resultId = (model, keyId) => JSON.stringify([model, keyId ?? null]);
   function updateTestControls() {
     for (const id of ['testAll', 'testSelected', 'testEndpoint', 'testStream', 'testKey', 'testSelectAll', 'testContent', 'testMaxTokens']) $(id).disabled = testBusy();
+    const models = testState.account?.models || [], visible = visibleTestModels().slice((testPage - 1) * +$('testPageSize').value, testPage * +$('testPageSize').value);
+    $('testAll').disabled = testBusy() || !models.length;
+    $('testSelected').disabled = testBusy() || !testState.selected.size;
+    $('testSelected').textContent = testState.selected.size ? `测试勾选 ${testState.selected.size} 个` : '测试勾选';
+    $('testSelectAll').disabled = testBusy() || !visible.length;
+    $('testSelectAll').checked = !!visible.length && visible.every(model => testState.selected.has(model));
+    $('testSelectAll').indeterminate = visible.some(model => testState.selected.has(model)) && !$('testSelectAll').checked;
     $('testCancel').disabled = !testState.active || testState.cancelling;
   }
   let testPage = 1;
@@ -754,9 +962,14 @@
     const q = $('testFilter').value.toLowerCase();
     return (testState.account?.models || []).filter(model => model.toLowerCase().includes(q));
   }
+  function updateTestConfigSummary() {
+    $('testStreamLabel').textContent = $('testStream').checked ? '已启用' : '已禁用';
+    $('testConfigSummary').textContent = `${$('testEndpoint').value || '自动选择'} · ${$('testStream').checked ? '流式' : '非流式'} · ${$('testMaxTokens').value || '—'} Token`;
+  }
   function renderTests() {
     const root = $('testRows'); root.replaceChildren(); const q = $('testFilter').value.toLowerCase();
     const models = visibleTestModels(), size = +$('testPageSize').value;
+    $('testEmpty').hidden = !!models.length;
     const pages = Math.max(1, Math.ceil(models.length / size));
     testPage = Math.min(testPage, pages);
     $('testTotal').textContent = `总计：${models.length}`;
@@ -764,12 +977,12 @@
     $('testFirst').disabled = $('testPrevious').disabled = testPage === 1;
     $('testNext').disabled = $('testLast').disabled = testPage === pages;
     $('testAll').textContent = `测试全部 ${(testState.account?.models || []).length} 个模型`;
-    $('testStreamLabel').textContent = $('testStream').checked ? '已启用' : '已禁用';
+    updateTestConfigSummary();
     for (const model of models.slice((testPage - 1) * size, testPage * size)) {
       if (!model.toLowerCase().includes(q)) continue;
       const row = el('tr'), cell = el('td'), select = el('input'); select.type = 'checkbox';
       select.checked = testState.selected.has(model); select.disabled = testBusy(); select.setAttribute('aria-label', '选择 ' + model);
-      select.onchange = () => { if (select.checked) testState.selected.add(model); else testState.selected.delete(model); };
+      select.onchange = () => { if (select.checked) testState.selected.add(model); else testState.selected.delete(model); updateTestControls(); };
       cell.append(select);
       const results = [...testState.rows.values()].filter(r => r.model === model);
       const pending = testState.active && testState.targets.has(model) && results.length < testState.combinations.filter(c => c.model === model).length;
@@ -805,7 +1018,9 @@
       }, 'text-button'));
       const stateCell = el('td');
       stateCell.append(el('span', state, 'console-badge ' + (state === '成功' ? 'is-success' : state === '失败' ? 'is-error' : pending ? 'is-active' : 'is-neutral')));
-      row.append(cell, el('td', model, 'console-model'), stateCell, summaryCell, ops); root.append(row);
+      const modelCell = el('td', model, 'console-model');
+      for (const [item, label] of [[cell, '选择'], [modelCell, '模型'], [stateCell, '状态'], [summaryCell, '结果'], [ops, '操作']]) item.dataset.label = label;
+      row.append(cell, modelCell, stateCell, summaryCell, ops); root.append(row);
     }
     updateTestControls();
   }
@@ -817,10 +1032,11 @@
       feedback('formError', '连接设置尚未保存，请先保存渠道再测试', true); return;
     }
     if (testBusy() && testState.account?.id !== account.id) { message('请先取消或等待当前渠道测试完成', true); return; }
-    $('testTitle').textContent = '测试渠道连接：' + account.label;
+    $('testTitle').textContent = '连接测试 · ' + account.label;
     if (!testBusy()) {
       fillKeyOptions($('testKey'), account.keys || [], true);
       if (testState.account?.id !== account.id) {
+        $('testConfiguration').open = true;
         clearTimeout(testState.timer); testState.epoch++;
         Object.assign(testState, { account, selected: new Set(), rows: new Map(), targets: new Set(), combinations: [], jobId: null, active: false, running: null });
         feedback('testProgress'); feedback('testError'); $('testDetails').textContent = '';
@@ -852,6 +1068,7 @@
     try {
       const job = await api('POST', 'tests/start', { accountId: testState.account.id, models, keyMode, keyId, endpoint: $('testEndpoint').value || null, stream: $('testStream').checked, content, maxOutputTokens });
       testState.jobId = job.id; testState.active = true; testState.epoch++;
+      $('testConfiguration').open = false; document.querySelector('.test-content').scrollTop = 0;
       feedback('testProgress', '测试已提交'); await pollTests(testState.epoch);
     } catch (e) { feedback('testError', e.message, true); }
     finally { testState.starting = false; renderTests(); }
@@ -891,7 +1108,9 @@
   $('testPrevious').onclick = () => { testPage--; renderTests(); };
   $('testNext').onclick = () => { testPage++; renderTests(); };
   $('testLast').onclick = () => { testPage = Math.max(1, Math.ceil(visibleTestModels().length / +$('testPageSize').value)); renderTests(); };
-  $('testStream').onchange = () => { $('testStreamLabel').textContent = $('testStream').checked ? '已启用' : '已禁用'; };
+  $('testStream').onchange = updateTestConfigSummary;
+  $('testEndpoint').onchange = updateTestConfigSummary;
+  $('testMaxTokens').oninput = updateTestConfigSummary;
   $('testSelectAll').onchange = () => {
     for (const model of visibleTestModels().slice((testPage - 1) * +$('testPageSize').value, testPage * +$('testPageSize').value)) {
       if ($('testSelectAll').checked) testState.selected.add(model); else testState.selected.delete(model);
@@ -905,7 +1124,7 @@
     $(buttonId).onclick = () => {
       const panel = $(panelId); panel.hidden = !panel.hidden;
       $(buttonId).setAttribute('aria-expanded', String(!panel.hidden));
-      $(buttonId).textContent = panel.hidden ? '展开 ⌄' : '收起 ⌃';
+      $(buttonId).textContent = panel.hidden ? '更多筛选' : '收起筛选';
     };
   }
   $('testCancel').onclick = async () => {

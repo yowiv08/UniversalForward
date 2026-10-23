@@ -12,9 +12,24 @@ internal sealed record ChannelKey
 /// <summary>Key 列表校验与编辑。</summary>
 internal static class ChannelKeys
 {
+    public static string DefaultName(string? secret)
+    {
+        var value = secret?.Trim() ?? "";
+        return value.Length <= 4 ? value : value[^4..];
+    }
+
+    public static string NameOrDefault(string? name, string? secret)
+    {
+        var value = name?.Trim() ?? "";
+        var numbered = value.StartsWith("Key", StringComparison.OrdinalIgnoreCase) ? value[3..].Trim() : "";
+        return value.Length == 0 || value.Equals("默认 Key", StringComparison.OrdinalIgnoreCase)
+            || (numbered.Length > 0 && numbered.All(char.IsAsciiDigit)) ? DefaultName(secret) : value;
+    }
+
     public static List<ChannelKey> Read(List<ChannelKey>? keys, string legacy)
-        => keys ?? (string.IsNullOrWhiteSpace(legacy) ? [] :
-            [new ChannelKey { Id = "legacy", Name = "默认 Key", Secret = legacy }]);
+        => keys?.Select(key => key is null ? key! : key with { Name = NameOrDefault(key.Name, key.Secret) }).ToList()
+            ?? (string.IsNullOrWhiteSpace(legacy) ? [] :
+                [new ChannelKey { Id = "legacy", Name = DefaultName(legacy), Secret = legacy }]);
 
     public static void Validate(IReadOnlyList<ChannelKey> keys, string mode)
     {
@@ -54,7 +69,7 @@ internal static class ChannelKeys
             else if (!old.ContainsKey(id)) throw new FormatException("Key ID 不属于此渠道");
             if (!seen.Add(id) || remove.Contains(id)) throw new FormatException("Key ID 重复或同时提交删除");
             var secret = string.IsNullOrWhiteSpace(item.Secret) ? old[id].Secret : item.Secret.Trim();
-            result.Add(item with { Id = id, Name = item.Name?.Trim() ?? "", Secret = secret });
+            result.Add(item with { Id = id, Name = NameOrDefault(item.Name, secret), Secret = secret });
         }
         result.AddRange(previous.Where(k => !seen.Contains(k.Id) && !remove.Contains(k.Id)));
         return result;

@@ -41,11 +41,17 @@ $entry = [ordered]@{
 }
 [ordered]@{ schemaVersion = 1; tag = $Tag; plugins = @($entry) } |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'release-index.json') -Encoding utf8NoBOM
-@(
-    "# UniversalForward $Tag"
-    ''
-    $manifest.description
-    ''
-    "版本：$version · 运行时：.NET 10 · 下载：universalforward.zip"
-) | Set-Content -LiteralPath (Join-Path $OutputDirectory 'release-notes.md') -Encoding utf8NoBOM
+$notesPath = Join-Path $PSScriptRoot "docs/releases/$Tag.md"
+if (Test-Path -LiteralPath $notesPath) {
+    Copy-Item -LiteralPath $notesPath -Destination (Join-Path $OutputDirectory 'release-notes.md')
+}
+else {
+    @(
+        "# UniversalForward $Tag"
+        ''
+        $manifest.description
+        ''
+        "版本：$version · 运行时：.NET 10 · 下载：universalforward.zip"
+    ) | Set-Content -LiteralPath (Join-Path $OutputDirectory 'release-notes.md') -Encoding utf8NoBOM
+}
 Write-Output "发行目录：$OutputDirectory"

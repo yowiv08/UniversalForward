@@ -50,20 +50,19 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
     const frame = page.frameLocator('iframe');
-    await frame.locator('#cards').getByRole('button', { name: '日志', exact: true }).click();
+    await frame.locator('#cards .channel-menu-trigger').click();
+    await frame.locator('#cards').getByRole('menuitem', { name: '日志', exact: true }).click();
     await frame.locator('#journalRows').getByRole('button', { name: '详情' }).waitFor();
     assert.equal(await frame.locator('#journalFilters [name=channel]').inputValue(), 'channel');
     const effort = frame.locator('#journalRows tr td').nth(3);
-    assert.deepEqual(await effort.locator('div').allTextContents(), [
-      '请求：reasoning.effort="low"',
-      '上游：reasoning.effort="max"；usage.output_tokens_details.reasoning_tokens=34'
-    ]);
+    assert.equal(await effort.locator('.record-effort').innerText(), '请求：low');
+    assert.equal(await effort.locator('.record-effort-reported').innerText(), '上游：max · 34 tokens');
+    assert.equal(await effort.locator('.record-effort-reported').getAttribute('title'), 'reasoning.effort="max"；usage.output_tokens_details.reasoning_tokens=34');
     assert.equal(await effort.locator('strong').count(), 0);
     assert.equal((await frame.locator('#journalRows').textContent()).includes('raw-secret'), false);
-    assert.match(await frame.locator('#journalRows').innerText(), /socks5:\/\/127\.0\.0\.1:1080/);
-    assert.match(await frame.locator('#journalRows').innerText(), /node-one/);
-    assert.match(await frame.locator('#journalRows').innerText(), /本地请求模型\s+local-alias/);
-    assert.match(await frame.locator('#journalRows').innerText(), /上游响应模型：upstream-version-20261022/);
+    assert.match(await frame.locator('#journalRows .record-network').getAttribute('title'), /socks5:\/\/127\.0\.0\.1:1080.*node-one/);
+    assert.equal(await frame.locator('#journalRows .record-model').innerText(), 'local-alias');
+    assert.match(await frame.locator('#journalRows').innerText(), /响应：upstream-version-20261022/);
     await frame.locator('#journalRows').getByRole('button', { name: '详情' }).click();
     await frame.locator('#journalBody').filter({ hasText: 'raw-secret' }).waitFor();
     assert.equal(await frame.locator('#journalBody').textContent(), raw);
@@ -107,6 +106,23 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     await frame.locator('#journalSettings [name=maxRecords]').fill('14');
     await frame.locator('#journalSettings button').click();
     await frame.locator('#journalStatus').filter({ hasText: '日志设置已生效，仅限本次运行' }).waitFor();
+    for (const [sent, reported, requestSummary, upstreamSummary] of [
+      [{ 'reasoning_effort': 'high' }, { 'effort': 'max', 'usage.completion_tokens_details.reasoning_tokens': 0 }, '请求：high', '上游：max · 0 tokens'],
+      [{ 'thinking.type': 'enabled', 'thinking.budget_tokens': 4096 }, { 'thinking.effort': 'high' }, '请求：模式 enabled · 预算 4096 tokens', '上游：high'],
+      [{ 'output_config.effort': 'medium' }, { 'usage.output_tokens_details.reasoning_tokens': 21 }, '请求：medium', '上游：21 tokens'],
+      [{}, {}, '请求：未提供', '上游：未返回']
+    ]) {
+      await frame.locator('body').evaluate((element, values) => {
+        window.deleted = false;
+        window.logRow = { ...window.logRow, sentReasoning: values.sent, reportedReasoning: values.reported };
+        document.getElementById('journalFilters').requestSubmit();
+      }, { sent, reported });
+      await effort.locator('.record-effort').filter({ hasText: requestSummary }).waitFor();
+      assert.equal(await effort.locator('.record-effort').innerText(), requestSummary);
+      assert.equal(await effort.locator('.record-effort-reported').innerText(), upstreamSummary);
+      if (Object.keys(reported).length) assert.equal(await effort.locator('.record-effort-reported').getAttribute('title'),
+        Object.entries(reported).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join('；'));
+    }
     await frame.locator('body').evaluate(() => {
       window.deleted = false;
       const legacy = { ...window.logRow, model: 'legacy-model' };
@@ -116,7 +132,7 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
       document.getElementById('journalFilters').requestSubmit();
     });
     await frame.locator('#journalRows .record-model').filter({ hasText: 'legacy-model' }).waitFor();
-    assert.match(await frame.locator('#journalRows').innerText(), /上游响应模型：未返回/);
+    assert.match(await frame.locator('#journalRows').innerText(), /响应：未返回/);
     await frame.locator('#journalRows').getByRole('button', { name: '详情' }).click();
     await modelGroup.waitFor();
     assert.deepEqual(await modelGroup.locator('dd').allTextContents(), ['legacy-model', '未提供', '未返回']);

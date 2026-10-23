@@ -23,9 +23,9 @@ const html = require('./page-source.cjs')();
         endpoints: ['/v1/responses'], keyRevision: 7,
         keySelectionMode: 'roundRobin', enabledKeyCount: 2, totalKeyCount: 3,
         keys: [
-          { id: 'a', name: 'Alpha', masked: '••••••0001', enabled: true },
-          { id: 'b', name: 'Beta', masked: '••••••0002', enabled: true },
-          { id: 'c', name: 'Disabled', masked: '••••••0003', enabled: false }
+          { id: 'a', name: 'Alpha', secret: 'sk-demo-existing-0001', enabled: true },
+          { id: 'b', name: 'Beta', secret: 'sk-demo-existing-0002', enabled: true },
+          { id: 'c', name: 'Disabled', secret: 'sk-demo-existing-0003', enabled: false }
         ]
       };
       window.Router2API = { request: async (method, route, body) => {
@@ -35,12 +35,15 @@ const html = require('./page-source.cjs')();
           if (window.conflict) throw Error('Key 配置已变化，请重新加载后编辑');
           account.responsesTransport = body.responsesTransport;
           account.stripResponsesResourceState = body.stripResponsesResourceState;
+          account.keys = body.keys.map((key, index) => ({ ...key, id: key.id || 'new-' + index,
+            secret: key.secret || account.keys.find(old => old.id === key.id)?.secret || '' }));
           return { account };
         }
         if (route === 'models/discover' || route === 'models/refresh') return { models: ['model-a'] };
         if (route === 'tests/start') {
           job++; cancelled = false; polls = 0;
-          const ids = body.keyMode === 'all' ? ['a', 'b'] : [body.keyId || 'a'];
+          const ids = body.keyMode === 'all' ? account.keys.filter(key => key.enabled).map(key => key.id)
+            : [body.keyId || account.keys.find(key => key.enabled).id];
           targets = body.models.flatMap(model => ids.map(keyId => ({ model, keyId })));
           return { id: 'job' + job, state: 0 };
         }
@@ -49,7 +52,7 @@ const html = require('./page-source.cjs')();
           polls++;
           if (cancelled) return { state: 4, progress: { rows: [], total: targets.length, completed: 0 } };
           if (job !== 2 && polls > 1) return { state: 2, result: { rows: targets.map(row => ({
-            ...row, keyName: row.keyId === 'a' ? 'Alpha' : 'Beta', success: true,
+            ...row, keyName: account.keys.find(key => key.id === row.keyId).name, success: true,
             originalStatus: 200, mappedStatus: 200, durationMs: 24, retries: 0, transport: account.responsesTransport
           })) } };
           return { state: 1, progress: { rows: [], completed: 0, total: targets.length, running: targets[0].model } };
@@ -70,9 +73,37 @@ const html = require('./page-source.cjs')();
     await page.screenshot({ path: path.join(output, 'websocket-settings-desktop.png'), fullPage: true });
     await page.locator('#tab-keys').click();
     assert.equal(await page.locator('#keyRows .card').count(), 3);
-    assert.deepEqual(await page.locator('#keyRows input[type=password]').evaluateAll(xs => xs.map(x => x.value)), ['', '', '']);
+    assert.equal(await page.locator('#keyRows input[type=password]').count(), 0);
+    assert.deepEqual(await page.locator('#keyRows .key-secret-cell input').evaluateAll(xs => xs.map(x => x.value)),
+      ['sk-demo-existing-0001', 'sk-demo-existing-0002', 'sk-demo-existing-0003']);
+    assert.equal(await page.locator('#keyRows .key-secret-cell small').count(), 0);
+    const aligned = await page.locator('#keyRows .key-row').evaluateAll(rows => rows.every(row => {
+      const name = row.querySelector('.key-name-cell input').getBoundingClientRect();
+      const secret = row.querySelector('.key-secret-cell input').getBoundingClientRect();
+      const enabled = row.querySelector('.key-enabled').getBoundingClientRect();
+      const actions = row.querySelector('.actions').getBoundingClientRect();
+      return Math.abs(name.top - secret.top) <= 1 && Math.abs(name.height - secret.height) <= 1 &&
+        Math.abs(name.top + name.height / 2 - (enabled.top + enabled.height / 2)) <= 1 &&
+        Math.abs(name.top + name.height / 2 - (actions.top + actions.height / 2)) <= 1;
+    }));
+    assert.equal(aligned, true);
+    await page.screenshot({ path: path.join(output, 'multi-key-editor-desktop.png'), fullPage: true });
     await page.locator('#keyBatch').fill(' new-one \n\nnew-two\n');
     await page.locator('#keyAdd').click();
+    assert.equal(await page.locator('#keyRows .card').count(), 5);
+    assert.deepEqual(await page.locator('#keyRows .key-name-cell input').evaluateAll(xs => xs.slice(3).map(x => x.value)), ['-one', '-two']);
+    await page.getByRole('textbox', { name: 'Key 4 密钥', exact: true }).fill('new-one-updated');
+    assert.equal(await page.getByRole('textbox', { name: 'Key 4 名称', exact: true }).inputValue(), 'ated');
+    await page.getByRole('textbox', { name: 'Key 4 密钥', exact: true }).fill('new-one');
+    await page.getByRole('textbox', { name: 'Key 5 名称', exact: true }).fill('Custom name');
+    await page.getByRole('textbox', { name: 'Key 5 密钥', exact: true }).fill('new-two-updated');
+    assert.equal(await page.getByRole('textbox', { name: 'Key 5 名称', exact: true }).inputValue(), 'Custom name');
+    await page.getByRole('textbox', { name: 'Key 5 密钥', exact: true }).fill('new-two');
+    await page.getByRole('textbox', { name: 'Key 1 密钥', exact: true }).fill('temporary-key');
+    assert.equal(await page.getByRole('textbox', { name: 'Key 1 名称', exact: true }).inputValue(), 'Alpha');
+    await page.getByRole('textbox', { name: 'Key 1 密钥', exact: true }).fill('');
+    await page.locator('#keyBatch').fill('sk-demo-existing-0001'); await page.locator('#keyAdd').click();
+    assert.match(await page.locator('#formError').innerText(), /重复/);
     assert.equal(await page.locator('#keyRows .card').count(), 5);
     await page.locator('#keyBatch').fill('same\nsame');
     await page.locator('#keyAdd').click();
@@ -106,19 +137,28 @@ const html = require('./page-source.cjs')();
     assert.equal(saved.keys[1].enabled, false);
     assert.deepEqual(saved.deletedKeyIds, ['c']);
     assert.deepEqual(saved.keys.slice(2).map(k => k.secret), ['new-one', 'new-two']);
+    assert.deepEqual(saved.keys.slice(2).map(k => k.name), ['-one', 'Custom name']);
     assert.equal('apiKey' in saved, false);
     const discovery = await page.evaluate(() => window.calls.filter(x => x.route.startsWith('models/')));
     assert.ok(discovery.every(x => x.body.keyId === 'b' && !('apiKey' in x.body)));
     await page.getByRole('button', { name: '测试连接', exact: true }).click();
+    assert.equal(await page.locator('#testSelected').isDisabled(), true);
     await page.locator('#testKey').selectOption('all');
     await page.getByRole('checkbox', { name: '选择 model-a', exact: true }).check();
+    assert.match(await page.locator('#testSelected').innerText(), /1 个/);
+    assert.equal(await page.locator('#testSelectAll').evaluate(input => input.indeterminate), true);
+    await page.locator('#testSelectAll').check();
+    assert.match(await page.locator('#testSelected').innerText(), /2 个/);
+    await page.getByRole('checkbox', { name: '选择 model-b', exact: true }).uncheck();
     await page.locator('#testSelected').click();
     await page.locator('#confirmYes').click();
     await page.waitForFunction(() => document.querySelector('#testProgress').textContent.includes('已完成'));
     const firstRow = page.locator('#testRows tr').first();
-    assert.match(await firstRow.innerText(), /Alpha/);
-    assert.match(await firstRow.innerText(), /Beta/);
-    assert.equal(await firstRow.locator('td').nth(3).locator('div').count(), 2);
+    assert.match(await firstRow.innerText(), /Beta renamed/);
+    assert.match(await firstRow.innerText(), /Custom name/);
+    assert.doesNotMatch(await firstRow.innerText(), /Alpha/);
+    assert.equal(await firstRow.locator('.result-line').count(), 3);
+    assert.equal(await page.locator('#testConfiguration').evaluate(details => details.open), false, 'Submitted tests should focus the results');
     for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 660 }]) {
       await page.setViewportSize(viewport);
       const layout = await page.locator('#testDialog').evaluate(dialog => {
@@ -128,7 +168,7 @@ const html = require('./page-source.cjs')();
         return {
           compactWidth: bounds.width <= 960,
           backdropVisible: bounds.top >= 23 && bounds.bottom <= innerHeight - 23,
-          resultsVisible: lastRow.bottom <= bounds.bottom,
+          resultsVisible: lastRow.bottom <= footer.top,
           footerVisible: footer.bottom <= bounds.bottom,
           noHorizontalOverflow: dialog.scrollWidth <= dialog.clientWidth
         };
@@ -140,9 +180,14 @@ const html = require('./page-source.cjs')();
     }
     await page.screenshot({ path: path.join(output, 'connection-compact-desktop.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('#testConfiguration summary').click();
+    assert.equal(await page.locator('#testConfiguration').evaluate(details => details.open), true);
+    await page.locator('#testConfiguration summary').click();
+    assert.equal(await page.locator('#testConfiguration').evaluate(details => details.open), false);
     assert.equal(await page.locator('#testDialog').evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth), true);
     await page.screenshot({ path: path.join(output, 'connection-compact-mobile.png'), fullPage: true });
     await page.setViewportSize({ width: 1200, height: 900 });
+    await page.locator('#testConfiguration summary').click();
     await page.screenshot({ path: path.join(output, 'multi-key-tests-desktop.png'), fullPage: true });
     await firstRow.getByRole('button', { name: '详情', exact: true }).click();
     assert.equal(await page.locator('#testDetailDialog').isVisible(), true);
@@ -169,6 +214,12 @@ const html = require('./page-source.cjs')();
     await page.getByRole('button', { name: '编辑', exact: true }).click();
     assert.equal(await page.locator('#responsesTransport').inputValue(), 'websocket');
     assert.equal(await page.locator('#stripResponsesResourceState').isChecked(), true);
+    await page.locator('#tab-keys').click();
+    assert.deepEqual(await page.locator('#keyRows .key-secret-cell input').evaluateAll(xs => xs.map(x => x.value)),
+      ['sk-demo-existing-0002', 'sk-demo-existing-0001', 'new-one', 'new-two']);
+    assert.deepEqual(await page.locator('#keyRows .key-name-cell input').evaluateAll(xs => xs.map(x => x.value)),
+      ['Beta renamed', 'Alpha', '-one', 'Custom name']);
+    await page.locator('#tab-basic').click();
     await page.locator('#stripResponsesResourceState').uncheck();
     await page.getByRole('button', { name: '测试连接', exact: true, includeHidden: true }).evaluate(button => button.click());
     assert.match(await page.locator('#formError').innerText(), /连接设置尚未保存，请先保存渠道再测试/);

@@ -7,38 +7,61 @@
   <style>/*__STYLE__*/</style>
 </head>
 <body>
-  <main class="workspace">
+  <button id="sidebarOverlay" class="sidebar-overlay" aria-label="收起导航" hidden></button>
+  <aside id="appSidebar" class="app-sidebar" aria-label="工作区导航">
+    <div class="brand"><span class="brand-symbol" data-icon="forward" aria-hidden="true"></span><div class="brand-copy"><strong>UniversalForward</strong><span>上游转发工作区</span></div></div>
+    <nav class="primary-navigation" aria-label="主导航">
+      <p class="nav-group-label">工作区</p>
+      <button id="showChannels" class="nav-item" type="button" aria-current="page" title="渠道管理"><span data-icon="channels"></span><span class="nav-text">渠道管理</span><span id="navChannelCount" class="nav-count">0</span></button>
+      <button id="openJournal" class="nav-item" type="button" title="请求日志"><span data-icon="journal"></span><span class="nav-text">请求日志</span></button>
+      <p class="nav-group-label filter-group-label">快速筛选</p>
+      <button id="showEnabled" class="nav-item nav-filter" type="button" title="已启用渠道"><span class="status-dot" aria-hidden="true"></span><span class="nav-text">已启用渠道</span><span id="navEnabledCount" class="nav-count">0</span></button>
+      <button id="showDisabled" class="nav-item nav-filter" type="button" title="已禁用渠道"><span class="status-dot off" aria-hidden="true"></span><span class="nav-text">已禁用渠道</span><span id="navDisabledCount" class="nav-count">0</span></button>
+    </nav>
+    <div class="sidebar-bottom"><span class="sidebar-plugin-icon" data-icon="code"></span><div><strong>Router2API</strong><span>UniversalForward 插件</span></div></div>
+  </aside>
+  <div class="app-main">
+    <header class="workspace-header"><div class="workspace-breadcrumb"><button id="navToggle" class="icon-button" type="button" aria-label="切换导航" aria-controls="appSidebar" aria-expanded="true"><span data-icon="panel"></span></button><span class="header-divider" aria-hidden="true"></span><span class="breadcrumb-root">工作区</span><span class="breadcrumb-chevron" data-icon="chevron-right" aria-hidden="true"></span><span id="workspaceTitle">渠道管理</span></div><span class="app-caption">Router2API 插件</span></header>
+    <main class="workspace">
+    <section id="channelsWorkspace" class="page-workspace" aria-labelledby="channelsHeading">
     <header class="page-heading">
-      <div class="brand"><div class="brand-symbol" aria-hidden="true">U<span>↗</span></div><div><span class="eyebrow">UNIVERSAL FORWARD</span><h1>渠道管理</h1></div></div>
-      <div class="actions"><button id="openJournal" class="secondary">请求日志</button><button id="reload" class="secondary">刷新</button><button id="add" class="primary">＋ 添加渠道</button></div>
+      <div><h1 id="channelsHeading">渠道管理</h1><p class="page-description">管理上游连接、访问密钥与模型路由。</p></div>
+      <div class="actions"><button id="reload" class="secondary"><span data-icon="refresh"></span>刷新</button><button id="add" class="primary"><span data-icon="plus"></span>添加渠道</button></div>
     </header>
     <section class="metrics" aria-label="渠道概览">
-      <div><span>全部渠道</span><strong id="metricChannels">—</strong></div>
-      <div><span>已启用</span><strong id="metricEnabled">—</strong></div>
-      <div><span>可用 Key</span><strong id="metricKeys">—</strong></div>
-      <div><span>已配置模型</span><strong id="metricModels">—</strong></div>
+      <div><div class="metric-label"><span>全部渠道</span><span data-icon="channels"></span></div><strong id="metricChannels">—</strong><div class="metric-description">已添加的上游连接</div></div>
+      <div><div class="metric-label"><span>已启用渠道</span><span data-icon="activity"></span></div><strong id="metricEnabled">—</strong><div class="metric-description"><span class="status-dot" aria-hidden="true"></span>参与请求转发</div></div>
+      <div><div class="metric-label"><span>启用密钥</span><span data-icon="key"></span></div><strong id="metricKeys">—</strong><div class="metric-description">所有渠道的启用 Key</div></div>
+      <div><div class="metric-label"><span>已配置模型</span><span data-icon="models"></span></div><strong id="metricModels">—</strong><div class="metric-description">按模型名称去重统计</div></div>
     </section>
     <div id="message" class="feedback" role="status" hidden></div>
-    <div class="toolbar"><div><h2>上游渠道 <span id="channelCount" class="count">0</span></h2><p class="muted">管理连接、密钥和模型路由</p></div><div class="filters"><input id="filter" aria-label="搜索渠道" placeholder="搜索名称、地址或模型"><select id="statusFilter" aria-label="渠道状态"><option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已禁用</option></select></div></div>
-    <section id="cards" class="channel-grid" aria-live="polite"></section>
-  </main>
-  <dialog id="journal" class="journal-dialog" aria-labelledby="journalTitle">
-    <header class="dialog-heading"><div class="console-heading"><span class="console-icon" aria-hidden="true">≡</span><div><span class="eyebrow">REQUEST INSPECTOR</span><h2 id="journalTitle">本次运行日志</h2></div></div><button id="journalClose" type="button" class="icon-button" aria-label="关闭日志">×</button></header>
-    <div class="journal-content">
-      <p class="muted">日志仅保存在内存，重启或重新加载插件后清空。原文包含密钥及请求内容，仅供管理员查看。请求参数指插件收到及提交给 HTTP 客户端的内容，不代表网络抓包或模型内部计算强度。</p>
-      <div id="journalStatus" class="feedback" role="status" hidden></div>
-      <form id="journalFilters" class="journal-filters compact-search">
-        <div class="search-main"><div class="date-range"><input name="from" type="datetime-local" aria-label="开始时间"><span>～</span><input name="to" type="datetime-local" aria-label="结束时间"></div><input name="model" aria-label="日志模型" placeholder="模型"><select name="kind" aria-label="日志类型"><option value="">全部类型</option><option value="forward">转发</option><option value="connection-test">连接测试</option><option value="models-discover">获取模型</option><option value="models-refresh">刷新模型</option></select><button id="journalExpand" type="button" aria-expanded="false" aria-controls="journalAdvanced">展开 ⌄</button><button class="primary" type="submit">查询</button></div>
-        <div id="journalAdvanced" class="search-advanced" hidden><input name="channel" aria-label="日志渠道 ID" placeholder="渠道 ID"><input name="trace" aria-label="Trace ID" placeholder="Trace ID"><input name="status" type="number" aria-label="日志状态码" placeholder="状态码"><select name="endpoint" aria-label="日志接口"><option value="">全部接口</option><option>/v1/responses</option><option>/v1/messages</option><option>/v1/models</option></select><select name="network" aria-label="日志出站方式"><option value="">全部出站方式</option><option value="direct">直连</option><option value="proxyPool">代理池</option></select><select name="state" aria-label="日志执行状态"><option value="">全部执行状态</option><option value="running">执行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option></select><button id="journalClear" type="button">清空已结束日志</button></div>
-      </form>
-      <div class="journal-table"><table><thead><tr><th>时间／渠道</th><th>模型／接口</th><th>结果</th><th>思考参数</th><th>操作</th></tr></thead><tbody id="journalRows"></tbody></table></div>
-      <div class="actions journal-pagination" aria-label="日志分页">
-        <label for="journalPageSize">每页<select id="journalPageSize"><option value="10">10 条</option><option value="25">25 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label>
-        <button id="journalPrevious" type="button" class="secondary" disabled>上一页</button><span id="journalPage" role="status"></span><button id="journalNext" type="button" class="secondary" disabled>下一页</button>
+    <section class="channel-section" aria-labelledby="channelsTitle">
+      <div class="section-toolbar"><div class="between"><div><h2 id="channelsTitle">上游渠道 <span id="channelCount" class="count">0</span></h2><p class="section-description">查看连接配置，或选择渠道进行管理。</p></div><div class="segmented view-switch" role="group" aria-label="渠道显示方式"><button id="viewGrid" type="button" aria-pressed="true"><span data-icon="grid"></span>卡片</button><button id="viewList" type="button" aria-pressed="false"><span data-icon="list"></span>列表</button></div></div>
+        <div class="toolbar"><div class="filters"><div class="search-input"><span data-icon="search"></span><input id="filter" type="search" aria-label="搜索渠道" placeholder="搜索渠道、地址或模型…"></div><select id="statusFilter" aria-label="渠道状态"><option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已禁用</option></select></div><span id="channelResult" class="muted" role="status">正在读取渠道…</span></div>
       </div>
-
-      <details><summary>日志存储设置</summary>
+      <div id="channelColumns" class="channel-columns" aria-hidden="true" hidden><span>渠道</span><span>模型</span><span>访问密钥</span><span>路由配置</span><span class="column-actions">操作</span></div>
+      <section id="cards" class="channel-grid" data-view="grid" aria-label="渠道列表" aria-live="polite" aria-busy="true"><div class="empty">正在读取渠道…</div></section>
+    </section>
+    <p class="workspace-footnote"><span data-icon="info"></span>渠道配置保存后生效，连接测试使用已保存的配置。</p>
+    </section>
+  <section id="journal" class="journal-workspace page-workspace" aria-labelledby="journalTitle" hidden>
+    <header class="page-heading"><div><h1 id="journalTitle">请求日志</h1><p class="page-description">追踪转发结果，查看模型、参数和上游响应。</p></div><div class="actions"><button id="journalClose" type="button" class="secondary"><span data-icon="arrow-left"></span>返回渠道</button><button id="journalReload" type="button" class="secondary"><span data-icon="refresh"></span>刷新日志</button></div></header>
+    <div class="journal-caption"><div class="journal-caption-label"><span data-icon="journal"></span><span>本次运行</span><span id="journalRecordCount" class="count">—</span></div><span class="muted">内存日志 · 重启或重载插件后清空</span></div>
+    <div id="journalStatus" class="feedback" role="status" hidden></div>
+    <section class="journal-panel" aria-label="请求记录">
+    <div class="journal-content">
+      <form id="journalFilters" class="journal-filters compact-search">
+        <div class="search-main"><label>模型<input name="model" aria-label="日志模型" placeholder="搜索模型名称…"></label><label>请求类型<select name="kind" aria-label="日志类型"><option value="">全部类型</option><option value="forward">转发</option><option value="connection-test">连接测试</option><option value="models-discover">获取模型</option><option value="models-refresh">刷新模型</option></select></label><label>执行状态<select name="state" aria-label="日志执行状态"><option value="">全部状态</option><option value="running">执行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option></select></label><div class="actions"><button id="journalReset" type="button" class="text-button">重置</button><button id="journalExpand" type="button" aria-expanded="false" aria-controls="journalAdvanced">更多筛选</button><button class="primary" type="submit"><span data-icon="search"></span>查询</button></div></div>
+        <div id="journalAdvanced" class="search-advanced" hidden><label>开始时间<input name="from" type="datetime-local" aria-label="开始时间"></label><label>结束时间<input name="to" type="datetime-local" aria-label="结束时间"></label><label>渠道 ID<input name="channel" aria-label="日志渠道 ID" placeholder="全部渠道"></label><label>Trace ID<input name="trace" aria-label="Trace ID" placeholder="输入 Trace ID"></label><label>状态码<input name="status" type="number" aria-label="日志状态码" placeholder="例如 200"></label><label>接口<select name="endpoint" aria-label="日志接口"><option value="">全部接口</option><option>/v1/responses</option><option>/v1/messages</option><option>/v1/models</option></select></label><label>出站方式<select name="network" aria-label="日志出站方式"><option value="">全部出站方式</option><option value="direct">直连</option><option value="proxyPool">代理池</option></select></label></div>
+        <div id="journalScope" class="filter-scope" hidden><span data-icon="filter"></span><span id="journalScopeLabel"></span><button id="journalScopeClear" type="button" class="icon-button" aria-label="移除渠道筛选"><span data-icon="x"></span></button></div>
+      </form>
+      <div class="journal-table"><table><thead><tr><th>时间／渠道</th><th>模型／接口</th><th>结果</th><th>思考参数</th><th>操作</th></tr></thead><tbody id="journalRows"></tbody></table><div id="journalEmpty" class="empty" hidden><span data-icon="journal"></span><h3>暂无请求日志</h3><p>本次运行尚未记录请求，或没有符合筛选条件的结果。</p></div></div>
+    </div>
+    <footer class="actions journal-pagination" aria-label="日志分页"><label for="journalPageSize">每页<select id="journalPageSize"><option value="10">10 条</option><option value="25">25 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label><button id="journalPrevious" type="button" class="secondary" disabled>上一页</button><span id="journalPage" role="status"></span><button id="journalNext" type="button" class="secondary" disabled>下一页</button></footer>
+    </section>
+      <details class="journal-storage-settings"><summary><span data-icon="settings"></span>日志存储设置</summary>
         <div id="journalStorage" class="muted"></div>
+        <button id="journalClear" type="button" class="text-button danger">清空已结束日志</button>
         <form id="journalSettings" class="journal-filters">
           <label><input name="enabled" type="checkbox" checked>采集请求日志</label>
           <label>最多保留条数<input name="maxRecords" type="number" min="1" max="10000" value="1000" required></label>
@@ -47,12 +70,14 @@
           <button type="submit" class="primary">应用日志设置</button>
         </form>
       </details>
-    </div>
-  </dialog>
+      <details class="journal-explanation"><summary><span data-icon="info"></span>日志说明</summary><p>原文包含密钥及请求内容，仅供管理员查看。请求参数指插件收到及提交给 HTTP 客户端的内容，不代表网络抓包或模型内部计算强度。</p></details>
+  </section>
+    </main>
+  </div>
       <dialog id="journalDetail" class="request-detail-dialog" aria-labelledby="requestDetailTitle">
-        <header class="request-detail-heading"><h3 id="requestDetailTitle">日志详情</h3><button id="journalDetailClose" class="icon-button" aria-label="关闭详情">×</button></header>
+        <header class="request-detail-heading"><h3 id="requestDetailTitle">日志详情</h3><button id="journalDetailClose" class="icon-button" aria-label="关闭详情"><span data-icon="x"></span></button></header>
         <div id="journalOverview"></div>
-        <div class="actions"><button id="journalExport" type="button" class="secondary">导出整条日志</button><button id="journalDelete" type="button" class="secondary">删除日志</button></div>
+        <div class="actions"><button id="journalExport" type="button" class="secondary">导出整条日志</button><button id="journalDelete" type="button" class="secondary danger">删除日志</button></div>
         <details class="journal-metadata"><summary>请求元数据与重试记录</summary><pre id="journalMetadata" class="journal-pre" tabindex="0"></pre></details>
         <label for="journalPart">原始内容</label><select id="journalPart"></select>
         <div class="actions"><button id="journalRaw" type="button" class="secondary">原文</button><button id="journalJson" type="button" class="secondary">JSON</button><button id="journalCopy" type="button" class="secondary">复制原文</button></div>
@@ -60,25 +85,30 @@
       </dialog>
   <dialog id="editor" class="editor-dialog" aria-labelledby="formTitle">
     <form id="accountForm" novalidate>
-      <header class="dialog-heading"><div><span class="eyebrow">CHANNEL SETTINGS</span><h2 id="formTitle">添加渠道</h2></div><button type="button" id="close" class="icon-button" aria-label="关闭编辑">×</button></header>
+      <header class="dialog-heading"><div class="dialog-title-group"><span class="dialog-icon" data-icon="settings"></span><div><h2 id="formTitle">添加渠道</h2><p class="dialog-description">配置渠道连接与转发规则</p></div></div><button type="button" id="close" class="icon-button" aria-label="关闭编辑"><span data-icon="x"></span></button></header>
       <input name="id" type="hidden">
       <div class="editor-layout">
         <nav class="editor-nav" role="tablist" aria-label="渠道设置">
-          <button type="button" id="tab-basic" role="tab" data-tab="basic" aria-controls="panel-basic" aria-selected="true"><span>01</span>基础设置</button>
-          <button type="button" id="tab-keys" role="tab" data-tab="keys" aria-controls="panel-keys" aria-selected="false"><span>02</span>Key 管理</button>
-          <button type="button" id="tab-models" role="tab" data-tab="models" aria-controls="panel-models" aria-selected="false"><span>03</span>模型与协议</button>
-          <button type="button" id="tab-reasoning" role="tab" data-tab="reasoning" aria-controls="panel-reasoning" aria-selected="false"><span>04</span>思考映射</button>
-          <button type="button" id="tab-headers" role="tab" data-tab="headers" aria-controls="panel-headers" aria-selected="false"><span>05</span>请求头</button>
-          <button type="button" id="tab-policy" role="tab" data-tab="policy" aria-controls="panel-policy" aria-selected="false"><span>06</span>重试与映射</button>
+          <span class="editor-nav-label">渠道设置</span>
+          <button type="button" id="tab-basic" role="tab" data-tab="basic" aria-controls="panel-basic" aria-selected="true"><span data-icon="settings"></span><span>基础设置<small>名称、连接与状态</small></span></button>
+          <button type="button" id="tab-keys" role="tab" data-tab="keys" aria-controls="panel-keys" aria-selected="false"><span data-icon="key"></span><span>Key 管理<small>访问密钥与分配策略</small></span></button>
+          <button type="button" id="tab-models" role="tab" data-tab="models" aria-controls="panel-models" aria-selected="false"><span data-icon="models"></span><span>模型与协议<small>模型列表与上游协议</small></span></button>
+          <button type="button" id="tab-reasoning" role="tab" data-tab="reasoning" aria-controls="panel-reasoning" aria-selected="false"><span data-icon="mapping"></span><span>思考映射<small>等级规则与预览</small></span></button>
+          <button type="button" id="tab-headers" role="tab" data-tab="headers" aria-controls="panel-headers" aria-selected="false"><span data-icon="code"></span><span>请求头<small>模板与自定义覆盖</small></span></button>
+          <button type="button" id="tab-policy" role="tab" data-tab="policy" aria-controls="panel-policy" aria-selected="false"><span data-icon="retry"></span><span>重试与映射<small>时限、异常与状态码</small></span></button>
         </nav>
         <div class="editor-content">
           <section id="panel-basic" role="tabpanel" aria-labelledby="tab-basic">
-            <div class="section-heading"><h3>连接到你的上游</h3><p>配置渠道名称、服务地址和访问入口</p></div>
-            <div class="field"><label for="label">渠道名称</label><input id="label" name="label" placeholder="例如：主力推理渠道" required maxlength="120"></div>
+            <div class="section-heading"><h3>基础设置</h3><p>配置上游地址、请求入口与连接方式。</p></div>
+            <section class="settings-section" aria-labelledby="channelIdentityTitle"><h4 id="channelIdentityTitle">渠道信息</h4>
+            <div class="field-row"><div class="field"><label for="label">渠道名称</label><input id="label" name="label" placeholder="例如：主力推理渠道" required maxlength="120"></div><div class="field"><label for="weight">渠道权重</label><input id="weight" name="weight" type="number" min="0" max="1000" value="100" required><small>0–1000</small></div></div>
             <div class="field"><label for="baseUrl">Base URL</label><input id="baseUrl" name="baseUrl" type="url" placeholder="https://api.example.com/v1" required></div>
-            <div class="field"><label for="responsesTransport">Responses 上游连接</label><select id="responsesTransport" name="responsesTransport"><option value="http">HTTP / SSE</option><option value="websocket">WebSocket</option></select><small>WebSocket 仅用于上游 Responses；Messages 和模型获取仍使用 HTTP。每次请求独立连接，失败不回退 HTTP。</small></div>
-            <div class="field"><label class="switch-card"><input id="stripResponsesResourceState" name="stripResponsesResourceState" type="checkbox" aria-describedby="stripResponsesResourceStateHint"><span>剥离 Responses 资源状态</span></label><small id="stripResponsesResourceStateHint">用于跨资源、账号或中转续聊。移除历史推理条目（含摘要）、资源 ID、加密状态和 previous_response_id，保留消息和工具调用；需携带完整历史。加密压缩或条目引用需先恢复原历史。切换渠道后也需在目标渠道开启。</small></div>
+            <label class="setting-toggle"><span><strong>启用渠道</strong><small>允许此渠道参与请求转发</small></span><input name="enabled" type="checkbox" role="switch" checked></label>
+            </section>
+            <section class="settings-section" aria-labelledby="channelConnectionTitle"><h4 id="channelConnectionTitle">上游连接</h4>
+            <div class="field-row"><div class="field"><label for="responsesTransport">Responses 连接</label><select id="responsesTransport" name="responsesTransport"><option value="http">HTTP / SSE</option><option value="websocket">WebSocket</option></select><small>Messages 和模型获取使用 HTTP。</small><details class="inline-details"><summary>WebSocket 连接说明</summary><p>每次请求独立连接，失败不回退 HTTP。</p></details></div>
             <div class="field"><label for="networkMode">出站方式</label><select id="networkMode" name="networkMode"><option value="direct">直连</option><option value="proxyPool">代理池</option></select><small>适用于转发、WebSocket、模型获取和连接测试。代理不可用时明确报错，不回退直连。</small></div>
+            </div>
             <div id="proxySettings" class="proxy-settings" hidden>
               <div class="between"><label for="proxyScope">代理选择</label><button id="refreshProxies" type="button" class="text-button">刷新代理目录</button></div>
               <div class="field"><select id="proxyScope"><option value="all">全部可用代理</option><option value="subscriptions">指定订阅</option><option value="manual">仅手动节点</option><option value="node">指定节点</option></select><small>全池或订阅范围内随机选择；同一次请求及重试固定使用选中的节点。</small></div>
@@ -87,19 +117,22 @@
               <div id="proxySelectionHint" class="proxy-hint" role="status"></div>
               <div id="proxyCatalogStatus" class="feedback" role="status" hidden></div>
             </div>
-            <div class="field-row"><div class="field"><label for="weight">渠道权重</label><input id="weight" name="weight" type="number" min="0" max="1000" value="100" required><small>0–1000</small></div><div class="field"><label>渠道状态</label><label class="switch-card"><input name="enabled" type="checkbox" checked><span>启用渠道</span></label></div></div>
             <div class="field"><label>允许端点</label><div id="endpoints" class="endpoint-grid"></div></div>
+            </section>
+            <section class="settings-section" aria-labelledby="channelCompatibilityTitle"><h4 id="channelCompatibilityTitle">兼容设置</h4>
+            <div class="field"><label class="setting-toggle"><span><strong>剥离 Responses 资源状态</strong><small id="stripResponsesResourceStateHint">用于跨资源、账号或中转续聊；开启后需携带完整对话历史。</small></span><input id="stripResponsesResourceState" name="stripResponsesResourceState" type="checkbox" role="switch" aria-describedby="stripResponsesResourceStateHint"></label><details class="inline-details"><summary>查看兼容规则</summary><p>移除历史推理条目、资源 ID、加密状态和 previous_response_id，保留消息和工具调用。加密压缩或条目引用需先恢复原历史。切换渠道后也需在目标渠道开启。</p></details></div>
+            </section>
           </section>
           <section id="panel-keys" role="tabpanel" aria-labelledby="tab-keys" hidden>
             <div class="section-heading"><h3>Key 管理 <span id="keyCount" class="count">0</span></h3><p>每次请求及重试使用同一 Key</p></div>
-            <div class="field"><label for="keySelectionMode">分配策略</label><select id="keySelectionMode"><option value="roundRobin">轮询</option><option value="random">随机</option><option value="priority">主备顺序</option></select><small id="keyModeHint"></small></div>
+            <div class="key-strategy"><div class="field"><label for="keySelectionMode">分配策略</label><select id="keySelectionMode"><option value="roundRobin">轮询</option><option value="random">随机</option><option value="priority">主备顺序</option></select></div><p id="keyModeHint" class="muted"></p></div>
             <div id="keyRows" class="key-list"></div>
-            <div class="batch-box"><label for="keyBatch">批量添加</label><textarea id="keyBatch" rows="3" placeholder="每行一个 Key" autocomplete="off" spellcheck="false"></textarea><div class="between"><small>每渠道最多100个 Key</small><button id="keyAdd" type="button" class="secondary">添加到列表</button></div></div>
+            <div class="batch-box"><label for="keyBatch">批量添加</label><textarea id="keyBatch" rows="3" placeholder="每行一个 Key" autocomplete="off" spellcheck="false"></textarea><div class="between"><small>名称默认取末尾 4 位 · 最多 100 个</small><button id="keyAdd" type="button" class="secondary">添加到列表</button></div></div>
           </section>
           <section id="panel-models" role="tabpanel" aria-labelledby="tab-models" hidden>
             <div class="section-heading"><h3>模型与协议</h3><p>选择可用模型并设置上游协议</p></div>
-            <div class="discovery-box"><div class="field"><label for="discoveryKey">获取模型使用的 Key</label><select id="discoveryKey"></select></div><div class="actions"><button id="discover" type="button" class="primary">获取候选模型</button><button id="refreshModels" type="button" class="secondary">刷新候选</button></div><div id="discoveryStatus" class="feedback" role="status" hidden></div><div id="candidates" class="candidates"></div></div>
-            <details id="discoveryDetails" hidden><summary>模型请求失败：响应详情</summary><button id="copyDiscoveryResponse" type="button" class="secondary">复制响应详情</button><pre id="discoveryResponse" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:28rem;overflow:auto" tabindex="0"></pre></details>
+            <div class="discovery-box"><div class="discovery-controls"><div class="field"><label for="discoveryKey">获取模型使用的 Key</label><select id="discoveryKey"></select></div><div class="actions"><button id="discover" type="button" class="primary"><span data-icon="plus"></span>获取候选模型</button><button id="refreshModels" type="button" class="secondary"><span data-icon="refresh"></span>刷新候选</button></div></div><div id="discoveryStatus" class="feedback" role="status" hidden></div><div id="candidates" class="candidates"></div></div>
+            <details id="discoveryDetails" hidden><summary>模型请求失败：响应详情</summary><button id="copyDiscoveryResponse" type="button" class="secondary">复制响应详情</button><pre id="discoveryResponse" tabindex="0"></pre></details>
             <div class="field"><label for="models">允许模型</label><textarea id="models" name="models" rows="4" placeholder="每行一个模型名称" required spellcheck="false"></textarea></div>
             <div class="between"><h4>上游协议 <span id="protocolCount" class="count">0</span></h4><button id="syncProtocols" type="button" class="text-button">同步当前模型</button></div>
             <div id="protocolStatus" class="feedback" role="status" hidden></div>
@@ -114,19 +147,27 @@
             <label id="reasoningInheritance" class="inline-check" hidden><input id="reasoningUseDefault" type="checkbox">继承渠道规则</label>
             <p id="reasoningSource" class="muted"></p>
             <fieldset id="reasoningFields">
-              <div class="field"><label for="reasoningMode">处理方式</label><select id="reasoningMode"><option value="off">不改写</option><option value="map">按值映射</option><option value="fixed">固定等级</option></select></div>
-              <div id="reasoningMapSettings" hidden>
-                <div class="between"><h4>客户端等级 → 发送等级</h4></div>
-                <div id="reasoningRows"></div><button id="reasoningAdd" type="button" class="add-row">＋ 添加映射</button>
-                <div class="field reasoning-default"><label for="reasoningDefault">客户端未提供时</label><input id="reasoningDefault" list="reasoningLevels" placeholder="留空：沿用现有处理" autocomplete="off" spellcheck="false"><small>仅在客户端未传等级或值为 null 时使用；未命中的已有等级不变。</small></div>
+              <div class="field">
+                <span id="reasoningModeLabel" class="reasoning-field-label">处理方式</span>
+                <div id="reasoningMode" class="reasoning-mode-grid" role="radiogroup" aria-labelledby="reasoningModeLabel">
+                  <label class="reasoning-mode-card"><input type="radio" name="reasoningMode" value="off" class="sr-only" aria-labelledby="reasoningModeOffTitle" aria-describedby="reasoningModeOffHint" checked><span class="reasoning-mode-icon" data-icon="forward"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="reasoningModeOffTitle">不改写</strong><small id="reasoningModeOffHint">沿用现有等级</small></label>
+                  <label class="reasoning-mode-card"><input type="radio" name="reasoningMode" value="map" class="sr-only" aria-labelledby="reasoningModeMapTitle" aria-describedby="reasoningModeMapHint"><span class="reasoning-mode-icon" data-icon="mapping"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="reasoningModeMapTitle">按值映射</strong><small id="reasoningModeMapHint">转换指定等级</small></label>
+                  <label class="reasoning-mode-card"><input type="radio" name="reasoningMode" value="fixed" class="sr-only" aria-labelledby="reasoningModeFixedTitle" aria-describedby="reasoningModeFixedHint"><span class="reasoning-mode-icon" data-icon="settings"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="reasoningModeFixedTitle">固定等级</strong><small id="reasoningModeFixedHint">统一发送等级</small></label>
+                </div>
               </div>
-              <div id="reasoningFixedSettings" class="field" hidden><label for="reasoningFixed">固定发送等级</label><input id="reasoningFixed" list="reasoningLevels" placeholder="例如：max" autocomplete="off" spellcheck="false"><small>包含客户端未传等级的请求。</small></div>
+              <div id="reasoningOffSettings" class="reasoning-off-note"><span data-icon="info"></span><span>沿用现有处理，无需配置等级映射。</span></div>
+              <div id="reasoningMapSettings" class="reasoning-rule-panel" hidden>
+                <div class="reasoning-rule-heading"><h4>等级转换规则</h4><p>按客户端等级匹配，发送对应的上游等级。</p></div>
+                <div class="editor-column-heading mapping-column-heading" aria-hidden="true"><span>客户端等级</span><span></span><span>发送等级</span><span></span></div>
+                <div id="reasoningRows"></div><p id="reasoningMapEmpty" class="reasoning-empty">添加一条映射，设置等级转换关系。</p><button id="reasoningAdd" type="button" class="add-row"><span data-icon="plus"></span>添加映射</button>
+                <div class="field reasoning-default"><label for="reasoningDefault">客户端未提供时</label><input id="reasoningDefault" placeholder="留空：沿用现有处理" autocomplete="off" spellcheck="false"><small>仅在客户端未传等级或值为 null 时使用；未命中的已有等级不变。</small></div>
+              </div>
+              <div id="reasoningFixedSettings" class="field reasoning-rule-panel" hidden><label for="reasoningFixed">固定发送等级</label><input id="reasoningFixed" placeholder="选择等级或输入自定义值" autocomplete="off" spellcheck="false"><small>所有请求统一使用此等级，包含客户端未提供等级的请求。</small></div>
             </fieldset>
-            <datalist id="reasoningLevels"><option value="none"><option value="minimal"><option value="low"><option value="medium"><option value="high"><option value="xhigh"><option value="max"><option value="ultra"></datalist>
-            <p class="muted">可输入自定义等级，请使用上游模型支持的值。仅改写请求顶层等级，思考开关、Token 预算和聊天历史保持原样。</p>
+            <p class="muted reasoning-level-hint">常用等级仅作建议，也可输入上游模型支持的自定义值。仅改写请求顶层等级，思考开关、Token 预算和聊天历史保持原样。</p>
             <section class="reasoning-preview-box" aria-label="映射预览">
               <h4>规则预览</h4>
-              <div class="field-row"><div class="field"><label for="reasoningPreviewModel">预览范围</label><select id="reasoningPreviewModel"></select></div><div class="field"><label for="reasoningPreviewInput">客户端等级</label><input id="reasoningPreviewInput" list="reasoningLevels" value="low" autocomplete="off" spellcheck="false"></div></div>
+              <div class="field-row"><div class="field"><label for="reasoningPreviewModel">预览范围</label><select id="reasoningPreviewModel"></select></div><div class="field"><label for="reasoningPreviewInput">客户端等级</label><input id="reasoningPreviewInput" placeholder="选择或输入客户端等级" value="low" autocomplete="off" spellcheck="false"></div></div>
               <label class="inline-check"><input id="reasoningPreviewMissing" type="checkbox">客户端未提供等级</label>
               <div id="reasoningPreview" class="feedback" role="status"></div>
               <small>预览不会发送请求。实际发送值与上游报告可在请求日志中核对。</small>
@@ -140,7 +181,7 @@
             <p id="headerScopeHint" class="header-scope-hint">应用于所有接口及模型发现</p>
             <div class="template-grid"><button id="templateCodex" type="button" class="template-card"><span class="template-mark">↗</span><strong>Codex</strong><small>请求头模板</small></button><button id="templateClaude" type="button" class="template-card"><span class="template-mark claude">✳</span><strong>Claude Code</strong><small>请求头模板</small></button></div>
             <div class="between editor-toolbar"><div class="segmented" role="group" aria-label="请求头编辑模式"><button type="button" id="headerVisual" aria-pressed="true">可视化</button><button type="button" id="headerJson" aria-pressed="false">JSON</button></div><div class="actions"><button id="headerCopy" type="button" class="text-button">复制</button><button id="headerClear" type="button" class="text-button">清空</button></div></div>
-            <div id="headerVisualPane"><div id="headerRows"></div><button id="headerAdd" type="button" class="add-row">＋ 添加请求头</button></div>
+            <div id="headerVisualPane"><div class="editor-column-heading header-column-heading" aria-hidden="true"><span>请求头名称</span><span>覆盖值</span><span></span></div><div id="headerRows"></div><button id="headerAdd" type="button" class="add-row">＋ 添加请求头</button></div>
             <div id="headerJsonPane" hidden><label class="sr-only" for="headerOverride">请求头 JSON</label><textarea id="headerOverride" name="headerOverride" class="code-editor" rows="13" spellcheck="false">{}</textarea><button id="headerFormat" type="button" class="text-button">格式化</button></div>
             <div id="headerStatus" class="feedback" role="status" hidden></div>
             <p class="field-hint">默认透传客户端请求头；覆盖项优先，删除后恢复客户端原值。<code>{api_key}</code> 引用当前渠道 Key。</p>
@@ -165,7 +206,7 @@
               </div>
             </section>
             <div class="between editor-toolbar"><h4>状态码映射</h4><div class="segmented" role="group" aria-label="状态码映射编辑模式"><button type="button" id="mappingVisual" aria-pressed="true">可视化</button><button type="button" id="mappingJson" aria-pressed="false">JSON</button></div></div>
-            <div id="mappingVisualPane"><div id="mappingRows"></div><button type="button" id="mappingAdd" class="add-row">＋ 添加映射</button></div>
+            <div id="mappingVisualPane"><div class="editor-column-heading mapping-column-heading" aria-hidden="true"><span>原始状态码</span><span></span><span>返回状态码</span><span></span></div><div id="mappingRows"></div><button type="button" id="mappingAdd" class="add-row">＋ 添加映射</button></div>
             <div id="mappingJsonPane" hidden><label class="sr-only" for="statusCodeMapping">状态码映射 JSON</label><textarea id="statusCodeMapping" name="statusCodeMapping" class="code-editor" rows="7" spellcheck="false">{}</textarea><button id="mappingFormat" type="button" class="text-button">格式化</button></div>
             <div id="mappingStatus" class="feedback" role="status" hidden></div>
           </section>
@@ -175,19 +216,20 @@
     </form>
   </dialog>
   <dialog id="testDialog" class="test-dialog" aria-labelledby="testTitle">
-    <header class="dialog-heading"><h2 id="testTitle">测试渠道连接</h2><button id="testClose" type="button" class="icon-button" aria-label="关闭测试">×</button></header>
+    <header class="dialog-heading"><div class="dialog-title-group"><span class="dialog-icon" data-icon="test"></span><div><h2 id="testTitle">测试渠道连接</h2><p class="dialog-description">使用已保存配置验证连接，查看各模型的响应结果。</p></div></div><button id="testClose" type="button" class="icon-button" aria-label="关闭测试"><span data-icon="x"></span></button></header>
     <div class="test-content">
-      <div class="test-setup"><div><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div><label for="testStream">流式模式</label><label class="stream-control"><input id="testStream" type="checkbox" role="switch"><span id="testStreamLabel">已禁用</span></label></div></div>
-      <div class="test-prompt"><div><label for="testContent">测试内容</label><textarea id="testContent" rows="2" maxlength="16000" placeholder="留空使用默认内容：Reply with OK."></textarea></div><div><label for="testMaxTokens">输出上限 · Token</label><input id="testMaxTokens" type="number" min="1" max="32768" value="32"><p class="muted">提高上限可能增加费用。</p></div></div>
+      <details id="testConfiguration" class="test-configuration" open><summary>测试配置<span id="testConfigSummary">自动选择 · 非流式 · 32 Token</span></summary><div class="test-configuration-body">
+      <div class="test-setup"><div><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div><label for="testMaxTokens">输出上限 · Token</label><input id="testMaxTokens" type="number" min="1" max="32768" value="32"></div><div><label for="testStream">流式模式</label><label class="stream-control"><input id="testStream" type="checkbox" role="switch"><span id="testStreamLabel">已禁用</span></label></div></div>
+      <div class="test-prompt"><label for="testContent">测试内容</label><textarea id="testContent" rows="2" maxlength="16000" placeholder="留空使用默认内容：Reply with OK."></textarea><p class="muted">提高输出上限可能增加费用。</p></div>
+      </div></details>
       <div class="test-model-heading"><h3>渠道模型</h3><input id="testFilter" aria-label="筛选测试模型" placeholder="筛选模型…"></div>
       <div class="test-toolbar"><div class="actions"><button id="testAll" class="primary">测试全部</button><button id="testSelected" class="secondary">测试勾选</button><button id="testCancel" class="secondary" disabled>取消测试</button><button id="testResume" class="secondary" hidden>重试查询</button></div><div class="test-key-choice"><label for="testKey">测试 Key</label><select id="testKey"></select></div></div>
       <div id="testProgress" class="feedback" role="status" hidden></div><div id="testError" class="feedback error" role="alert" hidden></div>
-      <div class="table-scroll"><table><thead><tr><th><input id="testSelectAll" type="checkbox" aria-label="勾选可见模型"></th><th>模型</th><th>状态</th><th>结果</th><th>操作</th></tr></thead><tbody id="testRows"></tbody></table></div>
-      <div class="test-pagination"><span id="testTotal"></span><label for="testPageSize">每页行数</label><select id="testPageSize"><option>10</option><option selected>30</option><option>50</option><option>100</option></select><button id="testFirst" aria-label="测试模型首页">«</button><button id="testPrevious" aria-label="测试模型上一页">‹</button><span id="testPageNumber"></span><button id="testNext" aria-label="测试模型下一页">›</button><button id="testLast" aria-label="测试模型末页">»</button></div>
-
+      <div class="table-scroll"><table><thead><tr><th><input id="testSelectAll" type="checkbox" aria-label="勾选可见模型"></th><th>模型</th><th>状态</th><th>结果</th><th>操作</th></tr></thead><tbody id="testRows"></tbody></table><div id="testEmpty" class="empty" hidden><span data-icon="search"></span><h3>没有可测试的模型</h3><p>尝试其他关键词，或先在渠道设置中添加模型。</p></div></div>
     </div>
+    <footer class="test-pagination"><span id="testTotal"></span><label for="testPageSize">每页行数</label><select id="testPageSize"><option>10</option><option selected>30</option><option>50</option><option>100</option></select><button id="testFirst" aria-label="测试模型首页">«</button><button id="testPrevious" aria-label="测试模型上一页">‹</button><span id="testPageNumber"></span><button id="testNext" aria-label="测试模型下一页">›</button><button id="testLast" aria-label="测试模型末页">»</button></footer>
   </dialog>
-  <dialog id="testDetailDialog" class="request-detail-dialog" aria-labelledby="testDetailTitle"><header class="request-detail-heading"><h3 id="testDetailTitle">连接详情</h3><button id="testDetailClose" class="icon-button" aria-label="关闭连接详情">×</button></header><div id="testDetailOverview"></div><h4>响应原文</h4><pre id="testDetails" class="journal-pre"></pre></dialog>
+  <dialog id="testDetailDialog" class="request-detail-dialog" aria-labelledby="testDetailTitle"><header class="request-detail-heading"><h3 id="testDetailTitle">连接详情</h3><button id="testDetailClose" class="icon-button" aria-label="关闭连接详情"><span data-icon="x"></span></button></header><div id="testDetailOverview"></div><h4>响应原文</h4><pre id="testDetails" class="journal-pre"></pre></dialog>
   <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmTitle"><h3 id="confirmTitle">确认操作</h3><p id="confirmText"></p><div class="actions"><button id="confirmNo" class="secondary">取消</button><button id="confirmYes" class="primary">确认</button></div></dialog>
   <script>/*__SCRIPT__*/</script>
 </body>

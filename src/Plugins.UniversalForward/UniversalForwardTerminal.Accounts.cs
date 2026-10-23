@@ -52,7 +52,7 @@ public sealed partial class UniversalForwardTerminal
             if (!string.IsNullOrWhiteSpace(input.ApiKey))
             {
                 if (previous.Keys is not null) return context.BadRequest("多 Key 渠道请使用 keys 编辑");
-                keys = [new ChannelKey { Id = "legacy", Name = "默认 Key", Secret = input.ApiKey.Trim() }];
+                keys = [new ChannelKey { Id = "legacy", Name = ChannelKeys.DefaultName(input.ApiKey), Secret = input.ApiKey.Trim() }];
             }
             else keys = ChannelKeys.Merge(oldKeys, input.Keys, input.DeletedKeyIds);
             ChannelKeys.Validate(keys, mode);
@@ -413,7 +413,7 @@ public sealed partial class UniversalForwardTerminal
             apiKeyMasked = MaskSecret(key),
             keySelectionMode = settings.KeySelectionMode, keyRevision = settings.KeyRevision,
             enabledKeyCount = keys.Count(k => k.Enabled), totalKeyCount = keys.Count,
-            keys = keys.Select(k => new { k.Id, k.Name, masked = MaskSecret(k.Secret), k.Enabled }).ToArray(),
+            keys = keys.Select(k => new { k.Id, k.Name, k.Secret, masked = MaskSecret(k.Secret), k.Enabled }).ToArray(),
             hasApiKey = !string.IsNullOrWhiteSpace(key),
             weight = settings.Weight,
             endpoints = settings.Endpoints,

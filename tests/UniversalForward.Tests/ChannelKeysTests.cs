@@ -16,6 +16,7 @@ public sealed class ChannelKeysTests
     private static readonly string[] ReorderedKeyIds = ["b", "a"];
     private static readonly string[] DisabledKeyIds = ["off"];
     private static readonly int[] ConcurrentSaveStatuses = [200, 409];
+    private static readonly string[] DefaultKeyNames = ["a1b2", "c3d4", "Production", "abc"];
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static List<ChannelKey> Keys() =>
@@ -27,7 +28,23 @@ public sealed class ChannelKeysTests
     public void LegacyAndExplicitEmptyAreDistinct()
     {
         Assert.AreEqual("legacy", ChannelKeys.Read(null, "old")[0].Id);
+        Assert.AreEqual("old", ChannelKeys.Read(null, "old")[0].Name);
         Assert.AreEqual(0, ChannelKeys.Read([], "old").Count);
+    }
+
+    [TestMethod]
+    public void DefaultNamesUseSuffixAndPreserveCustomNames()
+    {
+        var result = ChannelKeys.Merge([], [new ChannelKey { Secret = " sk-example-a1b2 " },
+            new ChannelKey { Name = " Key 2 ", Secret = "sk-example-c3d4" },
+            new ChannelKey { Name = " Production ", Secret = "sk-example-e5f6" },
+            new ChannelKey { Secret = "abc" }], []);
+        CollectionAssert.AreEqual(DefaultKeyNames, result.Select(k => k.Name).ToArray());
+        Assert.AreEqual("sk-example-a1b2", result[0].Secret);
+        var keys = ChannelKeys.Read([new ChannelKey { Id = "a", Name = "Key1", Secret = "sk-example-a1b2" },
+            new ChannelKey { Id = "b", Name = "Production", Secret = "sk-example-c3d4" }], "");
+        Assert.AreEqual("a1b2", keys[0].Name);
+        Assert.AreEqual("Production", keys[1].Name);
     }
 
     [TestMethod]
@@ -174,7 +191,7 @@ public sealed class ChannelKeysTests
     }
 
     [TestMethod]
-    public async Task SaveUsesCasPreservesStatusAndDoesNotExposeSecrets()
+    public async Task SaveUsesCasPreservesStatusAndReturnsEditableKeys()
     {
         var account = Account(Keys());
         account.Status = new ResourceStatus { State = ResourceState.Disabled };
@@ -193,9 +210,13 @@ public sealed class ChannelKeysTests
         Assert.AreEqual(2, settings["keys"]!.AsArray().Count);
         Assert.AreEqual(ResourceState.Disabled, account.Status.State);
         Mock.Get(host.Services.Accounts).Verify(x => x.SaveAsync(It.IsAny<Account>(), It.IsAny<CancellationToken>()), Times.Never);
-        var card = JsonSerializer.Serialize(result, Json);
-        Assert.IsFalse(card.Contains("secret-a", StringComparison.Ordinal));
-        Assert.IsFalse(card.Contains("secret-b", StringComparison.Ordinal));
+        var card = JsonSerializer.SerializeToNode(result.Body, Json)!["account"]!;
+        Assert.AreEqual("secret-b", card["keys"]![0]!["secret"]!.GetValue<string>());
+        Assert.AreEqual("Renamed", card["keys"]![0]!["name"]!.GetValue<string>());
+        Assert.AreEqual("secret-a", card["keys"]![1]!["secret"]!.GetValue<string>());
+        var listed = JsonSerializer.SerializeToNode((await terminal.ListAccountsAsync(Context(new { }))).Body, Json)!["accounts"]![0]!;
+        Assert.AreEqual("secret-b", listed["keys"]![0]!["secret"]!.GetValue<string>());
+        Assert.AreEqual("secret-a", listed["keys"]![1]!["secret"]!.GetValue<string>());
     }
 
     [TestMethod]
