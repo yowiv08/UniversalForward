@@ -82,24 +82,29 @@
     return includes;
   }
   function calculateTimeoutSuggestion(execution) {
-    const retries = timeoutInput('maxRetries'), header = timeoutInput('headerTimeoutSeconds');
+    const retries = timeoutInput('maxRetries'), header = timeoutInput('headerTimeoutSeconds'), idle = timeoutInput('streamIdleTimeoutSeconds');
     const anomalyEnabled = $('rateLimitRetryEnabled').checked || $('emptyResponseRetryEnabled').checked;
     const anomalyRetries = anomalyEnabled ? timeoutInput('responseMaxRetries') : 0;
     const interval = anomalyRetries > 0 ? timeoutInput('responseRetryIntervalSeconds') : 0;
-    if ([retries, header, anomalyRetries, interval].includes(null))
-      return { error: '请补全有效的重试次数和响应头超时；启用异常重试时还需填写有效的次数与间隔。' };
+    if ([retries, header, idle, anomalyRetries, interval].includes(null))
+      return { error: '请补全有效的重试次数、响应头和流空闲超时；启用异常重试时还需填写有效的次数与间隔。' };
     const retries520 = retryIncludes520();
     if (retries520 === null) return { error: '请检查自动重试状态码，例如 429,500-503。' };
     // 对应内部循环：两类重试额度相加；只有 HTTP 520 的普通重试带退避。
     let backoff = 0;
     if (retries520) for (let index = 0; index < retries; index++) backoff += Math.min(2, .25 * 2 ** Math.min(index, 3));
     const sends = 1 + retries + anomalyRetries, waits = anomalyRetries * interval;
-    const headerBudget = sends * header, requestedSetup = headerBudget + waits + backoff;
+    // 基础等待预算：每次发送预留响应头等待和一个无新数据的空闲周期。
+    // 空闲周期不代表完整输出时长；宿主的最大读取时间也不能当作推荐预留。
+    const headerBudget = sends * header, idleBudget = sends * idle;
+    const requestedSetup = headerBudget + waits + backoff, requestedTotal = requestedSetup + idleBudget;
     const setupLimit = Math.min(execution.setupTimeoutSeconds, execution.totalSetupTimeoutSeconds);
-    const setup = Math.min(requestedSetup, setupLimit), reading = execution.responseTimeoutSeconds;
-    // 只给当前插件调用建议；宿主尝试次数不能乘到这份总时限里。
-    return { seconds: Math.min(3600, Math.ceil(setup + reading)), retries, anomalyRetries, sends, header,
-      headerBudget, waits, backoff, requestedSetup, setupLimit, setup, reading };
+    // 两阶段之和只是本次调用可能达到的外层上限；映射剩余预算等仍可能更短。
+    const hostLimit = setupLimit + execution.responseTimeoutSeconds;
+    const ceiling = Math.min(3600, Math.floor(hostLimit));
+    if (ceiling < 1) return { error: '宿主执行上限不足 1 秒，无法给出可填写的整秒建议。' };
+    return { seconds: Math.min(Math.ceil(requestedTotal), ceiling), retries, anomalyRetries, sends, header, idle,
+      headerBudget, idleBudget, waits, backoff, requestedSetup, requestedTotal, setupLimit, hostLimit, ceiling };
   }
   function renderTimeoutSuggestion(execution) {
     const suggestion = execution ? calculateTimeoutSuggestion(execution) : null;
@@ -115,32 +120,36 @@
     $('timeoutWaitDetail').textContent = '';
     $('timeoutBudgetWarning').hidden = true;
     const idle = timeoutInput('streamIdleTimeoutSeconds');
-    $('timeoutIdleDetail').textContent = `流空闲超时${idle === null ? '' : ` ${idle} 秒`}只限制连续无数据的时间，不作为整个回答的输出时长加入计算。总时限到期仍会中断正在输出的流。`;
+    $('timeoutIdleDetail').textContent = `流空闲超时${idle === null ? '' : ` ${idle} 秒`}只限制连续无数据的时间。基础建议为每次发送计入一个空闲周期；只要持续收到数据，请求就可能更久，因此不能据此推算完整输出时长。总时限到期仍会中断正在输出的流。`;
     if (!available) {
       $('timeoutCalculation').textContent = suggestion?.error || (executionError
         ? '宿主执行限制读取失败，暂时无法给出建议。' : '正在读取宿主执行限制…');
       $('timeoutCurrent').textContent = '仍可手动填写总时限（1–3600 秒），原有设置保持不变。';
       return;
     }
-    const { seconds, sends, retries, anomalyRetries, header, headerBudget, waits, backoff, requestedSetup, setupLimit, setup, reading } = suggestion;
+    const { seconds, sends, retries, anomalyRetries, header, idle: idleSeconds, headerBudget, idleBudget, waits, backoff,
+      requestedSetup, requestedTotal, setupLimit, hostLimit, ceiling } = suggestion;
     const minutes = Math.floor(seconds / 60), remainder = seconds % 60;
     $('timeoutDuration').textContent = minutes ? `${minutes} 分钟${remainder ? ` ${remainder} 秒` : ''}` : '';
-    $('timeoutCalculation').textContent = `建立响应预留 ${timeoutSeconds(setup)} 秒 + 响应读取预留 ${timeoutSeconds(reading)} 秒`;
+    $('timeoutCalculation').textContent = `基础等待 ${timeoutSeconds(headerBudget + idleBudget)} 秒（${sends} 次 × 响应头 ${header} 秒 + ${sends} 次 × 空闲 ${idleSeconds} 秒）` +
+      (waits ? ` + 重试间隔 ${timeoutSeconds(waits)} 秒` : '') +
+      (backoff ? ` + 520 退避 ${timeoutSeconds(backoff)} 秒` : '') +
+      `，合计 ${timeoutSeconds(requestedTotal)} 秒。`;
     $('timeoutSendDetail').textContent = `最多 ${sends} 次内部发送：首次 1 次 + 普通重试 ${retries} 次${anomalyRetries ? ` + 限流／空回共享重试 ${anomalyRetries} 次` : ''}。两类异常同时开启时共享次数，不重复计算。`;
-    $('timeoutWaitDetail').textContent = `按每次响应头等满 ${header} 秒估算：${sends} × ${header} = ${timeoutSeconds(headerBudget)} 秒` +
-      (waits ? `，加上异常重试间隔 ${timeoutSeconds(waits)} 秒` : '') +
-      (backoff ? `，以及 HTTP 520 退避预留 ${timeoutSeconds(backoff)} 秒` : '') +
-      `。建立响应部分取该估算与宿主 ${timeoutSeconds(setupLimit)} 秒限制中较小的值，总和向上取整秒。`;
+    $('timeoutWaitDetail').textContent = `响应头等待 ${timeoutSeconds(headerBudget)} 秒，空闲等待 ${timeoutSeconds(idleBudget)} 秒` +
+      (waits ? `，异常重试间隔 ${timeoutSeconds(waits)} 秒` : '') +
+      (backoff ? `，HTTP 520 退避预留 ${timeoutSeconds(backoff)} 秒` : '') +
+      `。总和向上取整；仅在超出渠道或宿主上限时下调。宿主读取预算 ${timeoutSeconds(execution.responseTimeoutSeconds)} 秒是上限，不会加进建议。`;
     const warnings = [];
     if (requestedSetup > setupLimit) warnings.push(`等待与重试预估 ${timeoutSeconds(requestedSetup)} 秒，超过宿主 ${timeoutSeconds(setupLimit)} 秒的建立响应限制。慢响应时可能用不完重试次数，提高总时限也不能延长这个阶段。`);
-    if (setup + reading > 3600) warnings.push(`两段预留合计 ${timeoutSeconds(setup + reading)} 秒，建议值已取渠道上限 3600 秒。`);
+    if (Math.ceil(requestedTotal) > ceiling) warnings.push(`基础预算 ${timeoutSeconds(requestedTotal)} 秒超出${hostLimit < 3600 ? `宿主两阶段合计上限 ${timeoutSeconds(hostLimit)} 秒` : '渠道上限 3600 秒'}，可填建议已限制为 ${ceiling} 秒，可能用不完全部等待与重试。`);
     $('timeoutBudgetWarning').textContent = warnings.join(' ');
     $('timeoutBudgetWarning').hidden = !warnings.length;
     const current = timeoutInput('totalTimeoutSeconds');
     $('timeoutCurrent').textContent = current === null ? '可直接填入建议值，也可手动填写 1–3600 的整数。'
-      : current < seconds ? `当前 ${current} 秒，比建议少 ${seconds - current} 秒，可能提前中断较长输出。`
-      : current > seconds ? `当前 ${current} 秒，高于建议值；宿主各阶段限制仍然生效。`
-      : '当前与建议一致。保存渠道后生效，也可继续手动修改。';
+      : current < seconds ? `当前 ${current} 秒，比基础建议少 ${seconds - current} 秒，可能在等待或重试完成前到期。`
+      : current > seconds ? `当前 ${current} 秒，比基础建议多 ${current - seconds} 秒，可保留给较长输出；宿主各阶段限制仍然生效。`
+      : '当前与基础建议一致。保存渠道后生效，较长输出请增加总时限。';
     $('timeoutApply').disabled = current === seconds;
     if (current === seconds) $('timeoutApply').textContent = '与建议一致';
   }

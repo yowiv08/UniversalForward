@@ -5,7 +5,7 @@ const http = require('node:http');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const { bridge, hostMock, assertContrast } = require('./settings-fixture.cjs');
 const source = require('./page-source.cjs')();
-const output = path.resolve(__dirname, '../../artifacts/v0.3.5-timeout-compact/ui');
+const output = path.resolve(__dirname, '../../artifacts/v0.3.6/ui');
 
 (async () => {
   fs.mkdirSync(output, { recursive: true });
@@ -45,11 +45,44 @@ const output = path.resolve(__dirname, '../../artifacts/v0.3.5-timeout-compact/u
       await field('appearanceStatus').waitFor({ state: 'hidden' });
     };
     await frame.locator('.channel-card').first().waitFor();
+    // Regression: 1-second channel limits must not inherit the host's 600-second maximum as a recommendation.
+    await page.evaluate(() => {
+      hostState.execution.setupTimeoutSeconds = 180;
+      Object.assign(hostState.accounts[0].requestPolicy, { maxRetries: 1, headerTimeoutSeconds: 1,
+        totalTimeoutSeconds: 1, streamIdleTimeoutSeconds: 1, retryStatusCodes: '429,500-520',
+        rateLimitRetryEnabled: true, emptyResponseRetryEnabled: true, responseMaxRetries: 1, responseRetryIntervalSeconds: 2 });
+      openPlugin();
+    });
+    await frame.locator('.channel-card').first().waitFor(); await openEditor(); await expected(9);
+    assert.equal(await field('totalTimeoutSeconds').inputValue(), '1');
+    assert.match(await field('timeoutCalculation').innerText(), /基础等待 6 秒.*重试间隔 2 秒.*520 退避 0.25 秒.*合计 8.25 秒/);
+    assert.match(await field('timeoutSendDetail').textContent(), /最多 3 次.*共享重试 1 次/);
+    assert.equal(await field('timeoutEstimateHint').isVisible(), true);
+    assert.match(await field('timeoutEstimateHint').innerText(), /基础建议.*不含持续输出时间/);
+    await field('timeoutAdvisorTitle').scrollIntoViewIfNeeded();
+    await assertContrast(frame, '#panel-policy');
+    await page.screenshot({ path: path.join(output, 'one-second-light.png') });
+    await mode('dark'); await assertContrast(frame, '#panel-policy');
+    await page.screenshot({ path: path.join(output, 'one-second-dark.png') });
+    await mode('light');
+    await field('timeoutApply').click(); await save(); await openEditor(); await expected(9);
+    assert.equal(await field('totalTimeoutSeconds').inputValue(), '9');
+    await limits(180, 180, 300); await expected(9);
+    await limits(180, 180, 3600); await expected(9);
+    await limits(180, 180, 600); await expected(9);
+    await field('rateLimitRetryEnabled').uncheck(); await expected(9);
+    await field('emptyResponseRetryEnabled').uncheck(); await expected(5);
+    await fill('retryStatusCodes', '429,500-503'); await expected(4);
+    await fill('maxRetries', 0); await expected(2);
+    await fill('streamIdleTimeoutSeconds', 3); await expected(4);
+    await field('cancel').click();
+
     await page.evaluate(() => {
       hostState.defaultHostAttempts = 3;
       hostState.execution.setupTimeoutSeconds = 180;
       Object.assign(hostState.accounts[0].requestPolicy, { maxRetries: 10, headerTimeoutSeconds: 20,
-        totalTimeoutSeconds: 200, streamIdleTimeoutSeconds: 40, retryStatusCodes: '429,500-503' });
+        totalTimeoutSeconds: 200, streamIdleTimeoutSeconds: 40, retryStatusCodes: '429,500-503',
+        rateLimitRetryEnabled: false, emptyResponseRetryEnabled: false, responseMaxRetries: 3, responseRetryIntervalSeconds: 5 });
       openPlugin();
     });
     await frame.locator('.channel-card').first().waitFor(); await openEditor(false);
@@ -59,16 +92,16 @@ const output = path.resolve(__dirname, '../../artifacts/v0.3.5-timeout-compact/u
     await page.screenshot({ path: path.join(output, 'timeout-collapsed-dark.png') });
     await mode('light');
     await field('timeoutAdvisorTitle').focus(); await field('timeoutAdvisorTitle').press('Enter');
-    await expected(780);
+    await expected(660);
     assert.equal(await field('totalTimeoutSeconds').inputValue(), '200', 'Opening must preserve saved values');
-    assert.match(await field('timeoutDuration').innerText(), /13 分钟/);
-    assert.match(await field('timeoutCalculation').innerText(), /预留 180 秒.*预留 600 秒/);
+    assert.match(await field('timeoutDuration').innerText(), /11 分钟/);
+    assert.match(await field('timeoutCalculation').innerText(), /基础等待 660 秒.*响应头 20 秒.*空闲 40 秒/);
     assert.match(await field('timeoutBudgetWarning').innerText(), /预估 220 秒.*宿主 180 秒/);
     assert.match(await field('hostAttemptsHint').textContent(), /尝试 3 次.*不乘宿主次数/);
-    assert.match(await field('timeoutCurrent').innerText(), /当前 200 秒.*少 580 秒/);
+    assert.match(await field('timeoutCurrent').innerText(), /当前 200 秒.*少 460 秒/);
     await field('timeoutDetails').evaluate(node => { node.open = true; });
     assert.match(await field('timeoutSendDetail').innerText(), /最多 11 次内部发送/);
-    assert.match(await field('timeoutIdleDetail').innerText(), /40 秒.*不作为整个回答/);
+    assert.match(await field('timeoutIdleDetail').innerText(), /40 秒.*不能据此推算完整输出时长/);
     await assertContrast(frame, '#panel-policy');
     await field('timeoutDetails').evaluate(node => { node.open = false; });
     await field('timeoutApply').hover(); await assertContrast(frame, '.timeout-advisor');
@@ -82,36 +115,37 @@ const output = path.resolve(__dirname, '../../artifacts/v0.3.5-timeout-compact/u
     await field('timeoutAdvisorTitle').click();
     assert.equal(await field('timeoutApply').isVisible(), false);
     assert.equal(await field('totalTimeoutSeconds').inputValue(), '200');
-    await field('timeoutAdvisorTitle').click(); await expected(780);
+    await field('timeoutAdvisorTitle').click(); await expected(660);
     await field('tab-basic').click(); await fill('label', '总时限草稿'); await field('tab-policy').click();
     await field('timeoutApply').focus(); await field('timeoutApply').press('Enter');
-    assert.equal(await field('totalTimeoutSeconds').inputValue(), '780');
+    assert.equal(await field('totalTimeoutSeconds').inputValue(), '660');
     assert.equal(await field('label').inputValue(), '总时限草稿');
     assert.equal(await field('timeoutApply').isDisabled(), true);
-    assert.equal(await page.evaluate(() => hostState.calls.some(call => call.route === 'accounts/save')), false,
+    assert.equal(await page.evaluate(() => hostState.calls.filter(call => call.route === 'accounts/save').length), 1,
       'Applying the suggestion must edit only the draft');
-    await save(); await openEditor(); await expected(780);
-    assert.equal(await field('totalTimeoutSeconds').inputValue(), '780', 'Applied value survives saving and reopening');
-    await fill('totalTimeoutSeconds', 345); await save(); await openEditor(); await expected(780);
+    await save(); await openEditor(); await expected(660);
+    assert.equal(await field('totalTimeoutSeconds').inputValue(), '660', 'Applied value survives saving and reopening');
+    await fill('totalTimeoutSeconds', 345); await save(); await openEditor(); await expected(660);
     assert.equal(await field('totalTimeoutSeconds').inputValue(), '345', 'Manual override survives saving and reopening');
-    await fill('maxRetries', 0); await expected(620);
+    await fill('maxRetries', 0); await expected(60);
     assert.equal(await field('totalTimeoutSeconds').inputValue(), '345', 'Changing inputs must not overwrite a manual total');
     assert.equal(await field('timeoutBudgetWarning').isVisible(), false);
     for (const [name, value, restore] of [['maxRetries', '', 0], ['maxRetries', '2.5', 0],
-      ['maxRetries', '11', 0], ['headerTimeoutSeconds', '0', 20], ['headerTimeoutSeconds', '3601', 20]]) {
+      ['maxRetries', '11', 0], ['headerTimeoutSeconds', '0', 20], ['headerTimeoutSeconds', '3601', 20],
+      ['streamIdleTimeoutSeconds', '', 40], ['streamIdleTimeoutSeconds', '0', 40], ['streamIdleTimeoutSeconds', '1.5', 40]]) {
       await fill(name, value);
       assert.equal(await field('timeoutApply').isDisabled(), true, name + '=' + value);
       assert.equal(await field('timeoutRecommendation').innerText(), '—');
-      await fill(name, restore); await expected(620);
+      await fill(name, restore); await expected(60);
     }
-    await fill('maxRetries', 2); await fill('headerTimeoutSeconds', 10); await expected(630);
+    await fill('maxRetries', 2); await fill('headerTimeoutSeconds', 10); await expected(150);
     await field('rateLimitRetryEnabled').check();
-    await fill('responseMaxRetries', 3); await fill('responseRetryIntervalSeconds', 5); await expected(675);
-    await field('emptyResponseRetryEnabled').check(); await expected(675);
+    await fill('responseMaxRetries', 3); await fill('responseRetryIntervalSeconds', 5); await expected(315);
+    await field('emptyResponseRetryEnabled').check(); await expected(315);
     assert.match(await field('timeoutSendDetail').textContent(), /最多 6 次.*共享重试 3 次/);
-    assert.match(await field('timeoutWaitDetail').textContent(), /6 × 10 = 60 秒.*重试间隔 15 秒/);
-    await field('rateLimitRetryEnabled').uncheck(); await expected(675);
-    await fill('responseMaxRetries', 0); await fill('responseRetryIntervalSeconds', ''); await expected(630);
+    assert.match(await field('timeoutWaitDetail').textContent(), /响应头等待 60 秒.*空闲等待 240 秒.*重试间隔 15 秒/);
+    await field('rateLimitRetryEnabled').uncheck(); await expected(315);
+    await fill('responseMaxRetries', 0); await fill('responseRetryIntervalSeconds', ''); await expected(150);
     await fill('responseMaxRetries', 2);
     assert.equal(await field('timeoutApply').isDisabled(), true);
     await fill('responseRetryIntervalSeconds', 3600); await expected(780);
@@ -119,33 +153,34 @@ const output = path.resolve(__dirname, '../../artifacts/v0.3.5-timeout-compact/u
     await fill('responseRetryIntervalSeconds', 0);
     assert.equal(await field('timeoutApply').isDisabled(), true);
     await fill('responseRetryIntervalSeconds', 5);
-    await field('emptyResponseRetryEnabled').uncheck(); await expected(630);
-    await fill('retryStatusCodes', ' 519 - 521 '); await expected(631);
+    await field('emptyResponseRetryEnabled').uncheck(); await expected(150);
+    await fill('retryStatusCodes', ' 519 - 521 '); await expected(151);
     assert.match(await field('timeoutWaitDetail').textContent(), /520 退避预留 0.75 秒/);
-    await fill('maxRetries', 10); await fill('headerTimeoutSeconds', 1); await expected(627);
+    await fill('maxRetries', 10); await fill('headerTimeoutSeconds', 1); await expected(467);
     for (const codes of ['503-500', '429,', '600', 'invalid']) {
       await fill('retryStatusCodes', codes); assert.equal(await field('timeoutApply').isDisabled(), true);
     }
-    await fill('retryStatusCodes', ''); await expected(611);
+    await fill('retryStatusCodes', ''); await expected(451);
     await fill('totalTimeoutSeconds', '');
     assert.equal(await field('timeoutApply').isDisabled(), false, 'A blank total may be filled by the calculator');
-    await field('timeoutApply').click(); assert.equal(await field('totalTimeoutSeconds').inputValue(), '611');
+    await field('timeoutApply').click(); assert.equal(await field('totalTimeoutSeconds').inputValue(), '451');
     await fill('headerTimeoutSeconds', 3600); await field('rateLimitRetryEnabled').check();
     await fill('responseMaxRetries', 10); await fill('responseRetryIntervalSeconds', 3600); await expected(780);
     assert.match(await field('timeoutBudgetWarning').innerText(), /111600 秒/);
 
     // Cancel the draft; host attempts and limits are independent from channel fields.
-    await limits(180, 180, 600); await expected(780);
+    await limits(180, 180, 600); await expected(660);
     await field('cancel').click();
     await page.evaluate(() => { hostState.defaultHostAttempts = 35; });
-    await openEditor(); await expected(780);
+    await openEditor(); await expected(660);
     assert.match(await field('hostAttemptsHint').textContent(), /尝试 35 次/);
     assert.equal(await field('totalTimeoutSeconds').inputValue(), '345');
     await limits(120, 60, 300); await expected(360);
     await limits(30, 180, 120); await expected(150);
-    await limits(29.5, 180, 119.25); await expected(149);
-    await limits(180, 180, 3600); await expected(3600);
-    assert.match(await field('timeoutBudgetWarning').innerText(), /3780 秒.*上限 3600 秒/);
+    await limits(29.5, 180, 119.25); await expected(148);
+    await limits(180, 180, 3600); await expected(660);
+    await fill('headerTimeoutSeconds', 3600); await fill('streamIdleTimeoutSeconds', 3600); await expected(3600);
+    assert.match(await field('timeoutBudgetWarning').innerText(), /79200 秒.*上限 3600 秒/);
     await limits(180, 0, 600);
     await field('timeoutCalculation').filter({ hasText: '读取失败' }).waitFor();
     assert.equal(await field('timeoutApply').isDisabled(), true);
@@ -162,7 +197,7 @@ const output = path.resolve(__dirname, '../../artifacts/v0.3.5-timeout-compact/u
     assert.equal(await field('timeoutApply').isDisabled(), true);
     assert.equal(await field('timeoutRecommendation').innerText(), '—', 'Pending refresh must not advertise stale limits');
     await page.evaluate(() => { hostState.holdExecution = false; hostState.pendingExecution.shift()(); });
-    await expected(780);
+    await expected(660);
     assert.equal(await field('totalTimeoutSeconds').inputValue(), '420');
 
     // Narrow screens, expanded help, and both color modes keep all text and buttons reachable.

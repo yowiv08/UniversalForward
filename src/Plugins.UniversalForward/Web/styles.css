@@ -308,6 +308,7 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(2px); }
 .timeout-value output { font-size: 30px; font-weight: 650; line-height: 1.3; font-variant-numeric: tabular-nums; letter-spacing: -.6px; }
 #timeoutDuration { margin-left: 5px; color: var(--muted); font-size: 13px; }
 .timeout-advisor-body > p { margin-top: 8px; }
+.timeout-estimate-hint { color: var(--text); font-weight: 500; }
 .timeout-current { color: var(--muted); }
 .timeout-warning { padding: 10px 12px; background: var(--warning-soft); color: var(--warning); border-left: 3px solid var(--warning); border-radius: 5px; }
 .timeout-advisor details { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }

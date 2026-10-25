@@ -212,10 +212,11 @@
               <summary id="timeoutAdvisorTitle">建议总时限<span class="timeout-advisor-summary-hint" aria-hidden="true">点击查看</span></summary>
               <div class="timeout-advisor-body">
               <div class="timeout-advisor-heading">
-                <div class="timeout-value"><output id="timeoutRecommendation" for="maxRetries headerTimeoutSeconds responseMaxRetries responseRetryIntervalSeconds">—</output><span id="timeoutRecommendationUnit" hidden>秒</span><span id="timeoutDuration"></span></div>
+                <div class="timeout-value"><output id="timeoutRecommendation" for="maxRetries headerTimeoutSeconds streamIdleTimeoutSeconds responseMaxRetries responseRetryIntervalSeconds">—</output><span id="timeoutRecommendationUnit" hidden>秒</span><span id="timeoutDuration"></span></div>
                 <div class="actions"><button id="timeoutReload" type="button" class="secondary" hidden>重新读取</button><button id="timeoutApply" type="button" class="primary" disabled>填入建议</button></div>
               </div>
               <p id="timeoutCalculation">正在读取宿主执行限制…</p>
+              <p id="timeoutEstimateHint" class="timeout-estimate-hint">这是等待与重试的基础建议，不含持续输出时间。长回答请额外增加总时限。</p>
               <p id="timeoutCurrent" class="timeout-current" aria-live="polite">保留手动填写，填入建议后保存渠道生效。</p>
               <p id="timeoutBudgetWarning" class="timeout-warning" hidden></p>
               <details id="timeoutDetails">
@@ -224,7 +225,7 @@
                   <p id="timeoutSendDetail"></p><p id="timeoutWaitDetail"></p>
                   <p id="hostTimeoutHint">正在读取当前限制…</p>
                   <p id="hostAttemptsHint">正在读取宿主默认尝试次数…</p>
-                  <p>响应读取按宿主上限预留，不是预测模型生成时长。成功的 SSE／WebSocket 开始读取后，宿主才会切换到读取预算，后续重试也占用这份预算；普通 JSON 响应仍可能受建立响应预算限制。</p>
+                  <p>宿主预算只作为上限，不用于预留输出时间。成功的 SSE／WebSocket 开始读取后，宿主才会切换到读取预算，后续重试也占用这份预算；普通 JSON 响应仍可能受建立响应预算限制。</p>
                   <p id="timeoutIdleDetail"></p>
                   <p>错误响应的读取耗时、上游要求的更长等待（Retry-After）无法提前算准。实际还受映射剩余预算、取消和更早到期的时限约束，不保证用完所有次数或完成输出。连接测试另受宿主测试任务时限约束。</p>
                 </div>
