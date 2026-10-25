@@ -21,6 +21,7 @@ public sealed class PageAndDiscoveryTests
         StringAssert.Contains(html, "templateClaude");
         StringAssert.Contains(html, "mappingVisualPane");
         Assert.IsFalse(html.Contains("/*__STYLE__*/", StringComparison.Ordinal));
+        Assert.IsFalse(html.Contains("/*__APPEARANCE__*/", StringComparison.Ordinal));
         Assert.IsFalse(html.Contains("/*__SCRIPT__*/", StringComparison.Ordinal));
         Assert.IsFalse(html.Contains("/*__REASONING__*/", StringComparison.Ordinal));
         Assert.IsFalse(html.Contains("headerPass", StringComparison.Ordinal));

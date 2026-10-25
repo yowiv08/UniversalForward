@@ -59,6 +59,7 @@ public sealed class UpstreamWebSocketTests
             Assert.AreEqual("resp_ws", body["id"]!.ToString());
             Assert.AreEqual("你好😀", body["output"]![0]!["content"]![0]!["text"]!.ToString());
             Assert.AreEqual(5, body["usage"]!["total_tokens"]!.GetValue<int>());
+            Assert.AreEqual(new Usage(2, 3, 5), result.Response.Usage);
         }
         await server.Completion;
         Assert.IsTrue(handler.Disposed);

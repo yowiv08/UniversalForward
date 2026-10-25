@@ -30,7 +30,9 @@ const html = require('./page-source.cjs')();
       };
       window.Router2API = { request: async (method, route, body) => {
         window.calls.push({ method, route, body });
-        if (route === 'accounts') return { accounts: [account] };
+        if (route === 'appearance/settings') return { mode: 'light' };
+    if (route === 'execution/settings') return { defaultHostAttempts: 1, execution: window.catalog?.execution || { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
+    if (route === 'accounts') return { accounts: [account] };
         if (route === 'accounts/save') {
           if (window.conflict) throw Error('Key 配置已变化，请重新加载后编辑');
           account.responsesTransport = body.responsesTransport;

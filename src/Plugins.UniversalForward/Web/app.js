@@ -52,7 +52,7 @@
   for (const placeholder of document.querySelectorAll('[data-icon]')) placeholder.replaceChildren(icon(placeholder.dataset.icon));
   const feedback = (id, text = '', error = false) => {
     const n = $(id); n.textContent = text; n.hidden = !text;
-    n.className = 'feedback' + (error ? ' error' : '');
+    n.classList.add('feedback'); n.classList.toggle('error', error);
   };
   const message = (text, error = false) => feedback('message', text, error);
   const api = (method, path, body) => {
@@ -278,9 +278,6 @@
       const data = await api('GET', 'network/proxies');
       if (epoch !== editorEpoch || request !== proxyRequest || !dialog.open) return;
       proxyCatalog = { subscriptions: Array.isArray(data.subscriptions) ? data.subscriptions : [], nodes: Array.isArray(data.nodes) ? data.nodes : [] };
-      const execution = data.execution;
-      if (execution && ['setupTimeoutSeconds', 'totalSetupTimeoutSeconds', 'responseTimeoutSeconds'].every(k => Number.isFinite(execution[k]) && execution[k] > 0))
-        $('hostTimeoutHint').textContent = `宿主当前限制：单次建立响应 ${execution.setupTimeoutSeconds} 秒，建立响应总预算 ${execution.totalSetupTimeoutSeconds} 秒，进入响应后的读取预算 ${execution.responseTimeoutSeconds} 秒。渠道设置只能进一步缩短这些预算；填写 3600 秒不会覆盖宿主限制。`;
     } catch (error) {
       if (epoch !== editorEpoch || request !== proxyRequest || !dialog.open) return;
       proxyCatalogError = '无法读取代理目录：' + error.message + '。已有选择会保留，可重试刷新。';
@@ -486,7 +483,6 @@
     $('proxyScope').value = proxyIdDraft ? 'node' : proxySourcesDraft.length === 1 && sameId(proxySourcesDraft[0], 'manual')
       ? 'manual' : proxySourcesDraft.length ? 'subscriptions' : 'all';
     proxyCatalog = null; proxyCatalogError = ''; proxyLoading = false;
-    $('hostTimeoutHint').textContent = '渠道超时还受宿主的建立响应和响应读取预算限制。填写 3600 秒不代表每个阶段都能等待 3600 秒。';
     renderProxySettings();
     form.elements.responsesTransport.value = account?.responsesTransport || 'http';
     form.elements.stripResponsesResourceState.checked = account?.stripResponsesResourceState ?? false;
@@ -507,6 +503,7 @@
     for (const [name, fallback] of Object.entries(defaults)) form.elements[name].value = account?.requestPolicy?.[name] ?? fallback;
     for (const name of ['rateLimitRetryEnabled', 'emptyResponseRetryEnabled']) form.elements[name].checked = account?.requestPolicy?.[name] ?? false;
     updateResponseRetry();
+    renderExecutionHints();
     headerPolicyMode = account?.headerOverrideMode || 'shared'; headerScope = 'common'; headerMode = 'visual';
     commonHeaderDraft = structuredClone(account?.headerOverride || {});
     endpointHeaderDraft = Object.assign(Object.create(null), structuredClone(account?.endpointHeaderOverrides || {}));
@@ -524,6 +521,7 @@
     renderKeys(); showCandidates(); renderProtocols(); renderHeaders(); renderMappings(); updateModes(); summary();
     selectTab('basic'); if (!dialog.open) dialog.showModal();
     loadProxyCatalog();
+    loadExecutionSettings();
   }
   function closeEditor() { if (saving) return; closeEffortPicker(); editorEpoch++; dialog.close(); }
   $('close').onclick = closeEditor; $('cancel').onclick = closeEditor;
@@ -846,6 +844,11 @@
     }
     return result;
   }
+  function updateMappingHint() {
+    try {
+      $('mappingSuccessHint').hidden = !Object.entries(readMapping()).some(([from, to]) => Number(from) >= 400 && to >= 200 && to < 300);
+    } catch { $('mappingSuccessHint').hidden = true; }
+  }
   function statusInput(value, target, index) {
     const input = el('input'); input.type = 'text'; input.inputMode = 'numeric';
     input.setAttribute('aria-label', `映射 ${index + 1} ${target ? '目标' : '原始'}状态码`);
@@ -853,6 +856,7 @@
     input.value = String(value); return input;
   }
   function renderMappings() {
+    updateMappingHint();
     const root = $('mappingRows'); root.replaceChildren();
     if (!mappingRows.length) root.append(el('div', '保持上游状态码，或添加映射规则', 'empty'));
     mappingRows.forEach((row, index) => {
@@ -888,6 +892,8 @@
   $('headerAdd').onclick = () => { if (headerInherited()) return; headerRows.push({ name: '', value: '' }); renderHeaders(); $('headerRows').lastElementChild.querySelector('input').focus(); };
   $('mappingAdd').onclick = () => { mappingRows.push({ from: '', to: '' }); renderMappings(); };
   $('headerFormat').onclick = () => setMode('header', 'json'); $('mappingFormat').onclick = () => setMode('mapping', 'json');
+  $('mappingRows').addEventListener('input', updateMappingHint);
+  $('statusCodeMapping').addEventListener('input', updateMappingHint);
   async function setTemplate(name) {
     if (headerInherited()) return;
     const epoch = editorEpoch, scope = headerScope, mode = headerPolicyMode;
@@ -1141,6 +1147,7 @@
       feedback('testProgress', '已申请取消，正在等待任务退出'); await pollTests(testState.epoch);
     } catch (e) { testState.cancelling = false; feedback('testError', e.message, true); updateTestControls(); }
   };
+  /*__SETTINGS__*/
   /*__REASONING__*/
   /*__JOURNAL__*/
   for (const modal of document.querySelectorAll('dialog')) {

@@ -14,7 +14,9 @@ window.setLogs = count => window.logRows = Array.from({ length: count }, (_, ind
 window.setLogs(11);
 window.Router2API = { request: async (method, route, body) => {
   window.calls.push({ method, route, body });
-  if (route === 'accounts') return { accounts: [] };
+  if (route === 'appearance/settings') return { mode: 'light' };
+    if (route === 'execution/settings') return { defaultHostAttempts: 1, execution: window.catalog?.execution || { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
+    if (route === 'accounts') return { accounts: [] };
   if (route === 'logs/status') return { available: true, records: window.logRows.length };
   if (route.startsWith('logs?')) {
     if (window.holdList) await new Promise(resolve => window.releaseList = () => { window.holdList = false; resolve(); });

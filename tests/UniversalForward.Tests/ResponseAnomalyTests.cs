@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Moq;
 using Plugins.UniversalForward;
+using Router.Contracts.Domain;
 using Router.Contracts.Host;
 
 namespace UniversalForward.Tests;
@@ -428,6 +429,8 @@ public sealed class ResponseAnomalyTests
         var result = await terminal.InvokeAsync(ForwardResponseHandlingTests.Context(client.Object, "codex", sse, policy: policy));
         Assert.AreEqual(2, calls);
         Assert.AreEqual(502, result.Response.StatusCode);
+        Assert.AreEqual(PluginRetryAction.NextAttempt, result.Attempt.Decision!.Retry);
+        Assert.AreEqual("empty_response", result.Attempt.Decision.ReasonCode);
         StringAssert.Contains(Encoding.UTF8.GetString(result.Response.RawContent!), "empty_response");
     }
 

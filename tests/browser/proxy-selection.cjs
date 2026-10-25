@@ -16,7 +16,9 @@ window.accounts=[{id:'channel',label:'代理渠道',baseUrl:'https://upstream.ex
  keys:[{id:'key',name:'Key',enabled:true,masked:'••••test'}]}];
 window.Router2API={request:async(method,route,body)=>{
  window.calls.push({method,route,body});
- if(route==='accounts')return {accounts:window.accounts};
+ if (route === 'appearance/settings') return { mode: 'light' };
+    if (route === 'execution/settings') return { defaultHostAttempts: 1, execution: window.catalog?.execution || { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
+    if(route==='accounts')return {accounts:window.accounts};
  if(route==='network/proxies'){
    if(window.failCatalog)throw Error('代理目录暂不可用');
    const result=structuredClone(window.catalog);
@@ -54,6 +56,8 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.equal(await frame.locator('#proxyNode').inputValue(), 'node-one');
     assert.equal(await frame.locator('#proxySubscriptions input[value="sub-one"]').isChecked(), true);
     await frame.locator('#tab-policy').click();
+    await frame.locator('#timeoutAdvisorTitle').click();
+    await frame.locator('#timeoutDetails > summary').click();
     assert.match(await frame.locator('#hostTimeoutHint').innerText(), /建立响应总预算 180 秒.*读取预算 600 秒/);
     await frame.locator('#save').click();
     await frame.locator('#editor').waitFor({ state: 'hidden' });

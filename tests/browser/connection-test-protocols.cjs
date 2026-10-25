@@ -23,7 +23,9 @@ const html = require('./page-source.cjs')();
       let rows = [], job = 0;
       window.Router2API = { request: async (method, route, body) => {
         window.calls.push({ method, route, body });
-        if (route === 'accounts') return { accounts: [structuredClone(account)] };
+        if (route === 'appearance/settings') return { mode: 'light' };
+    if (route === 'execution/settings') return { defaultHostAttempts: 1, execution: window.catalog?.execution || { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
+    if (route === 'accounts') return { accounts: [structuredClone(account)] };
         if (route === 'accounts/save') {
           account.modelProtocols = structuredClone(body.modelProtocols);
           account.endpoints = body.endpoints;

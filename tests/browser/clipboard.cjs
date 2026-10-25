@@ -8,7 +8,9 @@ const account = {
   headerOverride: { 'X-Custom': '中文 😀' }
 };
 const response = 'HTTP: 200\nContent-Type: text/html\n<html>blocked</html>\n' + '测试 😀\n'.repeat(6000);
-const mock = `<script>window.Router2API={request:async(method,route)=>{if(route==='accounts')return{accounts:[${JSON.stringify(account)}]};throw Error(${JSON.stringify(response)})}}<\/script>`;
+const mock = `<script>window.Router2API={request:async(method,route)=>{if (route === 'appearance/settings') return { mode: 'light' };
+    if (route === 'execution/settings') return { defaultHostAttempts: 1, execution: window.catalog?.execution || { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
+    if(route==='accounts')return{accounts:[${JSON.stringify(account)}]};throw Error(${JSON.stringify(response)})}}<\/script>`;
 const pageHtml = `<!doctype html><iframe title="Plugin" style="width:100%;height:95vh" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe><script>document.querySelector('iframe').srcdoc=${JSON.stringify(source.replace('<head>', '<head>' + mock)).replaceAll('<', '\\u003c')}<\/script>`;
 
 (async () => {

@@ -99,6 +99,9 @@ public sealed class RequestJournalTests
         Assert.AreEqual("xhigh", row.GetProperty("sentReasoning").GetProperty("reasoning.effort").GetString());
         Assert.AreEqual("medium", row.GetProperty("reportedReasoning").GetProperty("reasoning.effort").GetString());
         Assert.AreEqual(1, row.GetProperty("retries").GetInt32());
+        Assert.AreEqual(2, row.GetProperty("internalSends").GetInt32());
+        Assert.IsFalse(row.GetProperty("hostContinuationAllowed").GetBoolean());
+        Assert.AreEqual("success", row.GetProperty("hostContinuationReason").GetString());
         StringAssert.Contains(await ReadBody(store, id, "attempt-2-request-headers"), "real-api-key");
         StringAssert.Contains(await ReadBody(store, id, "attempt-2-request"), "private prompt");
         StringAssert.Contains(await ReadBody(store, id, "attempt-2-response"), "private answer");

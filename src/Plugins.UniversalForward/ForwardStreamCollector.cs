@@ -13,6 +13,7 @@ internal sealed class ForwardStreamCollector(string endpoint)
     private readonly Dictionary<int, StringBuilder> _toolInputs = [];
     private readonly HashSet<int> _closedBlocks = [];
     private bool _messageDelta;
+    private bool _invalidUsage;
 
     internal static async Task<byte[]> CollectAsync(IAsyncEnumerable<ReadOnlyMemory<byte>> chunks, string endpoint,
         CancellationToken ct)
@@ -82,6 +83,7 @@ internal sealed class ForwardStreamCollector(string endpoint)
                     || message["content"] is not JsonArray)
                     throw new IOException("上游 message_start 内容无效");
                 _message = (JsonObject)message.DeepClone();
+                _invalidUsage = message.TryGetPropertyValue("usage", out var startUsage) && startUsage is not JsonObject;
                 break;
             case "content_block_start":
                 var index = Index(value);
@@ -124,10 +126,19 @@ internal sealed class ForwardStreamCollector(string endpoint)
                 if (_message is null || value["delta"] is not JsonObject messageDelta)
                     throw new IOException("上游 message_delta 内容无效");
                 foreach (var (name, node) in messageDelta) _message[name] = node?.DeepClone();
-                if (value["usage"] is JsonObject usage)
+                if (!_invalidUsage && value.TryGetPropertyValue("usage", out var reportedUsage))
                 {
-                    _message["usage"] ??= new JsonObject();
-                    foreach (var (name, node) in usage) _message["usage"]![name] = node?.DeepClone();
+                    // 用量格式错误不影响正文汇总；保留无效值，让宿主从原文解析或估算。
+                    if (reportedUsage is not JsonObject usage)
+                    {
+                        _message["usage"] = reportedUsage?.DeepClone();
+                        _invalidUsage = true;
+                    }
+                    else if (_message["usage"] is null or JsonObject)
+                    {
+                        _message["usage"] ??= new JsonObject();
+                        foreach (var (name, node) in usage) _message["usage"]![name] = node?.DeepClone();
+                    }
                 }
                 _messageDelta = true;
                 break;

@@ -30,7 +30,7 @@ internal sealed class RequestLogCapture
         {
             ["id"] = Id, ["started"] = started, ["kind"] = kind, ["channel"] = channel,
             ["channelLabel"] = label, ["model"] = model, ["requestedModel"] = model, ["endpoint"] = endpoint,
-            ["network"] = network, ["trace"] = trace, ["state"] = "running", ["retries"] = 0
+            ["network"] = network, ["trace"] = trace, ["state"] = "running", ["retries"] = 0, ["internalSends"] = 0
         };
         var json = _info.ToJsonString();
         _store.Enqueue(Id, c => c.Insert(Id, json));
@@ -181,6 +181,16 @@ internal sealed class RequestLogCapture
         {
             if (_attempts.Count == 0) return;
             _attempts[^1]["retryReason"] = reason; SaveAttempt(_attempts.Count);
+        }
+    }
+    public void HostDecision(int internalSends, bool continuationAllowed, string reason)
+    {
+        lock (_gate)
+        {
+            _info["internalSends"] = internalSends;
+            _info["hostContinuationAllowed"] = continuationAllowed;
+            _info["hostContinuationReason"] = reason;
+            Save();
         }
     }
     private void SaveAttempt(int number)

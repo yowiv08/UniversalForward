@@ -75,7 +75,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
 
         builder.ProxyPolicy(policy => policy
             .OnTransportFailure(() => new PluginAttemptDecision { Retry = PluginRetryAction.None, AccountAction = PluginAccountAction.None, ProxyAction = PluginProxyAction.None })
-            .MaxAttempts(1)
+            .MaxAttempts(Settings.Execution.Value.DefaultHostAttempts)
             .AttemptTimeoutSeconds(300)
             .TotalTimeoutSeconds(180));
     }
@@ -89,7 +89,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         Dispose();
         return ValueTask.CompletedTask;
     }
-    public void Dispose() { DisposeRequestLogs(); _keySelector.Clear(); _clientSessions.Dispose(); _snapshotRefreshGate.Dispose(); }
+    public void Dispose() { DisposeRequestLogs(); _keySelector.Clear(); _clientSessions.Dispose(); _snapshotRefreshGate.Dispose(); _settingsGate.Dispose(); }
 
     private readonly ChannelKeySelector _keySelector = new();
     private readonly ClientSessionResolver _clientSessions = new();

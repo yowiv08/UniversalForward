@@ -27,7 +27,9 @@ window.calls=[];window.logSettings={enabled:true,maxRecords:1000,capacityBytes:6
 window.logRow=${JSON.stringify(row)};window.logDetail=${JSON.stringify(detail)};
 window.Router2API={request:async(method,route,body)=>{
  window.calls.push({method,route,body});
- if(route==='accounts')return {accounts:[{id:'channel',label:'Log channel',baseUrl:'https://upstream.example',models:['model'],keys:[],enabled:true}]};
+ if (route === 'appearance/settings') return { mode: 'light' };
+    if (route === 'execution/settings') return { defaultHostAttempts: 1, execution: window.catalog?.execution || { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
+    if(route==='accounts')return {accounts:[{id:'channel',label:'Log channel',baseUrl:'https://upstream.example',models:['model'],keys:[],enabled:true}]};
  if(route==='logs/status')return {available:true,storage:'memory',settings:window.logSettings};
  if(route.startsWith('logs?'))return {rows:window.deleted?[]:[window.logRow],page:1,pageSize:25,total:window.deleted?0:1};
  if(route.startsWith('logs/detail?'))return window.logDetail;

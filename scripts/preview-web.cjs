@@ -25,6 +25,8 @@ function demoBridge() {
       keys: [{ id: 'key-backup', name: 'g7h8', secret: 'sk-demo-backup-g7h8', enabled: false }] }
   ];
   let settings = { enabled: true, maxRecords: 1000, capacityBytes: 67108864, bodyLimitBytes: 4194304 };
+  let appearance = { mode: 'host' }, execution = { defaultHostAttempts: 1,
+    execution: { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
   let logs = Array.from({ length: 15 }, (_, index) => {
     const account = accounts[index % 2];
     const model = account.models[index % account.models.length];
@@ -35,6 +37,8 @@ function demoBridge() {
       endpoint: account.endpoints[0], kind: 'forward', network: account.networkMode,
       state: failed ? 'failed' : 'completed', status: failed ? 429 : 200, durationMs: failed ? 5230 : 1210 + index * 172,
       firstByteMs: 240 + index * 31, retries: failed ? 2 : 0,
+      internalSends: failed ? 3 : 1, hostContinuationAllowed: failed,
+      hostContinuationReason: failed ? 'retryable_status' : 'success',
       sentReasoning: account.id === 'primary' ? { 'reasoning.effort': 'high' } : {},
       reportedReasoning: account.id === 'primary' ? { 'reasoning.effort': 'high', 'usage.output_tokens_details.reasoning_tokens': 128 + index * 32 } : {},
       ...(account.id === 'primary' ? { receivedReasoning: { 'reasoning.effort': 'low' }, reasoningMapping: { source: 'channel', protocol: 'responses', mode: 'map', reason: 'mapped', received: 'low', sent: 'high' } } : {}),
@@ -46,6 +50,14 @@ function demoBridge() {
     await new Promise(resolve => setTimeout(resolve, 90));
     const [endpoint, queryString] = route.split('?');
     const query = new URLSearchParams(queryString);
+    if (endpoint === 'appearance/settings') {
+      if (method === 'POST') appearance = structuredClone(body);
+      return structuredClone(appearance);
+    }
+    if (endpoint === 'execution/settings') {
+      if (method === 'POST') execution.defaultHostAttempts = body.defaultHostAttempts;
+      return structuredClone(execution);
+    }
     if (endpoint === 'accounts') return { accounts: structuredClone(accounts) };
     if (endpoint === 'accounts/save') {
       const previous = accounts.find(account => account.id === body.id), id = body.id || 'demo-' + Date.now();

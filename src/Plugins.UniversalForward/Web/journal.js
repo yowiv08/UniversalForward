@@ -172,6 +172,16 @@
       ['耗时', `${detail.durationMs ?? '—'} ms · 首字 ${detail.firstByteMs ?? '—'} ms`]]);
     group('请求信息', [['接口', detail.endpoint], ['请求类型', journalKinds[detail.kind] || detail.kind],
       ['状态码', detail.status], ['重试次数', detail.retries || 0]]);
+    const hostReasons = { success: '响应成功', input_error: '请求参数错误', permanent_error: '上游永久错误',
+      total_timeout: '总时限已耗尽', request_cancelled: '请求已取消', stream_transferred: '流已交付，禁止重放',
+      output_observed: '已有有效输出，禁止重放', connection_test: '连接测试仅使用选定渠道',
+      retryable_status: '可重试的上游状态', header_timeout: '等待响应头超时', transport_error: '连接失败',
+      rate_limit: '限流重试已结束', empty_response: '空响应重试已结束', stream_interrupted: '输出前流中断',
+      retry_not_configured: '未满足继续尝试条件', invalid_upstream_response: '上游响应无效',
+      unclassified_response: '无法确认响应可重放', plugin_error: '插件执行失败' };
+    if (detail.internalSends != null) group('宿主尝试衔接', [['本次内部发送', `${detail.internalSends} 次`],
+      ['允许宿主继续', detail.hostContinuationAllowed == null ? '尚未决定' : detail.hostContinuationAllowed ? '是，由宿主决定下一步' : '否'],
+      ['原因', hostReasons[detail.hostContinuationReason] || detail.hostContinuationReason]]);
     group('模型信息', [['本地请求模型', journalRequestedModel(detail)],
       ['实际发送模型', journalModel(detail.sentModel)], ['上游响应模型', journalModel(detail.reportedModel, '未返回')]]);
     if (detail.proxy) group('实际代理', [['节点地址', detail.proxy.address], ['代理 ID', detail.proxy.id], ['来源 ID', detail.proxy.subscriptionId]]);

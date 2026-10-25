@@ -57,6 +57,7 @@ public sealed class ForwardResponseHandlingTests
             Assert.AreEqual(profile == "codex" ? "resp" : "msg", body["id"]!.ToString());
             Assert.AreEqual(3, body["usage"]!["input_tokens"]!.GetValue<int>());
             Assert.AreEqual(2, body["usage"]!["output_tokens"]!.GetValue<int>());
+            Assert.AreEqual(new Usage(3, 2, 5), result.Response.Usage);
         }
         Assert.IsTrue(content.Disposed);
         Assert.AreEqual(1, client.Invocations.Count);
@@ -187,6 +188,40 @@ public sealed class ForwardResponseHandlingTests
         Assert.AreEqual(504, result.Response.StatusCode);
         Assert.IsTrue(stream.Disposed);
         Assert.AreEqual(1, client.Invocations.Count);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ClaudeAggregatedUsageIncludesBothCaches(bool explicitTotal)
+    {
+        var frames = Messages.Replace("\"input_tokens\":3", "\"input_tokens\":3,\"cache_read_input_tokens\":5,\"cache_creation_input_tokens\":7", StringComparison.Ordinal);
+        if (explicitTotal) frames = frames.Replace("\"output_tokens\":2", "\"output_tokens\":2,\"total_tokens\":20", StringComparison.Ordinal);
+        var client = Client(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(frames, Encoding.UTF8, "text/event-stream") }));
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(Context(client.Object, "claude", false));
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual(new Usage(15, 2, explicitTotal ? 20 : 17), result.Response.Usage);
+        Assert.AreEqual(3, JsonNode.Parse(result.Response.RawContent!)!["usage"]!["input_tokens"]!.GetValue<int>());
+    }
+
+    [TestMethod]
+    [DataRow("\"invalid\"", "{\"output_tokens\":2}")]
+    [DataRow("{\"input_tokens\":3}", "[]")]
+    [DataRow("{}", "{\"output_tokens\":2}")]
+    [DataRow("{\"input_tokens\":3}", "{\"output_tokens\":null}")]
+    public async Task InvalidOrPartialClaudeStreamUsageDoesNotBreakForwarding(string startUsage, string endUsage)
+    {
+        var frames = Messages.Replace("{\"input_tokens\":3}", startUsage, StringComparison.Ordinal)
+            .Replace("{\"output_tokens\":2}", endUsage, StringComparison.Ordinal);
+        var client = Client(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(frames, Encoding.UTF8, "text/event-stream") }));
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(Context(client.Object, "claude", false));
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual("OK", JsonNode.Parse(result.Response.RawContent!)!["content"]![0]!["text"]!.ToString());
+        Assert.IsNull(result.Response.Usage);
     }
 
     private sealed class WaitingStream : Stream

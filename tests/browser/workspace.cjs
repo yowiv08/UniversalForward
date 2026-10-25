@@ -15,6 +15,8 @@ function workspaceMock() {
   { id: 'disabled', label: '备用渠道', baseUrl: 'https://backup.example/v1', enabled: false, models: ['model-b'], keys: [] }];
   window.Router2API = { request: async (method, route, body) => {
     window.calls.push({ method, route, body });
+    if (route === 'appearance/settings') return { mode: 'light' };
+    if (route === 'execution/settings') return { defaultHostAttempts: 1, execution: window.catalog?.execution || { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
     if (route === 'accounts') {
       if (window.failAccounts) throw Error('读取失败，请重试');
       return { accounts: structuredClone(window.accounts) };

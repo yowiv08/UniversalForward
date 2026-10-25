@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
+  <script>/*__APPEARANCE__*/</script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>UniversalForward</title>
@@ -21,12 +22,13 @@
     <div class="sidebar-bottom"><span class="sidebar-plugin-icon" data-icon="code"></span><div><strong>Router2API</strong><span>UniversalForward 插件</span></div></div>
   </aside>
   <div class="app-main">
-    <header class="workspace-header"><div class="workspace-breadcrumb"><button id="navToggle" class="icon-button" type="button" aria-label="切换导航" aria-controls="appSidebar" aria-expanded="true"><span data-icon="panel"></span></button><span class="header-divider" aria-hidden="true"></span><span class="breadcrumb-root">工作区</span><span class="breadcrumb-chevron" data-icon="chevron-right" aria-hidden="true"></span><span id="workspaceTitle">渠道管理</span></div><span class="app-caption">Router2API 插件</span></header>
+    <header class="workspace-header"><div class="workspace-breadcrumb"><button id="navToggle" class="icon-button" type="button" aria-label="切换导航" aria-controls="appSidebar" aria-expanded="true"><span data-icon="panel"></span></button><span class="header-divider" aria-hidden="true"></span><span class="breadcrumb-root">工作区</span><span class="breadcrumb-chevron" data-icon="chevron-right" aria-hidden="true"></span><span id="workspaceTitle">渠道管理</span></div><div class="appearance-switch segmented" role="group" aria-label="插件外观"><button type="button" data-appearance-mode="host" aria-pressed="true">跟随宿主</button><button type="button" data-appearance-mode="light" aria-pressed="false"><span aria-hidden="true">☀</span>白天</button><button type="button" data-appearance-mode="dark" aria-pressed="false"><span aria-hidden="true">☾</span>黑夜</button></div></header>
+    <div id="appearanceStatus" class="feedback appearance-status" role="status" hidden></div>
     <main class="workspace">
     <section id="channelsWorkspace" class="page-workspace" aria-labelledby="channelsHeading">
     <header class="page-heading">
       <div><h1 id="channelsHeading">渠道管理</h1><p class="page-description">管理上游连接、访问密钥与模型路由。</p></div>
-      <div class="actions"><button id="reload" class="secondary"><span data-icon="refresh"></span>刷新</button><button id="add" class="primary"><span data-icon="plus"></span>添加渠道</button></div>
+      <div class="actions"><button id="openPluginSettings" class="secondary"><span data-icon="settings"></span>插件设置</button><button id="reload" class="secondary"><span data-icon="refresh"></span>刷新</button><button id="add" class="primary"><span data-icon="plus"></span>添加渠道</button></div>
     </header>
     <section class="metrics" aria-label="渠道概览">
       <div><div class="metric-label"><span>全部渠道</span><span data-icon="channels"></span></div><strong id="metricChannels">—</strong><div class="metric-description">已添加的上游连接</div></div>
@@ -74,6 +76,18 @@
   </section>
     </main>
   </div>
+  <dialog id="pluginSettingsDialog" class="plugin-settings-dialog" aria-labelledby="pluginSettingsTitle">
+    <header class="dialog-heading"><div class="dialog-title-group"><span class="dialog-icon" data-icon="settings"></span><div><h2 id="pluginSettingsTitle">插件设置</h2><p class="dialog-description">同一宿主共用，刷新和重启后保留</p></div></div><button id="pluginSettingsClose" type="button" class="icon-button" aria-label="关闭插件设置"><span data-icon="x"></span></button></header>
+    <form id="executionForm" class="plugin-settings-content" novalidate>
+      <div class="field"><label for="defaultHostAttempts">宿主默认尝试次数（含首次）</label><input id="defaultHostAttempts" name="defaultHostAttempts" type="number" min="1" max="35" step="1" value="1" required><small>1–35 次。宿主模型映射留空时继承此值；映射填写具体次数时优先使用映射值。</small></div>
+      <p class="field-hint">每次宿主尝试会运行渠道自己的内部重试。内部重试使用同一渠道、Key 和代理；结束后由宿主决定是否继续尝试或切换目标。</p>
+      <div class="settings-example"><strong>次数示例</strong><p>宿主尝试 3 次 × 渠道每次普通发送 3 次（首次 + 重试 2 次）＝ 最多普通发送 9 次。限流与空回还有各自配置的共享异常重试额度，所有等待和发送仍受时限限制。</p></div>
+      <div class="settings-appearance"><h3>外观</h3><p class="field-hint">默认跟随宿主明暗，使用插件自己的配色；也可固定为白天或黑夜。选择会保存，同一宿主的管理员共用。</p><div class="appearance-switch segmented" role="group" aria-label="插件设置外观"><button type="button" data-appearance-mode="host" aria-pressed="true">跟随宿主</button><button type="button" data-appearance-mode="light" aria-pressed="false">白天</button><button type="button" data-appearance-mode="dark" aria-pressed="false">黑夜</button></div></div>
+      <p id="appearanceSource" class="field-hint" role="status"></p><div id="appearanceDialogStatus" class="feedback" role="status" hidden></div>
+      <div id="executionStatus" class="feedback" role="status" hidden></div>
+      <div class="actions plugin-settings-actions"><button id="executionReload" type="button" class="secondary">重新读取</button><button id="executionSave" type="submit" class="primary">保存尝试次数</button></div>
+    </form>
+  </dialog>
       <dialog id="journalDetail" class="request-detail-dialog" aria-labelledby="requestDetailTitle">
         <header class="request-detail-heading"><h3 id="requestDetailTitle">日志详情</h3><button id="journalDetailClose" class="icon-button" aria-label="关闭详情"><span data-icon="x"></span></button></header>
         <div id="journalOverview"></div>
@@ -188,9 +202,35 @@
           </section>
           <section id="panel-policy" role="tabpanel" aria-labelledby="tab-policy" hidden>
             <div class="section-heading"><h3>重试与映射</h3><p>设置请求时限、重试条件和返回状态</p></div>
-            <div class="field-row"><div class="field"><label for="maxRetries">重试次数</label><input id="maxRetries" name="maxRetries" type="number" min="0" max="10" value="0" required><small>0–10次</small></div><div class="field"><label for="headerTimeoutSeconds">响应头超时</label><div class="input-unit"><input id="headerTimeoutSeconds" name="headerTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div></div><div class="field"><label for="totalTimeoutSeconds">总时限</label><div class="input-unit"><input id="totalTimeoutSeconds" name="totalTimeoutSeconds" type="number" min="1" max="3600" value="180" required><span>秒</span></div></div><div class="field"><label for="streamIdleTimeoutSeconds">流空闲超时</label><div class="input-unit"><input id="streamIdleTimeoutSeconds" name="streamIdleTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div></div></div>
-            <p class="field-hint">总时限包含等待、重试和完整流式输出，到期会中断已开始的流；流空闲超时只限制连续无数据的时间。</p>
-            <p id="hostTimeoutHint" class="field-hint muted">渠道超时还受宿主的建立响应和响应读取预算限制。填写 3600 秒不代表每个阶段都能等待 3600 秒。</p>
+            <div class="field-row">
+              <div class="field"><label for="maxRetries">渠道内部重试次数</label><input id="maxRetries" name="maxRetries" type="number" min="0" max="10" value="0" required><small id="internalRetryHint">不含首次；一次宿主尝试最多普通发送 1 次。</small></div>
+              <div class="field"><label for="headerTimeoutSeconds">响应头超时</label><div class="input-unit"><input id="headerTimeoutSeconds" name="headerTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div><small>每次发送后等待上游开始响应的时间。</small></div>
+              <div class="field"><label for="totalTimeoutSeconds">总时限</label><div class="input-unit"><input id="totalTimeoutSeconds" name="totalTimeoutSeconds" type="number" min="1" max="3600" value="180" required aria-describedby="totalTimeoutHint timeoutCurrent"><span>秒</span></div><small id="totalTimeoutHint">含全部发送、等待与输出，到期会中断已开始的流。</small></div>
+              <div class="field"><label for="streamIdleTimeoutSeconds">流空闲超时</label><div class="input-unit"><input id="streamIdleTimeoutSeconds" name="streamIdleTimeoutSeconds" type="number" min="1" max="3600" value="60" required><span>秒</span></div><small>读取响应时连续收不到新数据的最长时间。</small></div>
+            </div>
+            <details id="timeoutAdvisor" class="timeout-advisor">
+              <summary id="timeoutAdvisorTitle">建议总时限<span class="timeout-advisor-summary-hint" aria-hidden="true">点击查看</span></summary>
+              <div class="timeout-advisor-body">
+              <div class="timeout-advisor-heading">
+                <div class="timeout-value"><output id="timeoutRecommendation" for="maxRetries headerTimeoutSeconds responseMaxRetries responseRetryIntervalSeconds">—</output><span id="timeoutRecommendationUnit" hidden>秒</span><span id="timeoutDuration"></span></div>
+                <div class="actions"><button id="timeoutReload" type="button" class="secondary" hidden>重新读取</button><button id="timeoutApply" type="button" class="primary" disabled>填入建议</button></div>
+              </div>
+              <p id="timeoutCalculation">正在读取宿主执行限制…</p>
+              <p id="timeoutCurrent" class="timeout-current" aria-live="polite">保留手动填写，填入建议后保存渠道生效。</p>
+              <p id="timeoutBudgetWarning" class="timeout-warning" hidden></p>
+              <details id="timeoutDetails">
+                <summary>计算依据与宿主限制</summary>
+                <div class="timeout-details-body">
+                  <p id="timeoutSendDetail"></p><p id="timeoutWaitDetail"></p>
+                  <p id="hostTimeoutHint">正在读取当前限制…</p>
+                  <p id="hostAttemptsHint">正在读取宿主默认尝试次数…</p>
+                  <p>响应读取按宿主上限预留，不是预测模型生成时长。成功的 SSE／WebSocket 开始读取后，宿主才会切换到读取预算，后续重试也占用这份预算；普通 JSON 响应仍可能受建立响应预算限制。</p>
+                  <p id="timeoutIdleDetail"></p>
+                  <p>错误响应的读取耗时、上游要求的更长等待（Retry-After）无法提前算准。实际还受映射剩余预算、取消和更早到期的时限约束，不保证用完所有次数或完成输出。连接测试另受宿主测试任务时限约束。</p>
+                </div>
+              </details>
+              </div>
+            </details>
             <div class="field"><label for="retryStatusCodes">自动重试状态码</label><input id="retryStatusCodes" name="retryStatusCodes" placeholder="例如 429,500-503"><small>用逗号分隔状态码或区间</small></div>
             <section class="response-retry-card" aria-labelledby="responseRetryTitle">
               <div class="section-heading"><h4 id="responseRetryTitle">响应异常重试</h4><p>首次有效输出前重试，开始输出后实时透传</p></div>
@@ -209,6 +249,7 @@
             <div id="mappingVisualPane"><div class="editor-column-heading mapping-column-heading" aria-hidden="true"><span>原始状态码</span><span></span><span>返回状态码</span><span></span></div><div id="mappingRows"></div><button type="button" id="mappingAdd" class="add-row">＋ 添加映射</button></div>
             <div id="mappingJsonPane" hidden><label class="sr-only" for="statusCodeMapping">状态码映射 JSON</label><textarea id="statusCodeMapping" name="statusCodeMapping" class="code-editor" rows="7" spellcheck="false">{}</textarea><button id="mappingFormat" type="button" class="text-button">格式化</button></div>
             <div id="mappingStatus" class="feedback" role="status" hidden></div>
+            <p id="mappingSuccessHint" class="mapping-success-hint" hidden>当前规则将失败状态映射为 2xx，宿主会按成功响应处理，可能不会触发继续尝试、映射切换或失败冷却。该映射仍按你的设置生效。</p>
           </section>
         </div>
       </div>
@@ -216,7 +257,7 @@
     </form>
   </dialog>
   <dialog id="testDialog" class="test-dialog" aria-labelledby="testTitle">
-    <header class="dialog-heading"><div class="dialog-title-group"><span class="dialog-icon" data-icon="test"></span><div><h2 id="testTitle">测试渠道连接</h2><p class="dialog-description">使用已保存配置验证连接，查看各模型的响应结果。</p></div></div><button id="testClose" type="button" class="icon-button" aria-label="关闭测试"><span data-icon="x"></span></button></header>
+    <header class="dialog-heading"><div class="dialog-title-group"><span class="dialog-icon" data-icon="test"></span><div><h2 id="testTitle">测试渠道连接</h2><p class="dialog-description">使用已保存配置测试选定渠道；不验证宿主模型映射的重试或切换。</p></div></div><button id="testClose" type="button" class="icon-button" aria-label="关闭测试"><span data-icon="x"></span></button></header>
     <div class="test-content">
       <details id="testConfiguration" class="test-configuration" open><summary>测试配置<span id="testConfigSummary">自动选择 · 非流式 · 32 Token</span></summary><div class="test-configuration-body">
       <div class="test-setup"><div><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div><label for="testMaxTokens">输出上限 · Token</label><input id="testMaxTokens" type="number" min="1" max="32768" value="32"></div><div><label for="testStream">流式模式</label><label class="stream-control"><input id="testStream" type="checkbox" role="switch"><span id="testStreamLabel">已禁用</span></label></div></div>

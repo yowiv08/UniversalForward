@@ -77,12 +77,7 @@ public sealed partial class UniversalForwardTerminal
             {
                 subscriptions = catalog.Subscriptions,
                 nodes = catalog.Nodes,
-                execution = new
-                {
-                    setupTimeoutSeconds = Math.Min(300, _host.Execution.SetupTimeout.TotalSeconds),
-                    totalSetupTimeoutSeconds = Math.Min(180, _host.Execution.TotalSetupTimeout.TotalSeconds),
-                    responseTimeoutSeconds = _host.Execution.ResponseTimeout.TotalSeconds
-                }
+                execution = ExecutionLimits()
             });
         }
         catch (NotSupportedException)

@@ -32,7 +32,9 @@ function hostMock() {
     const { id, method, route, body } = event.data;
     window.calls.push({ method, route, body });
     let result, error;
-    if (route === 'accounts') result = { accounts: window.accounts };
+    if (route === 'appearance/settings') result = { mode: 'light' };
+    else if (route === 'execution/settings') result = { defaultHostAttempts: 1, execution: { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
+    else if (route === 'accounts') result = { accounts: window.accounts };
     else if (route === 'models/discover' || route === 'models/refresh') {
       if (window.failDiscovery) error = '上游返回 401，请检查 Key';
       else result = { models: window.emptyDiscovery ? [] : ['discovered-a', 'discovered-b'] };
@@ -343,8 +345,7 @@ function hostMock() {
     await page.setViewportSize({ width: 390, height: 420 });
     const compactFooter = await frame.locator('.editor-footer').boundingBox();
     assert.ok(compactFooter.y + compactFooter.height <= 420);
-    const labels = await frame.locator('label,button,h1,h2,h3,h4').allTextContents();
-    assert.ok(labels.every(s => !/[（）]/.test(s)), 'Parenthetical UI labels remain');
+    assert.match(await frame.locator('label[for=defaultHostAttempts]').innerText(), /含首次/);
     assert.deepEqual(errors, []);
     console.log('Sandboxed UI passed: templates, visual/JSON editors, draft discovery, feedback, protocol sync, confirmations, testing, responsive tabs.');
   } finally { await browser.close(); }

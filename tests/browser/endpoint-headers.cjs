@@ -27,7 +27,9 @@ const output = path.resolve(__dirname, '../../artifacts');
       });
       window.Router2API = { request: async (method, route, body) => {
         window.calls.push({ method, route, body: structuredClone(body) });
-        if (route === 'accounts') return { accounts: [window.account] };
+        if (route === 'appearance/settings') return { mode: 'light' };
+    if (route === 'execution/settings') return { defaultHostAttempts: 1, execution: window.catalog?.execution || { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
+    if (route === 'accounts') return { accounts: [window.account] };
         if (route === 'accounts/save') {
           window.account = { ...window.account, ...structuredClone(body) };
           return { account: window.account };

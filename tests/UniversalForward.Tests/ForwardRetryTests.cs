@@ -33,7 +33,9 @@ public sealed class ForwardRetryTests
         Assert.AreEqual(1, bodies.Distinct().Count());
         Assert.AreEqual("vendor/model", JsonDocument.Parse(bodies[0]).RootElement.GetProperty("model").GetString());
         Assert.AreEqual(429, result.Response.StatusCode);
-        Assert.AreEqual(PluginAttemptOutcome.NoPenalty, result.Attempt.Outcome);
+        Assert.AreEqual(PluginRetryAction.NextAttempt, result.Attempt.Decision!.Retry);
+        Assert.AreEqual(PluginAccountAction.None, result.Attempt.Decision.AccountAction);
+        Assert.AreEqual(PluginProxyAction.None, result.Attempt.Decision.ProxyAction);
     }
 
     [TestMethod]
@@ -47,6 +49,8 @@ public sealed class ForwardRetryTests
         }));
         Assert.AreEqual(500, result.Response.StatusCode);
         Assert.AreEqual(400, result.Attempt.StatusCode);
+        Assert.AreEqual(PluginRetryAction.None, result.Attempt.Decision!.Retry);
+        Assert.AreEqual("input_error", result.Attempt.Decision.ReasonCode);
         Assert.AreEqual(1, client.Invocations.Count);
         Assert.AreEqual("body", Encoding.UTF8.GetString(result.Response.RawContent!));
     }
@@ -62,7 +66,9 @@ public sealed class ForwardRetryTests
         var result = await terminal.InvokeAsync(Context(client.Object, new() { MaxRetries = 2 }));
         Assert.AreEqual(3, client.Invocations.Count);
         Assert.AreEqual(502, result.Response.StatusCode);
-        Assert.AreEqual(PluginAttemptOutcome.NoPenalty, result.Attempt.Outcome);
+        Assert.AreEqual(PluginRetryAction.NextAttempt, result.Attempt.Decision!.Retry);
+        Assert.AreEqual(PluginAccountAction.None, result.Attempt.Decision.AccountAction);
+        Assert.AreEqual(PluginProxyAction.None, result.Attempt.Decision.ProxyAction);
     }
 
     [TestMethod]
@@ -128,6 +134,8 @@ public sealed class ForwardRetryTests
             HeaderTimeoutSeconds = 1, TotalTimeoutSeconds = 3, MaxRetries = 10
         }));
         Assert.AreEqual(504, result.Response.StatusCode);
+        Assert.AreEqual(PluginRetryAction.None, result.Attempt.Decision!.Retry);
+        Assert.AreEqual("total_timeout", result.Attempt.Decision.ReasonCode);
         Assert.IsTrue(client.Invocations.Count >= 2 && client.Invocations.Count <= 3);
         using var errorBody = JsonDocument.Parse(result.Response.RawContent!);
         StringAssert.Contains(errorBody.RootElement.GetProperty("error").GetString()!, "总时限");
@@ -154,6 +162,41 @@ public sealed class ForwardRetryTests
         });
         StringAssert.Contains(error.Message, "stream_idle_timeout");
         Assert.IsTrue(stream.Disposed);
+        Assert.AreEqual(1, client.Invocations.Count);
+    }
+
+    [TestMethod]
+    [DataRow(true, true)]
+    [DataRow(false, true)]
+    [DataRow(true, false)]
+    [DataRow(false, false)]
+    public async Task FinalErrorEvidencePreventsHostReplay(bool inspect, bool permanent)
+    {
+        var body = permanent ? """{"error":{"type":"insufficient_quota","message":"quota exhausted"}}"""
+            : """{"output":[{"type":"message","content":[{"type":"output_text","text":"partial answer"}]}]}""";
+        var client = new Mock<IPluginHttpClient>();
+        client.Setup(x => x.SendAsync(It.IsAny<HttpRequestMessage>(), false,
+                HttpCompletionOption.ResponseHeadersRead, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(Context(client.Object, new()
+        { MaxRetries = inspect ? 2 : 0, EmptyResponseRetryEnabled = inspect }));
+        Assert.AreEqual(503, result.Response.StatusCode);
+        Assert.AreEqual(body, Encoding.UTF8.GetString(result.Response.RawContent!));
+        Assert.AreEqual(PluginRetryAction.None, result.Attempt.Decision!.Retry);
+        Assert.AreEqual(permanent ? "permanent_error" : "output_observed", result.Attempt.Decision.ReasonCode);
+        Assert.AreEqual(1, client.Invocations.Count);
+    }
+
+    [TestMethod]
+    public async Task UnconfiguredStatusDoesNotRequestHostReplay()
+    {
+        var client = Client(HttpStatusCode.ServiceUnavailable);
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        var result = await terminal.InvokeAsync(Context(client.Object, new() { RetryStatusCodes = "429", MaxRetries = 2 }));
+        Assert.AreEqual(PluginRetryAction.None, result.Attempt.Decision!.Retry);
+        Assert.AreEqual("retry_not_configured", result.Attempt.Decision.ReasonCode);
         Assert.AreEqual(1, client.Invocations.Count);
     }
 
