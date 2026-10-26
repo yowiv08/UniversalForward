@@ -35,6 +35,7 @@
     more: ['M5 12h.01M12 12h.01M19 12h.01'],
     test: ['M6 3h12M9 3v7l-5 9a1 1 0 0 0 1 2h14a1 1 0 0 0 1-2l-5-9V3', 'M7 15h10'],
     edit: ['m16 3 5 5-12 12-5 1 1-5 11-13Z', 'm14 5 5 5'],
+    copy: ['M9 9h12v12H9z', 'M5 15H3V3h12v2'],
     trash: ['M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7'],
     power: ['M12 3v9', 'M7 5a9 9 0 1 0 10 0'],
     filter: ['M4 5h16l-6 7v6l-4 2v-8L4 5Z']
@@ -433,14 +434,15 @@
       trigger.setAttribute('aria-label', `更多操作「${a.label}」`); trigger.setAttribute('aria-haspopup', 'menu'); trigger.setAttribute('aria-expanded', 'false');
       const menu = el('div', undefined, 'channel-menu'); menu.hidden = true; menu.setAttribute('role', 'menu'); menu.setAttribute('aria-label', `渠道「${a.label}」操作`);
       const log = button('日志', () => { closeChannelMenu(); openJournal(a.id); }, 'menu-item'); log.prepend(icon('journal'));
+      const copy = button('复制', () => { closeChannelMenu(true); open(a, { duplicate: true }); }, 'menu-item'); copy.prepend(icon('copy'));
       const remove = button('删除', async () => {
           closeChannelMenu();
           if (!await ask(`删除渠道「${a.label}」及其配置？`, '删除渠道')) return;
           try { await api('POST', 'accounts/delete', { id: a.id }); await load(); message('渠道已删除'); }
           catch (e) { message(e.message, true); }
         }, 'menu-item danger'); remove.prepend(icon('trash'));
-      for (const item of [log, remove]) item.setAttribute('role', 'menuitem');
-      menu.append(log, el('div', undefined, 'menu-separator'), remove);
+      for (const item of [log, copy, remove]) item.setAttribute('role', 'menuitem');
+      menu.append(log, copy, el('div', undefined, 'menu-separator'), remove);
       actions.append(edit, test, toggle, trigger, menu);
       if (switchingChannels.has(a.id)) for (const control of [...actions.querySelectorAll('button'), modelCount]) control.disabled = true;
       const statusLine = el('div', undefined, 'channel-status-line'); statusLine.append(el('span', a.enabled ? '已启用' : '已禁用', 'badge' + (a.enabled ? '' : ' off')), endpoints);
@@ -468,14 +470,32 @@
     }
     finally { loading = false; $('reload').disabled = false; $('cards').setAttribute('aria-busy', 'false'); }
   }
-  function open(account) {
-    editorEpoch++; savedAccount = account; form.reset(); saving = false;
+  function duplicateChannelName(label) {
+    const base = label?.trim() || '渠道', limit = form.elements.label.maxLength;
+    const existing = new Set(accounts.map(account => (account.label || '').trim().toLowerCase()));
+    for (let index = 1; ; index++) {
+      const suffix = ' - 副本' + (index === 1 ? '' : ` ${index}`);
+      const prefix = base.slice(0, limit - suffix.length).replace(/[\uD800-\uDBFF]$/, '').trimEnd();
+      const name = prefix + suffix;
+      if (!existing.has(name.toLowerCase())) return name;
+    }
+  }
+  function open(account, { duplicate = false } = {}) {
+    const sourceLabel = account?.label || '';
+    if (duplicate) {
+      account = structuredClone(account);
+      account.id = ''; account.label = duplicateChannelName(sourceLabel); account.enabled = false; account.keyRevision = 0;
+      for (const key of account.keys || []) key.id = '';
+      for (const name of ['state', 'availableModels', 'modelsUpdatedAt']) delete account[name];
+    }
+    editorEpoch++; savedAccount = duplicate ? null : account; form.reset(); saving = false;
     for (const details of form.querySelectorAll('details')) details.open = false;
     $('discover').disabled = false;
     $('discoveryDetails').hidden = true;
     $('discoveryResponse').textContent = '';
     for (const id of ['formError', 'discoveryStatus', 'protocolStatus', 'headerStatus', 'mappingStatus']) feedback(id);
-    $('formTitle').textContent = account ? '编辑渠道 · ' + account.label : '添加渠道';
+    $('formTitle').textContent = duplicate ? '复制渠道 · ' + sourceLabel : account ? '编辑渠道 · ' + account.label : '添加渠道';
+    $('formDescription').textContent = duplicate ? '副本默认禁用，保存后创建新渠道' : '配置渠道连接与转发规则';
     for (const name of ['id', 'label', 'baseUrl']) form.elements[name].value = account?.[name] || '';
     form.elements.networkMode.value = account?.networkMode || 'direct';
     proxySourcesDraft = uniqueIds(account?.proxySubscriptionIds);
@@ -517,7 +537,7 @@
       input.onchange = renderProtocols;
       text.append(el('code', path)); label.append(input, text); root.append(label);
     });
-    $('refreshModels').disabled = !account;
+    $('refreshModels').disabled = !savedAccount;
     renderKeys(); showCandidates(); renderProtocols(); renderHeaders(); renderMappings(); updateModes(); summary();
     selectTab('basic'); if (!dialog.open) dialog.showModal();
     loadProxyCatalog();

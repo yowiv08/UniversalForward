@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <RootNamespace>Plugins.UniversalForward</RootNamespace>
-    <Version>0.3.6</Version>
+    <Version>0.3.7</Version>
     <AssemblyName>Plugins.UniversalForward</AssemblyName>
     <Description>上游渠道管理、多 Key 分配、指定代理节点与订阅、模型与协议配置、JSON/SSE 和 WebSocket 转发、Responses 资源状态剥离、思考映射及连接测试。</Description>
   </PropertyGroup>

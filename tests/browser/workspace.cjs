@@ -60,6 +60,8 @@ function workspaceMock() {
     await trigger.click(); assert.equal(await trigger.getAttribute('aria-expanded'), 'true');
     assert.equal(await frame.getByRole('menuitem', { name: '日志', exact: true }).evaluate(element => element === document.activeElement), true);
     await page.keyboard.press('ArrowDown');
+    assert.equal(await scriptFrame.evaluate(() => document.activeElement.textContent), '复制');
+    await page.keyboard.press('ArrowDown');
     assert.equal(await scriptFrame.evaluate(() => document.activeElement.textContent), '删除');
     await page.keyboard.press('End'); assert.equal(await scriptFrame.evaluate(() => document.activeElement.textContent), '删除');
     await page.keyboard.press('Escape');
