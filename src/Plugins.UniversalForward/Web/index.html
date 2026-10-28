@@ -108,6 +108,7 @@
           <button type="button" id="tab-keys" role="tab" data-tab="keys" aria-controls="panel-keys" aria-selected="false"><span data-icon="key"></span><span>Key 管理<small>访问密钥与分配策略</small></span></button>
           <button type="button" id="tab-models" role="tab" data-tab="models" aria-controls="panel-models" aria-selected="false"><span data-icon="models"></span><span>模型与协议<small>模型列表与上游协议</small></span></button>
           <button type="button" id="tab-reasoning" role="tab" data-tab="reasoning" aria-controls="panel-reasoning" aria-selected="false"><span data-icon="mapping"></span><span>思考映射<small>等级规则与预览</small></span></button>
+          <button type="button" id="tab-prompt" role="tab" data-tab="prompt" aria-controls="panel-prompt" aria-selected="false"><span data-icon="edit"></span><span>系统提示词<small>追加或替换提示内容</small></span></button>
           <button type="button" id="tab-headers" role="tab" data-tab="headers" aria-controls="panel-headers" aria-selected="false"><span data-icon="code"></span><span>请求头<small>模板与自定义覆盖</small></span></button>
           <button type="button" id="tab-policy" role="tab" data-tab="policy" aria-controls="panel-policy" aria-selected="false"><span data-icon="retry"></span><span>重试与映射<small>时限、异常与状态码</small></span></button>
         </nav>
@@ -186,6 +187,32 @@
               <div id="reasoningPreview" class="feedback" role="status"></div>
               <small>预览不会发送请求。实际发送值与上游报告可在请求日志中核对。</small>
             </section>
+          </section>
+          <section id="panel-prompt" role="tabpanel" aria-labelledby="tab-prompt" hidden>
+            <div class="section-heading"><h3>系统提示词</h3><p>为本渠道的所有模型补充要求，或使用统一的系统提示词。</p></div>
+            <div class="field">
+              <span id="systemPromptModeLabel" class="reasoning-field-label">处理方式</span>
+              <div id="systemPromptMode" class="reasoning-mode-grid" role="radiogroup" aria-labelledby="systemPromptModeLabel">
+                <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="off" class="sr-only" aria-labelledby="systemPromptOffTitle" aria-describedby="systemPromptOffHint" checked><span class="reasoning-mode-icon" data-icon="forward"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptOffTitle">不改写</strong><small id="systemPromptOffHint">保留现有提示词</small></label>
+                <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="append" class="sr-only" aria-labelledby="systemPromptAppendTitle" aria-describedby="systemPromptAppendHint"><span class="reasoning-mode-icon" data-icon="plus"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptAppendTitle">追加</strong><small id="systemPromptAppendHint">在原提示词后补充</small></label>
+                <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="replace" class="sr-only" aria-labelledby="systemPromptReplaceTitle" aria-describedby="systemPromptReplaceHint"><span class="reasoning-mode-icon" data-icon="edit"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptReplaceTitle">替换</strong><small id="systemPromptReplaceHint">使用自定义提示词</small></label>
+              </div>
+            </div>
+            <p id="systemPromptModeHint" class="system-prompt-mode-hint" role="status">当前不改写系统提示词，下面的文字会保留；选择追加或替换后可编辑。</p>
+            <div class="field system-prompt-field">
+              <div class="system-prompt-field-heading"><label for="systemPromptText">自定义系统提示词</label><span id="systemPromptCount" class="system-prompt-count">0 / 32,000 字符</span></div>
+              <textarea id="systemPromptText" rows="10" maxlength="32000" placeholder="例如：请用简体中文回答，先给结论，再解释原因。" spellcheck="false" aria-describedby="systemPromptTextHint systemPromptCount" readonly></textarea>
+              <small id="systemPromptTextHint">直接填写文字，保留换行和空格。保存后对本渠道的新请求生效。</small>
+            </div>
+            <details id="systemPromptDetails" class="system-prompt-details">
+              <summary>处理说明</summary>
+              <div>
+                <p><strong>追加：</strong>保留原系统提示词，在末尾补充上面的内容；原提示词为空时直接使用自定义内容。</p>
+                <p><strong>替换：</strong>使用上面的内容覆盖原系统提示词。Responses 请求中直接的 system／developer 提示消息也会移除。</p>
+                <p>OpenAI Responses 写入 <code>instructions</code>；Claude 写入 <code>system</code>，追加时保留原缓存块。使用 Claude Code 请求头模板时，保留必要的客户端身份声明。</p>
+                <p>连接测试和每次重试使用同一规则，可在日志中核对收到与实际发送的请求内容。</p>
+              </div>
+            </details>
           </section>
           <section id="panel-headers" role="tabpanel" aria-labelledby="tab-headers" hidden>
             <div class="section-heading"><h3>请求头覆盖</h3><p>选择客户端模板，或编辑自定义请求头</p></div>

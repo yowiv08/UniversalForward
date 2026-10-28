@@ -26,6 +26,7 @@ function copyHost() {
     },
     reasoningPolicy: { defaults: { responses: rule('map', [{ from: 'low', to: 'high' }], 'medium') },
       models: { 'claude-model': { messages: rule('fixed', [], null, 'max') } } },
+    systemPromptPolicy: { mode: 'append', text: '  保留完整提示词。\n先给结论。  ' },
     headerOverrideMode: 'perEndpoint', headerOverride: { 'X-Shared': 'common', 'X-Key': '{api_key}' },
     endpointHeaderOverrides: {
       '/v1/responses': { useCommon: false, headers: { 'X-Responses': 'custom' } },
@@ -168,7 +169,7 @@ function copyHost() {
     assert.equal(submitted.enabled, false);
     assert.deepEqual(submitted.keys, original.keys.map(key => ({ ...key, id: '' })));
     for (const name of ['baseUrl', 'weight', 'networkMode', 'proxySubscriptionIds', 'proxyId', 'responsesTransport',
-      'stripResponsesResourceState', 'keySelectionMode', 'models', 'endpoints', 'modelProtocols', 'reasoningPolicy',
+      'stripResponsesResourceState', 'keySelectionMode', 'models', 'endpoints', 'modelProtocols', 'reasoningPolicy', 'systemPromptPolicy',
       'headerOverride', 'headerOverrideMode', 'endpointHeaderOverrides', 'requestPolicy', 'extraParams'])
       assert.deepEqual(submitted[name], original[name], 'Preserve ' + name);
     for (const name of ['state', 'availableModels', 'modelsUpdatedAt']) assert.equal(name in submitted, false);

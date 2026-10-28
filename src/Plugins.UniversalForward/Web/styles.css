@@ -428,6 +428,18 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(2px); }
 .reasoning-level-hint { margin-top: 14px; }
 .reasoning-preview-box { margin-top: 24px; }
 .reasoning-preview-box h4 { margin-bottom: 14px; }
+.system-prompt-mode-hint { color: var(--muted); font-size: 13px; line-height: 1.8; margin: 0 0 20px; }
+#panel-prompt .reasoning-mode-card small { font-size: 13px; line-height: 1.6; }
+.system-prompt-field-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.system-prompt-field-heading label { margin: 0; font-size: 14px; }
+.system-prompt-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#systemPromptText { font-size: 15px; font-weight: 400; line-height: 1.8; padding: 14px 16px; min-height: 240px; color: var(--text); }
+#systemPromptText[readonly] { background: var(--subtle); color: var(--text); }
+#systemPromptTextHint { font-size: 13px; line-height: 1.8; }
+.system-prompt-details { border-top: 1px solid var(--line); padding-top: 16px; font-size: 13px; line-height: 1.8; }
+.system-prompt-details summary { color: var(--text); }
+.system-prompt-details p { margin-top: 12px; }
+.system-prompt-details code { font-size: inherit; }
 .effort-combobox { position: relative; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 1px 2px #00000003; }
 .effort-combobox:hover { border-color: var(--focus); }
 .effort-combobox:focus-within { border-color: var(--faint); box-shadow: 0 0 0 3px var(--focus-soft); }

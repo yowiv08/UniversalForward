@@ -167,6 +167,24 @@ public sealed partial class UniversalForwardTerminal
                 payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
                 capture?.MappedReasoning(reasoningMapping);
             }
+            if (settings.SystemPromptPolicy.Mode != "off")
+            {
+                var body = JsonNode.Parse(payload)!.AsObject();
+                var rewrite = settings.SystemPromptPolicy.Apply(body, upstreamEndpoint);
+                if (rewrite is not null)
+                {
+                    if (profile == "claude" && upstreamEndpoint == "/v1/messages" && rewrite.Mode == "replace")
+                    {
+                        ClientProfiles.EnsureClaudeSystemIdentity(body);
+                        rewrite = rewrite with { TemplateIdentityPreserved = true };
+                    }
+                    payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
+                    capture?.RewroteSystemPrompt(rewrite);
+                    await TryLogAsync("request.system_prompt.rewritten", "已应用渠道系统提示词规则",
+                        traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
+                        details: rewrite);
+                }
+            }
             if (settings.StripResponsesResourceState && upstreamEndpoint == "/v1/responses")
             {
                 var body = JsonNode.Parse(payload)!.AsObject();

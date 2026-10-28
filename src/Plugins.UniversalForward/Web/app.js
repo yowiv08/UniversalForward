@@ -480,6 +480,31 @@
       if (!existing.has(name.toLowerCase())) return name;
     }
   }
+  function renderSystemPrompt() {
+    const mode = form.elements.systemPromptMode.value;
+    const hints = {
+      off: '当前不改写系统提示词，下面的文字会保留；选择追加或替换后可编辑。',
+      append: '保留原系统提示词，在后面补充你填写的内容。',
+      replace: '使用下方内容覆盖原系统提示词；Claude Code 模板会保留必要的客户端身份声明。'
+    };
+    $('systemPromptText').readOnly = mode === 'off';
+    $('systemPromptModeHint').textContent = hints[mode];
+    $('systemPromptCount').textContent = `${$('systemPromptText').value.length.toLocaleString('en-US')} / 32,000 字符`;
+  }
+  function loadSystemPrompt(policy) {
+    form.elements.systemPromptMode.value = policy?.mode || 'off';
+    $('systemPromptText').value = policy?.text || '';
+    renderSystemPrompt();
+  }
+  function readSystemPrompt() {
+    const mode = form.elements.systemPromptMode.value, text = $('systemPromptText').value;
+    if (!['off', 'append', 'replace'].includes(mode)) fail('请选择系统提示词处理方式', 'prompt');
+    if (text.length > 32000) fail('系统提示词不能超过 32,000 字符', 'prompt', 'systemPromptText');
+    if (mode !== 'off' && !text.trim()) fail('追加或替换时，请填写系统提示词', 'prompt', 'systemPromptText');
+    return { mode, text };
+  }
+  for (const input of form.querySelectorAll('input[name=systemPromptMode]')) input.addEventListener('change', renderSystemPrompt);
+  $('systemPromptText').addEventListener('input', renderSystemPrompt);
   function open(account, { duplicate = false } = {}) {
     const sourceLabel = account?.label || '';
     if (duplicate) {
@@ -518,6 +543,7 @@
     deletedKeyIds = []; keyRevision = account?.keyRevision ?? 0;
     modelProtocolDraft = Object.assign(Object.create(null), structuredClone(account?.modelProtocols || {}));
     loadReasoningPolicy(account?.reasoningPolicy);
+    loadSystemPrompt(account?.systemPromptPolicy);
     candidates = account?.availableModels || [];
     $('keySelectionMode').value = account?.keySelectionMode || 'roundRobin';
     for (const [name, fallback] of Object.entries(defaults)) form.elements[name].value = account?.requestPolicy?.[name] ?? fallback;
@@ -952,6 +978,7 @@
       const modelProtocols = readProtocols();
       let headerOverride, statusCodeMapping, reasoningPolicy;
       try { reasoningPolicy = readReasoningPolicy(); } catch (e) { fail(e.message, 'reasoning'); }
+      const systemPromptPolicy = readSystemPrompt();
       try { commitHeaderDraft(); headerOverride = commonHeaderDraft; } catch (e) { fail(e.message, 'headers'); }
       try { statusCodeMapping = readMapping(); } catch (e) { fail(e.message, 'policy'); }
       const requestPolicy = { statusCodeMapping };
@@ -966,7 +993,7 @@
         responsesTransport: form.elements.responsesTransport.value,
         stripResponsesResourceState: form.elements.stripResponsesResourceState.checked,
         keys, deletedKeyIds, keyRevision, keySelectionMode: $('keySelectionMode').value, weight: Number(form.elements.weight.value),
-        enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, reasoningPolicy, requestPolicy, headerOverride,
+        enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, reasoningPolicy, systemPromptPolicy, requestPolicy, headerOverride,
         headerOverrideMode: headerPolicyMode, endpointHeaderOverrides: endpointHeaderDraft, extraParams
       });
       editorEpoch++; dialog.close(); await load(); message(saved.warning || '渠道已保存', !!saved.warning);

@@ -221,8 +221,9 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
             UpstreamWebSocket.ValidateTransport(settings.ResponsesTransport);
             ChannelKeys.Validate(ReadKeys(settings), settings.KeySelectionMode);
             HeaderOverrides.ValidateConfiguration(settings.HeaderOverrideMode, settings.HeaderOverride, settings.EndpointHeaderOverrides);
-            if (settings.ModelProtocols is null || settings.ReasoningPolicy is null) return false;
+            if (settings.ModelProtocols is null || settings.ReasoningPolicy is null || settings.SystemPromptPolicy is null) return false;
             settings.ReasoningPolicy.Validate();
+            settings.SystemPromptPolicy.Validate();
             foreach (var options in settings.ModelProtocols.Values)
             { if (options is null) return false; options.Validate(); }
             settings.Endpoints = settings.Endpoints
@@ -304,6 +305,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         public string ExtraParams { get; set; } = "{}";
         public ForwardRequestPolicy RequestPolicy { get; set; } = new();
         public ReasoningPolicy ReasoningPolicy { get; set; } = new();
+        public SystemPromptPolicy SystemPromptPolicy { get; set; } = new();
         public System.Text.Json.Nodes.JsonObject HeaderOverride { get; set; } = new();
         public string HeaderOverrideMode { get; set; } = "shared";
         public Dictionary<string, EndpointHeaderOverride> EndpointHeaderOverrides { get; set; } = new(StringComparer.Ordinal);

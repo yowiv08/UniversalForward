@@ -108,6 +108,7 @@ public sealed partial class UniversalForwardTerminal
             EndpointHeaderOverrides = endpointHeaderOverrides,
             ModelProtocols = input.ModelProtocols ?? previous.ModelProtocols,
             ReasoningPolicy = input.ReasoningPolicy ?? previous.ReasoningPolicy,
+            SystemPromptPolicy = input.SystemPromptPolicy ?? previous.SystemPromptPolicy,
             RequestPolicy = policy,
             BaseUrl = baseUrl,
             Keys = keys,
@@ -136,6 +137,7 @@ public sealed partial class UniversalForwardTerminal
         try
         {
             settings.ReasoningPolicy.Validate(models);
+            settings.SystemPromptPolicy.Validate();
             foreach (var (model, options) in settings.ModelProtocols)
             {
                 if (!models.Contains(model, StringComparer.Ordinal) || options is null)
@@ -421,6 +423,7 @@ public sealed partial class UniversalForwardTerminal
             extraParams = settings.ExtraParams,
             requestPolicy = settings.RequestPolicy,
             reasoningPolicy = settings.ReasoningPolicy,
+            systemPromptPolicy = settings.SystemPromptPolicy,
             headerOverride = settings.HeaderOverride,
             headerOverrideMode = settings.HeaderOverrideMode,
             networkMode = settings.NetworkMode,
@@ -613,6 +616,7 @@ public sealed partial class UniversalForwardTerminal
         public JsonElement? ExtraParams { get; init; }
         public ForwardRequestPolicy? RequestPolicy { get; init; }
         public ReasoningPolicy? ReasoningPolicy { get; init; }
+        public SystemPromptPolicy? SystemPromptPolicy { get; init; }
         public JsonObject? HeaderOverride { get; init; }
         public string? HeaderOverrideMode { get; init; }
         public Dictionary<string, EndpointHeaderOverride>? EndpointHeaderOverrides { get; init; }

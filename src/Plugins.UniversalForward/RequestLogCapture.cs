@@ -72,6 +72,14 @@ internal sealed class RequestLogCapture
             Save();
         }
     }
+    public void RewroteSystemPrompt(SystemPromptRewriteDecision decision)
+    {
+        lock (_gate)
+        {
+            _info["systemPromptRewrite"] = JsonSerializer.SerializeToNode(decision, RequestLogStore.Json);
+            Save();
+        }
+    }
     public void Observe(string name, ReadOnlySpan<byte> bytes)
     {
         lock (_gate)

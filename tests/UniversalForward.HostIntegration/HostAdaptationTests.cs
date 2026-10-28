@@ -53,6 +53,54 @@ public sealed class HostAdaptationTests
     }
 
     [TestMethod]
+    public async Task HostAndInternalRetriesReuseOneAppendedSystemPrompt()
+    {
+        const string original = "Existing client instructions.";
+        const string addition = "  渠道附加指令\nKeep the original formatting.  ";
+        using var session = new Session(_ => Json(503, Failure), internalRetries: 2,
+            hostDefault: 3, backup: false,
+            systemPromptPolicy: new() { Mode = "append", Text = addition });
+        var result = await session.ExecuteAsync(systemPrompt: original);
+        Assert.AreEqual(503, result.Response!.StatusCode);
+        Assert.AreEqual(9, session.Calls.Count);
+        Assert.AreEqual(3, result.AttemptDetails.Count);
+        foreach (var call in session.Calls)
+        {
+            using var sent = JsonDocument.Parse(call.Body);
+            Assert.AreEqual(original + "\n\n" + addition, sent.RootElement.GetProperty("system").GetString());
+        }
+        Assert.IsTrue(session.Calls.All(call => call.Body == session.Calls[0].Body));
+        Assert.AreEqual(original, result.Request.OriginalBody!.Value.GetProperty("system").GetString());
+        Assert.AreEqual(0, session.Account.Status.InFlight);
+    }
+
+    [TestMethod]
+    [DataRow("append")]
+    [DataRow("replace")]
+    public async Task PromptRewriteSurvivesHostMappingFailover(string mode)
+    {
+        const string original = "Existing client instructions.";
+        const string configured = "Custom channel instructions.";
+        using var session = new Session(call => Json(call.Model == "primary" ? 503 : 200,
+            call.Model == "primary" ? Failure : Success), internalRetries: 2,
+            systemPromptPolicy: new() { Mode = mode, Text = configured });
+        var result = await session.ExecuteAsync(systemPrompt: original);
+        Assert.AreEqual(200, result.Response!.StatusCode);
+        Assert.AreEqual(4, session.Calls.Count);
+        Assert.AreEqual("backup", session.Calls[^1].Model);
+        foreach (var call in session.Calls)
+        {
+            using var sent = JsonDocument.Parse(call.Body);
+            Assert.AreEqual(mode == "append" ? original + "\n\n" + configured : configured,
+                sent.RootElement.GetProperty("system").GetString());
+            Assert.AreEqual("Please answer this local test message.",
+                sent.RootElement.GetProperty("messages")[0].GetProperty("content").GetString());
+        }
+        Assert.AreEqual(original, result.Request.OriginalBody!.Value.GetProperty("system").GetString());
+        Assert.AreEqual(0, session.Account.Status.InFlight);
+    }
+
+    [TestMethod]
     public async Task InFlightSequenceRetainsItsSnapshotAndNextRequestUsesSavedValue()
     {
         using var session = new Session(_ => Json(503, Failure), hostDefault: 3, backup: false);
@@ -168,7 +216,8 @@ public sealed class HostAdaptationTests
         public Func<Task>? BeforeSend { get; set; }
 
         public Session(Func<Call, HttpResponseMessage> respond, int internalRetries = 0, int hostDefault = 1,
-            int? mappedAttempts = null, bool backup = true, int threshold = 0, Dictionary<int, int>? statusMap = null)
+            int? mappedAttempts = null, bool backup = true, int threshold = 0, Dictionary<int, int>? statusMap = null,
+            SystemPromptPolicy? systemPromptPolicy = null)
         {
             Directory.CreateDirectory(_directory);
             File.WriteAllText(Path.Combine(_directory, "execution-settings.json"), JsonSerializer.Serialize(new { defaultHostAttempts = hostDefault }));
@@ -178,7 +227,7 @@ public sealed class HostAdaptationTests
                 Id = "test-channel", PluginKey = "universalforward", Platform = "universalforward",
                 Credential = new CustomCredential(new Dictionary<string, string?>
                 {
-                    ["settings"] = JsonSerializer.Serialize(new { baseUrl = "https://test.invalid", apiKey = "test-key", requestPolicy = new ForwardRequestPolicy
+                    ["settings"] = JsonSerializer.Serialize(new { baseUrl = "https://test.invalid", apiKey = "test-key", systemPromptPolicy = systemPromptPolicy ?? new(), requestPolicy = new ForwardRequestPolicy
                     { MaxRetries = internalRetries, StatusCodeMapping = statusMap ?? [] } }),
                     ["models"] = "[\"primary\",\"backup\"]", ["modelsConfigured"] = "true"
                 })
@@ -231,12 +280,12 @@ public sealed class HostAdaptationTests
                 Mock.Of<IUsageBucketStore>(), NullLogger<RouterPipeline>.Instance, health, mappings, executor, options);
         }
 
-        public async Task<RequestContext> ExecuteAsync(bool stream = false)
+        public async Task<RequestContext> ExecuteAsync(bool stream = false, string? systemPrompt = null)
         {
             var context = new RequestContext
             {
                 Request = new AdapterRequest { Model = "test-route", Endpoint = "/v1/messages", Stream = stream,
-                    OriginalBody = JsonSerializer.SerializeToElement(new { model = "test-route", max_tokens = 32, stream,
+                    OriginalBody = JsonSerializer.SerializeToElement(new { model = "test-route", max_tokens = 32, stream, system = systemPrompt,
                         messages = new[] { new { role = "user", content = "Please answer this local test message." } } }) },
                 TestOverrides = new() { AccountId = Account.Id, SkipCooldown = true }
             };

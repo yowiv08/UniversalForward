@@ -188,7 +188,6 @@ internal static class ClientProfiles
 
     internal static JsonObject PrepareClaudeRequest(JsonObject original, Dictionary<string, string> headers, string? deviceId = null)
     {
-        const string identityText = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
         var body = (JsonObject)original.DeepClone();
         if (body["model"] is JsonValue modelValue && modelValue.TryGetValue<string>(out var model)
             && model.EndsWith("[1m]", StringComparison.OrdinalIgnoreCase))
@@ -199,18 +198,7 @@ internal static class ClientProfiles
                 headers["anthropic-beta"] = string.IsNullOrEmpty(beta) ? "context-1m-2025-08-07" : beta + ",context-1m-2025-08-07";
         }
         if (body["stream"] is null) body["stream"] = false;
-        var system = body["system"] switch
-        {
-            null => new JsonArray(),
-            JsonArray array => (JsonArray)array.DeepClone(),
-            JsonValue value when value.TryGetValue<string>(out var text) =>
-                new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
-            _ => throw new FormatException("Claude system 必须为字符串或数组")
-        };
-        if (!system.OfType<JsonObject>().Any(x => x["text"] is JsonValue text && text.TryGetValue<string>(out var value)
-            && (value.StartsWith(identityText, StringComparison.Ordinal) || value.StartsWith("You are Claude Code,", StringComparison.Ordinal))))
-            system.Insert(0, new JsonObject { ["type"] = "text", ["text"] = identityText });
-        body["system"] = system;
+        EnsureClaudeSystemIdentity(body);
         if (body["messages"] is JsonArray messages)
             foreach (var message in messages.OfType<JsonObject>())
                 if (message["content"] is JsonValue content && content.TryGetValue<string>(out var text))
@@ -234,6 +222,23 @@ internal static class ClientProfiles
         identity["session_id"] = headers["x-claude-code-session-id"];
         metadata["user_id"] = identity.ToJsonString();
         return body;
+    }
+
+    internal static void EnsureClaudeSystemIdentity(JsonObject body)
+    {
+        const string identityText = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+        var system = body["system"] switch
+        {
+            null => new JsonArray(),
+            JsonArray array => (JsonArray)array.DeepClone(),
+            JsonValue value when value.TryGetValue<string>(out var text) =>
+                new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
+            _ => throw new FormatException("Claude system 必须为字符串或数组")
+        };
+        if (!system.OfType<JsonObject>().Any(x => x["text"] is JsonValue text && text.TryGetValue<string>(out var value)
+            && (value.StartsWith(identityText, StringComparison.Ordinal) || value.StartsWith("You are Claude Code,", StringComparison.Ordinal))))
+            system.Insert(0, new JsonObject { ["type"] = "text", ["text"] = identityText });
+        body["system"] = system;
     }
 
     internal static JsonObject TestBody(string profile, string model, Dictionary<string, string> headers)
