@@ -27,7 +27,8 @@ window.Router2API = { request: async (method, route, body) => {
     const page = Math.max(1, Math.min(Number(query.get('page') || 1), Math.ceil(rows.length / pageSize)));
     return { rows: rows.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total: rows.length };
   }
-  if (route.startsWith('logs/detail?')) return { ...window.logRows.find(row => row.id === new URLSearchParams(route.split('?')[1]).get('id')), attempts: [], parts: [] };
+  if (route.startsWith('logs/detail?')) return { ...window.logRows.find(row => row.id === new URLSearchParams(route.split('?')[1]).get('id')), attempts: [],
+    parts: ['incoming', 'received', 'attempt-1-request', 'attempt-1-response', 'attempt-1-websocket-events'].map(name => ({ name, savedBytes: 20, observedBytes: 20, truncated: false })) };
   if (route === 'logs/delete') { window.logRows = window.logRows.filter(row => row.id !== body.id); return { success: true }; }
   throw Error('Unexpected route: ' + route);
 }};<\/script>`;
@@ -78,6 +79,9 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.equal(await frame.locator('#journalRaw').isDisabled(), true);
     assert.equal(await frame.locator('#journalJson').isDisabled(), true);
     assert.equal(await frame.locator('#journalCopy').isDisabled(), true);
+    const detailMetadata = JSON.parse(await frame.locator('#journalMetadata').textContent());
+    assert.deepEqual(detailMetadata.parts, []);
+    assert.equal(await scriptFrame.evaluate(() => window.calls.some(call => call.route.startsWith('logs/body?'))), false);
     await frame.locator('#journalDelete').click();
     await frame.locator('#confirmYes').click();
     await expectPage(1, 1, 10, 10);

@@ -105,11 +105,11 @@ internal sealed class RequestLogStore : IDisposable
         }
     }
     public RequestLogCapture? Begin(string kind, string? channel, string? label, string? model,
-        string? endpoint, string? network, string? trace, object? headers, string? body, string? extensions)
+        string? endpoint, string? network, string? trace, object? headers, JsonElement? body, string? extensions)
     {
         if (!Available || !Settings.Enabled) return null;
         var capture = new RequestLogCapture(this, kind, channel, label, model, endpoint, network, trace, headers);
-        capture.AddText("incoming", body ?? ""); capture.AddText("extensions", extensions ?? ""); capture.Save();
+        capture.RequestMetadata(body); capture.AddText("extensions", extensions ?? ""); capture.Save();
         return capture;
     }
     public async Task FlushAsync(CancellationToken token = default)
@@ -141,8 +141,9 @@ internal sealed class RequestLogStore : IDisposable
         if (!entry.Parts.TryGetValue(name, out var part)) entry.Parts[name] = part = new Part();
         return part;
     }
-    internal static bool IsUpstreamBodyPart(string name)
+    internal static bool IsBodyPart(string name)
     {
+        if (name is "incoming" or "received") return true;
         if (!name.StartsWith("attempt-", StringComparison.Ordinal)) return false;
         var suffix = name.AsSpan(8);
         var separator = suffix.IndexOf('-');
@@ -155,14 +156,14 @@ internal sealed class RequestLogStore : IDisposable
     }
     internal void EndPart(string id, string name, long observed, bool truncated)
     {
-        if (IsUpstreamBodyPart(name)) return;
+        if (IsBodyPart(name)) return;
         if (!_entries.TryGetValue(id, out var entry)) return;
         var part = GetPart(entry, name); part.Observed = observed; part.Truncated |= truncated;
         if (part.Truncated) entry.Info["incomplete"] = true;
     }
     internal void AppendChunk(string id, string name, long observed, byte[] chunk)
     {
-        if (IsUpstreamBodyPart(name)) return;
+        if (IsBodyPart(name)) return;
         if (!_entries.TryGetValue(id, out var entry)) return;
         var part = GetPart(entry, name); part.Observed = observed;
         while (_bodyBytes + chunk.Length > Settings.CapacityBytes && EvictOldest()) { }
@@ -218,7 +219,8 @@ internal sealed class RequestLogStore : IDisposable
             if (!_entries.TryGetValue(id, out var entry)) return null;
             var row = entry.Info.DeepClone().AsObject();
             row["attempts"] = new JsonArray(entry.Attempts.Values.Select(a => a.DeepClone()).ToArray());
-            row["parts"] = new JsonArray(entry.Parts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => (JsonNode)new JsonObject
+            row["parts"] = new JsonArray(entry.Parts.Where(p => !IsBodyPart(p.Key))
+                .OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => (JsonNode)new JsonObject
             {
                 ["name"] = p.Key, ["observedBytes"] = p.Value.Observed,
                 ["savedBytes"] = p.Value.Body.Length, ["truncated"] = p.Value.Truncated
@@ -231,7 +233,7 @@ internal sealed class RequestLogStore : IDisposable
         lock (_gate)
         {
             var chunks = new List<object>(); var cursor = after;
-            if (_entries.TryGetValue(id, out var entry) && entry.Parts.TryGetValue(part, out var content))
+            if (!IsBodyPart(part) && _entries.TryGetValue(id, out var entry) && entry.Parts.TryGetValue(part, out var content))
             {
                 var buffer = content.Body.GetBuffer(); var offset = (long)after + 1;
                 while (chunks.Count < 4 && offset < content.Body.Length)

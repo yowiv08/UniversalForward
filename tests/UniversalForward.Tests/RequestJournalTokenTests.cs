@@ -11,7 +11,8 @@ namespace UniversalForward.Tests;
 public sealed class RequestJournalTokenTests
 {
     private static RequestLogCapture Begin(RequestLogStore store, string endpoint = "/v1/responses")
-        => store.Begin("forward", "channel", "Channel", "model", endpoint, "direct", "trace", null, "{}", null)!;
+        => store.Begin("forward", "channel", "Channel", "model", endpoint, "direct", "trace", null,
+            JsonSerializer.SerializeToElement(new { }), null)!;
 
     private static async Task Consume(RequestLogCapture capture, int number, string body, string mediaType = "application/json")
     {
@@ -51,7 +52,7 @@ public sealed class RequestJournalTokenTests
         AssertTokens(detail["tokenUsage"], 128692, 178, 125712, 2977);
         AssertTokens(detail["attempts"]![0]!["tokenUsage"], 128692, 178, 125712, 2977);
         Assert.IsFalse(detail["parts"]!.AsArray().Any(part =>
-            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
+            RequestLogStore.IsBodyPart(part!["name"]!.ToString())));
     }
 
     [TestMethod]
@@ -108,7 +109,7 @@ public sealed class RequestJournalTokenTests
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
         var number = capture.Sending(request, "{}"u8);
         const string body = "data: {\"type\":\"response.created\",\"response\":{\"model\":\"upstream\"}}\n\n"
-            + "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":8,\"input_tokens_details\":{\"cached_tokens\":25},\"cache_creation_input_tokens\":4}}}\n\n";
+            + "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":8,\"input_tokens_details\":{\"cached_tokens\":25,\"cache_write_tokens\":4,\"cached_creation_tokens\":4,\"cache_write_tokens_details\":{\"ttl_30m_tokens\":1,\"ttl_12h_tokens\":3}}}}}\n\n";
         await Consume(capture, number, body, "text/event-stream");
         capture.Complete("completed", 200);
         await store.FlushAsync();
@@ -346,7 +347,7 @@ public sealed class RequestJournalTokenTests
     [TestMethod]
     public async Task WebSocketConvertedEventsReportUsageWithoutSavingEvents()
     {
-        const string completed = """{"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":12,"output_tokens":7,"input_tokens_details":{"cached_tokens":5}}}}""";
+        const string completed = """{"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":12,"output_tokens":7,"input_tokens_details":{"cached_tokens":5,"cache_write_tokens":4,"cached_creation_tokens":4,"cache_creation_input_tokens":4,"cache_write_tokens_details":{"ttl_30m_tokens":1,"ttl_12h_tokens":3}}}}}""";
         const string payload = """{"type":"response.create","model":"model","input":"question"}""";
         await using var server = new WebSocketLoopback(async (peer, _, ct) =>
         {
@@ -369,8 +370,245 @@ public sealed class RequestJournalTokenTests
         await server.Completion;
         await store.FlushAsync();
         var detail = store.Detail(capture.Id)!;
-        AssertTokens(detail["tokenUsage"], 12, 7, 5, null);
+        AssertTokens(detail["tokenUsage"], 12, 7, 5, 4);
         Assert.IsFalse(detail["parts"]!.AsArray().Any(part =>
-            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
+            RequestLogStore.IsBodyPart(part!["name"]!.ToString())));
+    }
+
+    [TestMethod]
+    [DataRow("input_tokens_details", "cache_write_tokens")]
+    [DataRow("input_tokens_details", "cached_creation_tokens")]
+    [DataRow("input_tokens_details", "cache_creation_input_tokens")]
+    [DataRow("prompt_tokens_details", "cache_write_tokens")]
+    [DataRow("prompt_tokens_details", "cached_creation_tokens")]
+    [DataRow("prompt_tokens_details", "cache_creation_input_tokens")]
+    public async Task EveryNewApiCacheWriteAliasIsReadFromEitherOpenAiDetailsContainer(string container, string alias)
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        var number = capture.Sending(request, "{}"u8);
+        var body = "{\"usage\":{\"input_tokens\":128692,\"output_tokens\":178,\"" + container
+            + "\":{\"cached_tokens\":125712,\"" + alias + "\":2977}}}";
+        await Consume(capture, number, body);
+        capture.Complete("completed", 200);
+        await store.FlushAsync();
+        AssertTokens(store.Detail(capture.Id)!["tokenUsage"], 128692, 178, 125712, 2977);
+    }
+
+    [TestMethod]
+    [DataRow("input_tokens_details")]
+    [DataRow("prompt_tokens_details")]
+    public async Task OpenAiCacheWriteAliasesUseTheLatestSnapshotWithoutIncreasingInput(string container)
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        var number = capture.Sending(request, "{}"u8);
+        var usage = "{\"usage\":{\"input_tokens\":100,\"output_tokens\":8,\"" + container
+            + "\":{\"cached_tokens\":25,\"cache_write_tokens\":11,\"cached_creation_tokens\":19,\"cache_creation_input_tokens\":7}}}";
+        await Consume(capture, number, usage);
+        await Consume(capture, number, usage);
+        await store.FlushAsync();
+        AssertTokens(store.Detail(capture.Id)!["tokenUsage"], 100, 8, 25, 19);
+
+        var otherContainer = container == "input_tokens_details" ? "prompt_tokens_details" : "input_tokens_details";
+        await Consume(capture, number, "{\"usage\":{\"" + otherContainer + "\":{\"cached_creation_tokens\":4}}}");
+        await store.FlushAsync();
+        AssertTokens(store.Detail(capture.Id)!["tokenUsage"], 100, 8, 25, 4);
+        await Consume(capture, number, "{\"usage\":{\"" + container + "\":{\"cache_write_tokens\":0}}}");
+        await Consume(capture, number, "{\"usage\":{\"output_tokens\":9}}");
+        capture.Complete("completed", 200);
+        await store.FlushAsync();
+        AssertTokens(store.Detail(capture.Id)!["tokenUsage"], 100, 9, 25, 0);
+    }
+
+    [TestMethod]
+    public async Task BothOpenAiDetailsContainersCanSupplyCacheWriteFields()
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        var number = capture.Sending(request, "{}"u8);
+        const string body = """{"usage":{"input_tokens":100,"output_tokens":8,"input_tokens_details":{"cached_tokens":25,"cache_write_tokens":4},"prompt_tokens_details":{"cached_creation_tokens":7},"cache_creation_input_tokens":6}}""";
+        await Consume(capture, number, body);
+        capture.Complete("completed", 200);
+        await store.FlushAsync();
+        AssertTokens(store.Detail(capture.Id)!["tokenUsage"], 100, 8, 25, 7);
+    }
+
+    [TestMethod]
+    [DataRow("input_tokens_details")]
+    [DataRow("prompt_tokens_details")]
+    public async Task OpenAiExplicitTtlSplitsSupplyMissingCacheWriteTotal(string container)
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        var number = capture.Sending(request, "{}"u8);
+        var body = "{\"usage\":{\"input_tokens\":100,\"output_tokens\":8,\"" + container
+            + "\":{\"cached_tokens\":25,\"cache_write_tokens_details\":{\"ttl_30m_tokens\":3,\"ttl_12h_tokens\":4}}}}";
+        await Consume(capture, number, body);
+        capture.Complete("completed", 200);
+        await store.FlushAsync();
+        AssertTokens(store.Detail(capture.Id)!["tokenUsage"], 100, 8, 25, 7);
+    }
+
+    [TestMethod]
+    public void PartialTtlSnapshotsPreserveMissingFieldsAndReplaceExplicitZero()
+    {
+        var tokens = new RequestTokenUsage();
+        Assert.IsTrue(tokens.Observe(JsonNode.Parse("""{"input_tokens":100,"input_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":10}}}"""), false));
+        AssertTokens(tokens.ToJson(), 100, null, null, 10);
+        const string second = """{"prompt_tokens_details":{"cache_write_tokens_details":{"ttl_12h_tokens":20}}}""";
+        Assert.IsTrue(tokens.Observe(JsonNode.Parse(second), false));
+        Assert.IsFalse(tokens.Observe(JsonNode.Parse(second), false));
+        AssertTokens(tokens.ToJson(), 100, null, null, 30);
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":0}}}"""), false);
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{}}"""), false);
+        AssertTokens(tokens.ToJson(), 100, null, null, 20);
+    }
+
+    [TestMethod]
+    [DataRow("0", 0L)]
+    [DataRow("12", 12L)]
+    public void ReportedCacheWriteTotalTakesPriorityOverTtlSplitsIncludingZero(string total, long expected)
+    {
+        var tokens = new RequestTokenUsage();
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":10,"ttl_12h_tokens":20}}}"""), false);
+        tokens.Observe(JsonNode.Parse("{\"input_tokens_details\":{\"cache_write_tokens\":" + total + "}}"), false);
+        tokens.Observe(JsonNode.Parse("""{"prompt_tokens_details":{"cache_write_tokens_details":{"ttl_12h_tokens":100}}}"""), false);
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens_details":null}}"""), false);
+        AssertTokens(tokens.ToJson(), null, null, null, expected);
+    }
+
+    [TestMethod]
+    [DataRow("null")]
+    [DataRow("-1")]
+    [DataRow("1.5")]
+    [DataRow("\"4\"")]
+    [DataRow("false")]
+    [DataRow("[]")]
+    [DataRow("{}")]
+    [DataRow("9223372036854775808")]
+    [DataRow("18446744073709551616")]
+    public void InvalidCacheWriteAliasClearsTheTotalAndCannotBeMaskedByTtl(string invalid)
+    {
+        var tokens = new RequestTokenUsage();
+        tokens.Observe(JsonNode.Parse("""{"input_tokens":100,"output_tokens":8,"input_tokens_details":{"cache_write_tokens":4}}"""), false);
+        tokens.Observe(JsonNode.Parse("{\"input_tokens_details\":{\"cache_write_tokens\":" + invalid
+            + ",\"cached_creation_tokens\":6,\"cache_write_tokens_details\":{\"ttl_30m_tokens\":1,\"ttl_12h_tokens\":2}}}"), false);
+        tokens.Observe(JsonNode.Parse("""{"prompt_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":5}}}"""), false);
+        AssertTokens(tokens.ToJson(), 100, 8, null, null);
+        tokens.Observe(JsonNode.Parse("""{"prompt_tokens_details":{"cache_creation_input_tokens":0}}"""), false);
+        AssertTokens(tokens.ToJson(), 100, 8, null, 0);
+    }
+
+    [TestMethod]
+    [DataRow("input_tokens_details")]
+    [DataRow("prompt_tokens_details")]
+    public void InvalidOpenAiDetailsClearAllCacheWriteCountersUntilAValidTotalArrives(string container)
+    {
+        var tokens = new RequestTokenUsage();
+        tokens.Observe(JsonNode.Parse("{\"" + container + "\":{\"cached_tokens\":25,\"cache_write_tokens\":4,\"cache_write_tokens_details\":{\"ttl_30m_tokens\":4}}}"), false);
+        tokens.Observe(JsonNode.Parse("{\"" + container + "\":null}"), false);
+        tokens.Observe(JsonNode.Parse("{\"" + container + "\":{}}"), false);
+        AssertTokens(tokens.ToJson(), null, null, null, null);
+        tokens.Observe(JsonNode.Parse("{\"" + container + "\":{\"cache_write_tokens\":3}}"), false);
+        AssertTokens(tokens.ToJson(), null, null, null, 3);
+    }
+
+    [TestMethod]
+    [DataRow("null")]
+    [DataRow("[]")]
+    [DataRow("false")]
+    public void InvalidTtlContainersClearOldSplitsWhileMissingContainersPreserveThem(string invalid)
+    {
+        var tokens = new RequestTokenUsage();
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":10,"ttl_12h_tokens":20}}}"""), false);
+        tokens.Observe(JsonNode.Parse("{\"input_tokens_details\":{\"cache_write_tokens_details\":" + invalid + "}}"), false);
+        tokens.Observe(JsonNode.Parse("{}"), false);
+        AssertTokens(tokens.ToJson(), null, null, null, null);
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":0}}}"""), false);
+        AssertTokens(tokens.ToJson(), null, null, null, 0);
+    }
+
+    [TestMethod]
+    [DataRow("null")]
+    [DataRow("-1")]
+    [DataRow("1.5")]
+    [DataRow("\"20\"")]
+    [DataRow("9223372036854775808")]
+    public void InvalidTtlFieldStaysUnknownUntilCorrected(string invalid)
+    {
+        var tokens = new RequestTokenUsage();
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":10,"ttl_12h_tokens":20}}}"""), false);
+        tokens.Observe(JsonNode.Parse("{\"input_tokens_details\":{\"cache_write_tokens_details\":{\"ttl_12h_tokens\":" + invalid + "}}}"), false);
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":0}}}"""), false);
+        AssertTokens(tokens.ToJson(), null, null, null, null);
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens_details":{"ttl_12h_tokens":0}}}"""), false);
+        AssertTokens(tokens.ToJson(), null, null, null, 0);
+    }
+
+    [TestMethod]
+    public void TtlSumOverflowStaysUnknownAndAnExplicitTotalCanRestoreIt()
+    {
+        var tokens = new RequestTokenUsage();
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":9223372036854775807,"ttl_12h_tokens":1}}}"""), false);
+        AssertTokens(tokens.ToJson(), null, null, null, null);
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cached_creation_tokens":5}}"""), false);
+        AssertTokens(tokens.ToJson(), null, null, null, 5);
+    }
+
+    [TestMethod]
+    [DataRow("", 10L, 7L)]
+    [DataRow(",\"cache_creation_input_tokens\":0", 3L, 0L)]
+    [DataRow(",\"cache_creation_input_tokens\":5", 8L, 5L)]
+    [DataRow(",\"cache_creation_input_tokens\":null", null, null)]
+    public async Task ClaudeJsonTtlSplitsOnlySupplyAnUnreportedTotal(string total, long? input, long? write)
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store, "/v1/messages");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/messages");
+        var number = capture.Sending(request, "{}"u8);
+        var body = "{\"usage\":{\"input_tokens\":3,\"output_tokens\":8,\"cache_creation\":{\"ephemeral_5m_input_tokens\":3,\"ephemeral_1h_input_tokens\":4}" + total + "}}";
+        await Consume(capture, number, body);
+        capture.Complete("completed", 200);
+        await store.FlushAsync();
+        AssertTokens(store.Detail(capture.Id)!["tokenUsage"], input, 8, null, write);
+    }
+
+    [TestMethod]
+    public async Task ClaudePartialTtlEventsAreSnapshotsAndNewAttemptsResetThem()
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store, "/v1/messages");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/messages");
+        var first = capture.Sending(request, "{}"u8);
+        const string start = "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3,\"cache_read_input_tokens\":2,\"cache_creation\":{\"ephemeral_5m_input_tokens\":10}}}}\n\n";
+        const string partial = "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":8,\"cache_creation\":{\"ephemeral_1h_input_tokens\":20}}}\n\n";
+        const string zero = "data: {\"type\":\"message_delta\",\"usage\":{\"cache_creation\":{\"ephemeral_5m_input_tokens\":0}}}\n\n";
+        await Consume(capture, first, start + start + partial + partial + zero, "text/event-stream");
+        await store.FlushAsync();
+        AssertTokens(store.Detail(capture.Id)!["tokenUsage"], 25, 8, 2, 20);
+
+        var second = capture.Sending(request, "{}"u8);
+        await Consume(capture, second, "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0}}}}\n\n", "text/event-stream");
+        capture.Complete("completed", 200);
+        await store.FlushAsync();
+        var detail = store.Detail(capture.Id)!;
+        AssertTokens(detail["tokenUsage"], 1, null, null, 0);
+        AssertTokens(detail["attempts"]![0]!["tokenUsage"], 25, 8, 2, 20);
+        AssertTokens(detail["attempts"]![1]!["tokenUsage"], 1, null, null, 0);
+    }
+
+    [TestMethod]
+    public void InvalidUsageResetsCacheWriteAliasAndSplitState()
+    {
+        var tokens = new RequestTokenUsage();
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens":40,"cache_write_tokens_details":{"ttl_30m_tokens":10,"ttl_12h_tokens":30}}}"""), false);
+        tokens.Observe(null, false);
+        tokens.Observe(JsonNode.Parse("""{"input_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":0}}}"""), false);
+        AssertTokens(tokens.ToJson(), null, null, null, 0);
     }
 }

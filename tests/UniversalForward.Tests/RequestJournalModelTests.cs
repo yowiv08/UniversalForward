@@ -13,7 +13,7 @@ public sealed class RequestJournalModelTests
 {
     private static RequestLogCapture Begin(RequestLogStore store, string? incoming = null)
         => store.Begin("forward", "channel", "Channel", "routed-model", "/v1/responses", "direct", "trace",
-            null, incoming, null)!;
+            null, incoming is null ? null : JsonSerializer.Deserialize<JsonElement>(incoming), null)!;
 
     private static async Task<string> ReadFragmented(HttpResponseMessage response, int bufferSize = 3)
     {
@@ -44,7 +44,7 @@ public sealed class RequestJournalModelTests
     {
         var names = store.Detail(id)!["parts"]!.AsArray().Select(part => part!["name"]!.ToString());
         foreach (var name in names)
-            Assert.IsFalse(RequestLogStore.IsUpstreamBodyPart(name), "Unexpected retained upstream body: " + name);
+            Assert.IsFalse(RequestLogStore.IsBodyPart(name), "Unexpected retained upstream body: " + name);
     }
 
     [TestMethod]
@@ -85,7 +85,9 @@ public sealed class RequestJournalModelTests
     [DataRow("{\"model\":null}")]
     [DataRow("{\"model\":42}")]
     [DataRow("{\"model\":\" \"}")]
-    [DataRow("malformed")]
+    [DataRow("null")]
+    [DataRow("[]")]
+    [DataRow("42")]
     public async Task MissingLocalModelUsesHostModelWithoutInventingSentOrReportedModel(string? incoming)
     {
         using var store = new RequestLogStore();
@@ -151,7 +153,7 @@ public sealed class RequestJournalModelTests
     }
 
     [TestMethod]
-    public async Task OversizeSseMetadataKeepsPassthroughAndPreviouslyReportedMetadata()
+    public async Task OversizeSseMetadataKeepsPassthroughAndResumesLaterMetadata()
     {
         using var store = new RequestLogStore(4096);
         var capture = Begin(store);
@@ -168,7 +170,7 @@ public sealed class RequestJournalModelTests
         Assert.AreEqual("", await ReadPart(store, capture.Id, "attempt-1-response"));
         AssertNoUpstreamBodies(store, capture.Id);
         var detail = store.Detail(capture.Id)!;
-        Assert.AreEqual("initial", detail["reportedModel"]!.ToString());
+        Assert.AreEqual("later", detail["reportedModel"]!.ToString());
         Assert.AreEqual("low", detail["reportedReasoning"]!["reasoning.effort"]!.ToString());
         Assert.IsFalse(detail["incomplete"]?.GetValue<bool>() ?? false,
             "Skipping oversized metadata must not mark request metadata or headers incomplete.");

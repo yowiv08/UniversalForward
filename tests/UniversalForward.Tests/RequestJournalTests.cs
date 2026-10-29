@@ -48,11 +48,11 @@ public sealed class RequestJournalTests
     }
     private static RequestLogCapture Begin(RequestLogStore store, string trace = "trace")
         => store.Begin("forward", "channel", "Deleted channel name", "model", "/v1/responses", "direct", trace,
-            new { Authorization = "Bearer secret-key" }, """{"reasoning":{"effort":"xhigh"},"input":"private prompt"}""",
+            new { Authorization = "Bearer secret-key" }, Json(new { reasoning = new { effort = "xhigh" }, input = "private prompt" }),
             """{"reasoning_effort":"low"}""")!;
 
     [TestMethod]
-    public async Task RuntimeLogsAreRawAndRestartStartsEmpty()
+    public async Task RuntimeLogsKeepHeadersAndMetadataWithoutIncomingBodyAndRestartStartsEmpty()
     {
         string id;
         using (var store = new RequestLogStore())
@@ -60,11 +60,16 @@ public sealed class RequestJournalTests
             var capture = Begin(store); id = capture.Id;
             capture.Complete("completed", 200);
             await store.FlushAsync();
-            StringAssert.Contains(await ReadBody(store, id, "incoming"), "private prompt");
+            Assert.AreEqual("", await ReadBody(store, id, "incoming"));
+            Assert.AreEqual("", await ReadBody(store, id, "received"));
             StringAssert.Contains(await ReadBody(store, id, "incoming-headers"), "secret-key");
             var rows = Json(store.List(new Dictionary<string, string>())).GetProperty("rows");
             Assert.AreEqual(1, rows.GetArrayLength());
             Assert.IsFalse(rows.ToString().Contains("secret-key", StringComparison.Ordinal));
+            Assert.IsFalse(rows.ToString().Contains("private prompt", StringComparison.Ordinal));
+            Assert.AreEqual("xhigh", rows[0].GetProperty("receivedReasoning").GetProperty("reasoning.effort").GetString());
+            Assert.IsFalse(store.Detail(id)!["parts"]!.AsArray().Any(part =>
+                RequestLogStore.IsBodyPart(part!["name"]!.ToString())));
             Assert.AreEqual("Deleted channel name", store.Detail(id)!["channelLabel"]!.ToString());
         }
         using var restarted = new RequestLogStore();
@@ -110,10 +115,11 @@ public sealed class RequestJournalTests
         Assert.IsFalse(row.GetProperty("hostContinuationAllowed").GetBoolean());
         Assert.AreEqual("success", row.GetProperty("hostContinuationReason").GetString());
         StringAssert.Contains(await ReadBody(store, id, "attempt-2-request-headers"), "real-api-key");
+        Assert.AreEqual("", await ReadBody(store, id, "incoming"));
         Assert.AreEqual("", await ReadBody(store, id, "attempt-2-request"));
         Assert.AreEqual("", await ReadBody(store, id, "attempt-2-response"));
         Assert.IsFalse(store.Detail(id)!["parts"]!.AsArray().Any(part =>
-            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
+            RequestLogStore.IsBodyPart(part!["name"]!.ToString())));
         StringAssert.Contains(store.Detail(id)!["attempts"]![0]!["retryReason"]!.ToString(), "502");
     }
 
@@ -139,10 +145,48 @@ public sealed class RequestJournalTests
     }
 
     [TestMethod]
-    public async Task LongSentAndResponseBodiesDoNotIncreaseRetainedBodyBytes()
+    [DataRow(509)]
+    [DataRow(65536)]
+    public async Task OversizeSseEventDoesNotPreventLaterTokenMetadata(int chunkSize)
     {
         using var store = new RequestLogStore();
         var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        var number = capture.Sending(request, "{}"u8);
+        var body = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"" + new string('x', 2 * 1024 * 1024)
+            + "\"}\r\n\r\ndata: {\"type\":\"response.completed\",\"response\":{\"model\":\"reported-model\",\"usage\":{\"input_tokens\":100,"
+            + "\"output_tokens\":8,\"input_tokens_details\":{\"cached_tokens\":25},\"cache_creation_input_tokens\":4}}}\r\n\r\n";
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(body, Encoding.UTF8, "text/event-stream") };
+        capture.Received(number, response);
+        using var stream = await response.Content.ReadAsStreamAsync();
+        using var output = new MemoryStream();
+        var buffer = new byte[chunkSize];
+        int count;
+        while ((count = await stream.ReadAsync(buffer)) > 0) output.Write(buffer, 0, count);
+        capture.Complete("completed", 200);
+        await store.FlushAsync();
+        Assert.AreEqual(body, Encoding.UTF8.GetString(output.ToArray()));
+        var detail = store.Detail(capture.Id)!;
+        Assert.AreEqual("reported-model", detail["reportedModel"]!.ToString());
+        Assert.AreEqual(100L, detail["tokenUsage"]!["inputTokens"]!.GetValue<long>());
+        Assert.AreEqual(8L, detail["tokenUsage"]!["outputTokens"]!.GetValue<long>());
+        Assert.AreEqual(25L, detail["tokenUsage"]!["cacheReadTokens"]!.GetValue<long>());
+        Assert.AreEqual(4L, detail["tokenUsage"]!["cacheWriteTokens"]!.GetValue<long>());
+        Assert.IsFalse(detail["incomplete"]?.GetValue<bool>() ?? false);
+        Assert.IsFalse(detail["parts"]!.AsArray().Any(part => RequestLogStore.IsBodyPart(part!["name"]!.ToString())));
+    }
+
+    [TestMethod]
+    public async Task LongIncomingSentAndResponseBodiesDoNotIncreaseRetainedBodyBytes()
+    {
+        using var store = new RequestLogStore();
+        var capture = store.Begin("forward", "channel", "Channel", "routed-model", "/v1/responses", "direct", "trace",
+            new { Authorization = "Bearer kept-key" }, Json(new
+            {
+                model = "client-model", reasoning = new { effort = "xhigh" },
+                input = new string('i', 2 * 1024 * 1024)
+            }), "{}")!;
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "kept-key");
         var payload = Encoding.UTF8.GetBytes("{\"model\":\"sent-model\",\"reasoning\":{\"effort\":\"high\"},\"input\":\""
@@ -157,12 +201,14 @@ public sealed class RequestJournalTests
         await store.FlushAsync();
         var retainedBeforeResponse = Json(store.Status).GetProperty("bodyBytes").GetInt64();
         var expectedRetained = Encoding.UTF8.GetByteCount(await ReadBody(store, capture.Id, "incoming-headers"))
-            + Encoding.UTF8.GetByteCount(await ReadBody(store, capture.Id, "incoming"))
             + Encoding.UTF8.GetByteCount(await ReadBody(store, capture.Id, "extensions"))
             + Encoding.UTF8.GetByteCount(await ReadBody(store, capture.Id, "attempt-1-request-headers"))
             + Encoding.UTF8.GetByteCount(await ReadBody(store, capture.Id, "attempt-1-response-headers"));
         Assert.AreEqual((long)expectedRetained, retainedBeforeResponse,
-            "Sending a long payload must retain only incoming data and request/response headers.");
+            "Long input and sent bodies must retain only extensions and request/response headers.");
+        Assert.AreEqual("", await ReadBody(store, capture.Id, "incoming"));
+        Assert.AreEqual("client-model", store.Detail(capture.Id)!["requestedModel"]!.ToString());
+        Assert.AreEqual("xhigh", store.Detail(capture.Id)!["receivedReasoning"]!["reasoning.effort"]!.ToString());
 
         using (var source = await response.Content.ReadAsStreamAsync())
         using (var output = new MemoryStream())
@@ -180,12 +226,12 @@ public sealed class RequestJournalTests
         Assert.AreEqual("low", detail["reportedReasoning"]!["reasoning.effort"]!.ToString());
         Assert.IsNotNull(detail["firstByteMs"]);
         Assert.IsFalse(detail["parts"]!.AsArray().Any(part =>
-            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
+            RequestLogStore.IsBodyPart(part!["name"]!.ToString())));
         StringAssert.Contains(await ReadBody(store, capture.Id, "attempt-1-request-headers"), "kept-key");
     }
 
     [TestMethod]
-    public async Task UpstreamBodyGuardIgnoresLegacyCallsWithoutCreatingPartsOrQueueWrites()
+    public async Task BodyGuardIgnoresLegacyCallsWithoutCreatingPartsOrQueueWrites()
     {
         using var store = new RequestLogStore(32);
         var capture = Begin(store);
@@ -199,7 +245,7 @@ public sealed class RequestJournalTests
         Assert.IsTrue(entered.Wait(TimeSpan.FromSeconds(5)));
         try
         {
-            foreach (var name in new[] { "attempt-1-request", "attempt-1-response", "attempt-1-websocket-events", "attempt-99-response" })
+            foreach (var name in new[] { "incoming", "received", "attempt-1-request", "attempt-1-response", "attempt-1-websocket-events", "attempt-99-response" })
             {
                 capture.AddText(name, text);
                 capture.Observe(name, bytes);
@@ -210,10 +256,34 @@ public sealed class RequestJournalTests
         await store.FlushAsync();
         Assert.AreEqual(before, Json(store.Status).GetProperty("bodyBytes").GetInt64());
         Assert.AreEqual(0L, Json(store.Status).GetProperty("droppedWrites").GetInt64(),
-            "Ignored upstream body calls must not enqueue any writes.");
+            "Ignored body calls must not enqueue any writes.");
         Assert.IsFalse(store.Detail(capture.Id)!["incomplete"]?.GetValue<bool>() ?? false);
         Assert.IsFalse(store.Detail(capture.Id)!["parts"]!.AsArray().Any(part =>
-            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
+            RequestLogStore.IsBodyPart(part!["name"]!.ToString())));
+    }
+
+    [TestMethod]
+    public async Task StorageGuardRejectsDirectBodyWritesAndReadsWithoutAffectingHeaders()
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store);
+        await store.FlushAsync();
+        var before = Json(store.Status).GetProperty("bodyBytes").GetInt64();
+        foreach (var name in new[] { "incoming", "received", "attempt-1-request", "attempt-1-response", "attempt-1-websocket-events" })
+        {
+            Assert.IsTrue(store.Enqueue(capture.Id, target =>
+            {
+                target.AppendChunk(capture.Id, name, 7, "private"u8.ToArray());
+                target.EndPart(capture.Id, name, 7, true);
+            }));
+        }
+        await store.FlushAsync();
+        Assert.AreEqual(before, Json(store.Status).GetProperty("bodyBytes").GetInt64());
+        Assert.IsFalse(store.Detail(capture.Id)!["incomplete"]?.GetValue<bool>() ?? false);
+        Assert.IsFalse(store.Detail(capture.Id)!["parts"]!.AsArray().Any(part =>
+            RequestLogStore.IsBodyPart(part!["name"]!.ToString())));
+        Assert.AreEqual("", await ReadBody(store, capture.Id, "incoming"));
+        StringAssert.Contains(await ReadBody(store, capture.Id, "incoming-headers"), "secret-key");
     }
 
     [TestMethod]

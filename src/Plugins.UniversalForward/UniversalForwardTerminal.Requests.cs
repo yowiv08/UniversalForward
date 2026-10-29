@@ -22,7 +22,7 @@ public sealed partial class UniversalForwardTerminal
             context.Account.Id, context.Account.Label, context.Request.Model, context.Request.Endpoint,
             settings.NetworkMode, context.TraceId,
             context.Request.GetType().GetProperty("DownstreamRequestHeaders")?.GetValue(context.Request) ?? context.Request.RequestHeaders,
-            context.Request.OriginalBody?.GetRawText(), JsonSerializer.Serialize(context.Request.Extensions, JsonOptions)));
+            context.Request.OriginalBody, JsonSerializer.Serialize(context.Request.Extensions, JsonOptions)));
         try
         {
             var result = await InvokeCoreAsync(context, capture, hostRetry, validSettings ? settings : null);

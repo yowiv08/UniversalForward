@@ -92,7 +92,7 @@ public sealed class UpstreamWebSocketTests
         Assert.IsNull(headers["Content-Type"]);
         Assert.AreEqual("", await LogPart(store, id, "attempt-1-websocket-events"));
         Assert.IsFalse(detail["parts"]!.AsArray().Any(part =>
-            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
+            RequestLogStore.IsBodyPart(part!["name"]!.ToString())));
     }
 
     [TestMethod]

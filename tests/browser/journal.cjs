@@ -4,16 +4,15 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const source = require('./page-source.cjs')();
-const raw = '{"Authorization":"Bearer raw-secret","input":"中文😀","html":"<img src=x onerror=window.injected=true>"}';
+const raw = '{"code":"upstream_error","message":"保留错误中文😀","html":"<img src=x onerror=window.injected=true>"}';
 const retainedBodies = {
-  incoming: raw,
   extensions: '{"reasoning_effort":"low"}',
   'incoming-headers': '{"User-Agent":"test-client"}',
   'attempt-1-request-headers': '{"Authorization":"Bearer header-secret"}',
   'attempt-2-response-headers': '{"Content-Type":"text/event-stream","x-request-id":"upstream-id"}',
-  error: '{"code":"upstream_error","message":"retained error"}'
+  error: raw
 };
-const removedParts = ['attempt-1-request', 'attempt-2-response', 'attempt-1-websocket-events'];
+const removedParts = ['incoming', 'received', 'attempt-1-request', 'attempt-2-response', 'attempt-1-websocket-events'];
 const bodies = { ...retainedBodies, ...Object.fromEntries(removedParts.map(name => [name, 'legacy-payload-' + name])) };
 const row = {
   id: 'log-one', started: Date.now(), channel: 'channel', channelLabel: 'Log channel', model: 'model',
@@ -73,7 +72,7 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.equal(await effort.locator('.record-effort-reported').innerText(), '上游：max · 34 tokens');
     assert.equal(await effort.locator('.record-effort-reported').getAttribute('title'), 'reasoning.effort="max"；usage.output_tokens_details.reasoning_tokens=34');
     assert.equal(await effort.locator('strong').count(), 0);
-    assert.equal((await frame.locator('#journalRows').textContent()).includes('raw-secret'), false);
+    assert.equal((await frame.locator('#journalRows').textContent()).includes('legacy-payload'), false);
     assert.match(await frame.locator('#journalRows .record-network').getAttribute('title'), /socks5:\/\/127\.0\.0\.1:1080.*node-one/);
     assert.equal(await frame.locator('#journalRows .record-model').innerText(), 'local-alias');
     assert.match(await frame.locator('#journalRows').innerText(), /响应：upstream-version-20261022/);
@@ -87,8 +86,10 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.equal((await frame.locator('#journalMetadata').textContent()).includes('websocket-events'), false);
     const metadata = JSON.parse(await frame.locator('#journalMetadata').textContent());
     assert.deepEqual(metadata.parts.map(part => part.name), Object.keys(retainedBodies));
-    await frame.locator('#journalPart').selectOption('incoming');
-    await frame.locator('#journalBody').filter({ hasText: 'raw-secret' }).waitFor();
+    assert.equal((await frame.locator('#journalDetail').textContent()).includes('插件收到的请求体'), false);
+    assert.equal((await frame.locator('#journalDetail').textContent()).includes('legacy-payload'), false);
+    await frame.locator('#journalPart').selectOption('error');
+    await frame.locator('#journalBody').filter({ hasText: '保留错误中文' }).waitFor();
     assert.equal(await frame.locator('#journalBody').textContent(), raw);
     assert.equal(await frame.locator('#journalBody img').count(), 0);
     assert.match(await frame.locator('#journalOverview').innerText(), /WebSocket/);
@@ -107,7 +108,7 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.match(await firstAttempt.innerText(), /实际发送模型\s+first-routed-model/);
     assert.match(await firstAttempt.innerText(), /上游响应模型\s+first-upstream-model/);
     assert.deepEqual((await firstAttempt.locator('dd').allTextContents()).slice(-4), ['1,000', '0', '900', '未返回']);
-    assert.equal(await frame.locator('#journalPart option:checked').innerText(), '插件收到的请求体');
+    assert.equal(await frame.locator('#journalPart option:checked').innerText(), 'error');
     await page.screenshot({ path: path.resolve(__dirname, '../../artifacts/journal-redesign-desktop.png'), fullPage: true });
     await frame.locator('#journalCopy').click();
     await frame.locator('#journalStatus').filter({ hasText: '已复制原文' }).waitFor();
@@ -133,6 +134,7 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     for (const [part, body] of Object.entries(retainedBodies))
       assert.equal(Buffer.concat(exported.bodyChunks.filter(chunk => chunk.part === part).map(chunk => Buffer.from(chunk.base64, 'base64'))).toString(), body);
     assert.equal(JSON.stringify(exported).includes('legacy-payload'), false);
+    assert.equal(fs.readFileSync(exportPath, 'utf8').includes('插件收到的请求体'), false);
     const requestedParts = await frame.locator('body').evaluate(() => window.calls.filter(call => call.route.startsWith('logs/body?'))
       .map(call => new URLSearchParams(call.route.split('?')[1]).get('part')));
     assert.equal(requestedParts.some(part => removedParts.includes(part)), false);
@@ -223,6 +225,6 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.equal(await frame.locator('#journalBody').textContent(), '');
     assert.deepEqual(errors, []);
     await context.close();
-    console.log('Journal UI passed: requested/sent/reported models, per-attempt identity, token details with grouping/zero/unknown values and export, legacy/missing model fallback, channel filtering, reasoning evidence, retained chunk decoding, excluded legacy request/response/WS bodies, safe HTML and long models, real copy/export, confirmations, settings, mobile.');
+    console.log('Journal UI passed: requested/sent/reported models, per-attempt identity, token details with grouping/zero/unknown values and export, legacy/missing model fallback, channel filtering, reasoning evidence, retained error/header chunk decoding, excluded legacy incoming/received/request/response/WS bodies, safe HTML and long models, real copy/export, confirmations, settings, mobile.');
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

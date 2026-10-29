@@ -48,18 +48,37 @@ internal sealed class RequestLogCapture
     }
     public void AddText(string name, string text)
     {
-        if (RequestLogStore.IsUpstreamBodyPart(name)) return;
+        if (RequestLogStore.IsBodyPart(name)) return;
         var bytes = Encoding.UTF8.GetBytes(text);
         Observe(name, bytes); EndPart(name, true);
         lock (_gate)
         {
-            if (name == "incoming")
-            {
-                var node = Parse(text);
-                _info["receivedReasoning"] = Reasoning(node);
-                _info["requestedModel"] = Model(node) ?? _info["model"]?.ToString();
-            }
             if (name == "extensions") _info["extensionReasoning"] = Reasoning(text);
+        }
+    }
+    public void RequestMetadata(JsonElement? body)
+    {
+        lock (_gate)
+        {
+            var reason = new JsonObject();
+            if (body is { ValueKind: JsonValueKind.Object } root)
+            {
+                foreach (var (name, keys) in ReasoningPaths)
+                {
+                    var value = root;
+                    foreach (var key in keys)
+                    {
+                        if (value.ValueKind == JsonValueKind.Object && value.TryGetProperty(key, out var child))
+                            value = child;
+                        else { value = default; break; }
+                    }
+                    if (value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
+                        reason[name] = JsonNode.Parse(value.GetRawText());
+                }
+                if (root.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(model.GetString())) _info["requestedModel"] = model.GetString();
+            }
+            _info["receivedReasoning"] = reason;
         }
     }
     public void SelectedProxy(ProxyPoolNode? proxy)
@@ -88,7 +107,7 @@ internal sealed class RequestLogCapture
     }
     public void Observe(string name, ReadOnlySpan<byte> bytes)
     {
-        if (RequestLogStore.IsUpstreamBodyPart(name)) return;
+        if (RequestLogStore.IsBodyPart(name)) return;
         lock (_gate)
         {
             if (!_parts.TryGetValue(name, out var part)) _parts[name] = part = new Part();
@@ -105,7 +124,7 @@ internal sealed class RequestLogCapture
     }
     public void EndPart(string name, bool eof)
     {
-        if (RequestLogStore.IsUpstreamBodyPart(name)) return;
+        if (RequestLogStore.IsBodyPart(name)) return;
         lock (_gate)
         {
             if (!_parts.TryGetValue(name, out var part)) _parts[name] = part = new Part();
@@ -371,7 +390,7 @@ internal sealed class RequestLogCapture
     private sealed class CapturedStream(Stream source, RequestLogCapture capture, int number, bool sse) : Stream
     {
         private const int MetadataLimit = 1024 * 1024;
-        private readonly SseEventReader? _events = sse ? new(MetadataLimit, strictUtf8: false) : null;
+        private readonly SseEventReader? _events = sse ? new(MetadataLimit, strictUtf8: false, skipOversizeEvents: true) : null;
         private readonly Func<string, bool> _report = text => { capture.Report(number, text); return false; };
         private readonly StringBuilder? _text = sse ? null : new();
         private readonly Decoder? _decoder = sse ? null : Encoding.UTF8.GetDecoder();

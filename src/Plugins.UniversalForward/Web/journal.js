@@ -2,10 +2,11 @@
   let journalDetail = null, journalRawBody = '', journalPartEpoch = 0;
   const journalStates = { running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '中断' };
   const journalKinds = { forward: '转发', 'connection-test': '连接测试', 'models-discover': '获取模型', 'models-refresh': '刷新模型' };
-  const journalRetainedPart = name => !/^attempt-\d+-(request|response|websocket-events)$/.test(name);
+  const journalRetainedPart = name => name !== 'incoming' && name !== 'received'
+    && !/^attempt-\d+-(request|response|websocket-events)$/.test(name);
   const journalParts = detail => (detail.parts || []).filter(part => journalRetainedPart(part.name));
   const journalPartLabel = name => {
-    const labels = { incoming: '插件收到的请求体', extensions: '宿主传入的扩展参数', 'incoming-headers': '宿主提供的请求头' };
+    const labels = { extensions: '宿主传入的扩展参数', 'incoming-headers': '宿主提供的请求头' };
     if (labels[name]) return labels[name];
     const match = /^attempt-(\d+)-(request|response)-headers$/.exec(name);
     return match ? `尝试 ${match[1]} · ${match[2] === 'request' ? '实际发送' : '上游响应'}头` : name;

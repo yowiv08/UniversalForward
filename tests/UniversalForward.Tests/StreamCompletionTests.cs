@@ -51,7 +51,7 @@ public sealed class StreamCompletionTests
         Assert.IsFalse(row.TryGetProperty("incomplete", out var incomplete) && incomplete.GetBoolean());
         var detail = logs.Detail(row.GetProperty("id").GetString()!)!;
         Assert.IsFalse(detail["parts"]!.AsArray().Any(part =>
-            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
+            RequestLogStore.IsBodyPart(part!["name"]!.ToString())));
         Assert.IsFalse(Mock.Get(host.Services.Log).Invocations.Select(call => call.Arguments[0])
             .OfType<PluginLog>().Any(log => log.EventType == "request.stream.failed"));
     }

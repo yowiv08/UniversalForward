@@ -2,7 +2,7 @@
 
 Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配置和连接测试。
 
-当前源码版本为 **0.3.9**，适配官方 **Router2API 2.1.2 / Router.Contracts 2.0.0**。本次修复长流式响应的 CPU 与分配热点，停止记录发送／响应正文，并增加 Token 明细，无需数据库迁移。版本说明见 [v0.3.9](docs/releases/v0.3.9.md)。
+当前源码版本为 **0.3.10**，适配官方 **Router2API 2.1.2 / Router.Contracts 2.0.0**。停止记录插件收到的请求正文，补充缓存写入计数兼容，并保留 v0.3.9 的 CPU 热点修复及 Token 明细，无需数据库迁移。版本说明见 [v0.3.10](docs/releases/v0.3.10.md)。
 
 ## 管理界面
 
@@ -134,7 +134,7 @@ HTTP 200 表示上游已开始正常响应，宿主尝试详情中的 `Healthy` 
 
 客户端需要携带完整对话历史；仅靠 `previous_response_id` 恢复的历史无法由插件补回。模型每轮重新推理，不再跨轮接续隐藏推理状态或历史推理摘要。若直接历史包含 `compaction` 加密检查点或 `item_reference` 引用，插件会在发送前返回 400，提示恢复完整历史；这些条目无法在删除密文或 ID 后恢复原内容，不能静默丢弃。
 
-渠道查询和 `accounts/save` 使用可选布尔字段 `stripResponsesResourceState`。传 `true` 开启，传 `false` 关闭，省略或传 `null` 保留已有设置；仍保存在渠道 settings JSON 中，无需宿主升级或数据库迁移。诊断事件 `request.responses.state.stripped` 分别记录 `strippedFields`（其他字段删除数）和 `removedReasoningItems`（推理条目移除数），请求日志保留插件收到的请求及剥离结果元数据。
+渠道查询和 `accounts/save` 使用可选布尔字段 `stripResponsesResourceState`。传 `true` 开启，传 `false` 关闭，省略或传 `null` 保留已有设置；仍保存在渠道 settings JSON 中，无需宿主升级或数据库迁移。诊断事件 `request.responses.state.stripped` 分别记录 `strippedFields`（其他字段删除数）和 `removedReasoningItems`（推理条目移除数），请求日志保留剥离结果元数据。
 
 剥离规则参考 [codex-strip-proxy](https://github.com/AnnaofArendelle/codex-strip-proxy)。
 
@@ -206,7 +206,7 @@ Responses 改写顶层 `instructions`，Messages 改写顶层 `system`。Claude 
 }
 ```
 
-`mode` 为 `off`、`append` 或 `replace`。日志元数据中的 `systemPromptRewrite` 记录处理方式、实际字段、文本长度、移除的普通指令消息数和模板身份保留状态；插件收到的请求正文仍可查看，改写结果通过这些元数据核对。开源实现的核查与参考链接见 [系统提示词设计](docs/system-prompt.md)。
+`mode` 为 `off`、`append` 或 `replace`。日志元数据中的 `systemPromptRewrite` 记录处理方式、实际字段、文本长度、移除的普通指令消息数和模板身份保留状态，改写结果通过这些元数据核对。开源实现的核查与参考链接见 [系统提示词设计](docs/system-prompt.md)。
 
 ## 请求头配置
 
@@ -261,11 +261,13 @@ Codex 覆盖预设保留固定 User-Agent 和协议头，不重复填写会话�
 
 日志详情增加「Token 明细」：输入 Token、输出 Token、缓存读取和缓存写入；各次上游尝试分别记录，摘要使用最后一次尝试，不累加重试用量。数字使用千分位，合法零值显示 0，上游未报告或格式无效时显示「未返回」。Claude 输入总量包含缓存读取与写入，OpenAI 的输入总量已含缓存，不重复相加。
 
-不再采集或导出实际发送正文、上游响应正文和 WebSocket 原始消息。插件收到的请求、宿主扩展参数、请求／响应头和错误信息继续保留；响应只增量提取模型、思考参数和用量计数，元数据没有变化时不重复入队。
+不再采集或导出插件收到的请求正文、实际发送正文、上游响应正文和 WebSocket 原始消息。宿主扩展参数、请求／响应头和错误信息继续保留；收到的请求只提取模型和思考参数，响应只增量提取模型、思考参数和用量计数，元数据没有变化时不重复入队。
 
 插件请求日志保存在本次运行内存，不直接写入磁盘。日志操作队列默认最多 256 项，普通请求使用立即入队，队列满时丢弃日志操作并标记不完整；正文保留容量和记录数另有上限。重启或重载后请求日志及日志设置清空。
 
-模型、思考参数和 Token 明细使用 1 MiB 字符的元数据解析上限；超大 JSON 或单个 SSE 事件可能无法提取这些字段。非流式响应用量可由宿主契约补充输入与输出，缺失的缓存计数显示「未返回」。原始网络响应继续完整转发。
+缓存写入兼容顶层 `cache_creation_input_tokens`、OpenAI `input_tokens_details`／`prompt_tokens_details` 内的 `cache_write_tokens`、`cached_creation_tokens` 与 `cache_creation_input_tokens`。相同含义的总量取最大值，不重复相加；上游未提供总量时，可使用明确报告的 OpenAI TTL 或 Claude 缓存创建分项。未报告、无效及溢出计数保持未知，合法零值显示 0；不从输入减缓存读取或价格反推缓存写入。兼容依据见 [New API 缓存用量核查](docs/cache-usage.md)。
+
+响应模型、思考参数和 Token 明细使用 1 MiB 字符的元数据解析上限；超大 JSON 或单个 SSE 事件可能无法提取这些字段，超限 SSE 事件后的完整事件继续解析。非流式响应用量可由宿主契约补充输入与输出，缺失的缓存计数显示「未返回」。原始网络响应继续完整转发。
 
 ## 本地构建与验证
 
