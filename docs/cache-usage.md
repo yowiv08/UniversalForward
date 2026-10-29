@@ -14,7 +14,7 @@ New API 的 [InputTokenDetails 与总量选择](https://github.com/QuantumNous/n
 
 Responses 的 HTTP、SSE 与 WebSocket 共用 [ResponsesUsageAccumulator](https://github.com/QuantumNous/new-api/blob/e449cc700eb569cdfc2199cb73e97de46944f43c/service/responses_usage.go#L13)，在完整结束、失败或不完整等终态事件里提取 `response.usage`，再进入统一计量。输入和输出缺失时的估算不会产生缓存写入计数。
 
-## UniversalForward v0.3.10
+## UniversalForward 缓存用量
 
 v0.3.9 日志只读取顶层 `cache_creation_input_tokens`，因此 OpenAI 明细中的缓存写入可能显示「未返回」。v0.3.10 补充上述字段，继续支持非流式 JSON、SSE 和转换为 SSE 的 Responses WebSocket。
 
