@@ -1,0 +1,773 @@
+{
+  "generatedAtUtc": "2026-10-29T13:53:51.1636048+08:00",
+  "methodology": "Already-built plugin DLLs in separate .NET 10 processes; purely in-memory SSE sources; input and expected hashes generated outside timing; one warmup and three measured samples per case; forced GC outside each timed region; GC.GetTotalAllocatedBytes(precise:true) measures managed allocation; journal includes real CapturedContent read, metadata completion, and queue flush; original incoming body is null for both log variants; no network requests.",
+  "limitations": "Microbenchmark wall time is affected by workstation activity and JIT; process CPU time has coarse timer resolution; allocation values describe allocation traffic, not retained memory. Fixed journal intentionally stores no upstream request/response body; equal downstream hashes and metadata are checked.",
+  "baseline": {
+    "variant": "baseline",
+    "runAtUtc": "2026-10-29T13:53:47.5158896+08:00",
+    "runtimeVersion": "10.0.12",
+    "processorCount": 20,
+    "gcSettings": "server=False;latency=Interactive",
+    "pluginAssemblyPath": "bin/baseline/Plugins.UniversalForward.dll",
+    "pluginAssemblySha256": "4762d0c635a9de96d9f792068a66da59b450f8f89b558be137706fa6eecf87ea",
+    "measuredRepetitions": 3,
+    "warmupsPerCase": 1,
+    "cases": [
+      {
+        "id": "claude-100char-2500-deltas",
+        "category": "collector",
+        "inputBytes": 470431,
+        "chunkBytes": 16384,
+        "deltas": 2500,
+        "medianElapsedMs": 122.6518,
+        "medianCpuMs": 140.625,
+        "medianAllocatedBytes": 635876312,
+        "expectedSha256": "3ea9d419ff950201adcb43bb5a8470e5d91a84e2ea35785cdd99b6d017599cb4",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 130.9216,
+            "cpuMs": 140.625,
+            "allocatedBytes": 635873232,
+            "outputSha256": "3ea9d419ff950201adcb43bb5a8470e5d91a84e2ea35785cdd99b6d017599cb4",
+            "outputBytes": 250193
+          },
+          {
+            "elapsedMs": 122.6518,
+            "cpuMs": 140.625,
+            "allocatedBytes": 635882000,
+            "outputSha256": "3ea9d419ff950201adcb43bb5a8470e5d91a84e2ea35785cdd99b6d017599cb4",
+            "outputBytes": 250193
+          },
+          {
+            "elapsedMs": 119.2415,
+            "cpuMs": 140.625,
+            "allocatedBytes": 635876312,
+            "outputSha256": "3ea9d419ff950201adcb43bb5a8470e5d91a84e2ea35785cdd99b6d017599cb4",
+            "outputBytes": 250193
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "claude-100char-5000-deltas",
+        "category": "collector",
+        "inputBytes": 940431,
+        "chunkBytes": 16384,
+        "deltas": 5000,
+        "medianElapsedMs": 434.7159,
+        "medianCpuMs": 500,
+        "medianAllocatedBytes": 2521695504,
+        "expectedSha256": "2146ff42126546f77fecd0f2bb63579070eaf323f7a458268c32bc6bbcaddb5b",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 428.915,
+            "cpuMs": 609.375,
+            "allocatedBytes": 2521700080,
+            "outputSha256": "2146ff42126546f77fecd0f2bb63579070eaf323f7a458268c32bc6bbcaddb5b",
+            "outputBytes": 500193
+          },
+          {
+            "elapsedMs": 434.7159,
+            "cpuMs": 500,
+            "allocatedBytes": 2521687696,
+            "outputSha256": "2146ff42126546f77fecd0f2bb63579070eaf323f7a458268c32bc6bbcaddb5b",
+            "outputBytes": 500193
+          },
+          {
+            "elapsedMs": 442.1623,
+            "cpuMs": 468.75,
+            "allocatedBytes": 2521695504,
+            "outputSha256": "2146ff42126546f77fecd0f2bb63579070eaf323f7a458268c32bc6bbcaddb5b",
+            "outputBytes": 500193
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "claude-100char-10000-deltas",
+        "category": "collector",
+        "inputBytes": 1880431,
+        "chunkBytes": 16384,
+        "deltas": 10000,
+        "medianElapsedMs": 1668.1503,
+        "medianCpuMs": 1937.5,
+        "medianAllocatedBytes": 10043260328,
+        "expectedSha256": "58fd51091ff3b6a22facc71958498d447390b3df67667329d2902fb190ae6114",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 1613.3007,
+            "cpuMs": 1937.5,
+            "allocatedBytes": 10043259008,
+            "outputSha256": "58fd51091ff3b6a22facc71958498d447390b3df67667329d2902fb190ae6114",
+            "outputBytes": 1000193
+          },
+          {
+            "elapsedMs": 1668.1503,
+            "cpuMs": 1875,
+            "allocatedBytes": 10043260328,
+            "outputSha256": "58fd51091ff3b6a22facc71958498d447390b3df67667329d2902fb190ae6114",
+            "outputBytes": 1000193
+          },
+          {
+            "elapsedMs": 1701.2754,
+            "cpuMs": 1984.375,
+            "allocatedBytes": 10043264760,
+            "outputSha256": "58fd51091ff3b6a22facc71958498d447390b3df67667329d2902fb190ae6114",
+            "outputBytes": 1000193
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "responses-single-line-1MiB",
+        "category": "collector",
+        "inputBytes": 1048576,
+        "chunkBytes": 16384,
+        "deltas": null,
+        "medianElapsedMs": 22.4375,
+        "medianCpuMs": 15.625,
+        "medianAllocatedBytes": 153105016,
+        "expectedSha256": "2bcb8a6ffdc7f332577bbc68dc2f1640992bb4f08f8bc89b434cd906a81e0df2",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 27.9244,
+            "cpuMs": 31.25,
+            "allocatedBytes": 153104968,
+            "outputSha256": "2bcb8a6ffdc7f332577bbc68dc2f1640992bb4f08f8bc89b434cd906a81e0df2",
+            "outputBytes": 1048527
+          },
+          {
+            "elapsedMs": 22.4375,
+            "cpuMs": 15.625,
+            "allocatedBytes": 153105304,
+            "outputSha256": "2bcb8a6ffdc7f332577bbc68dc2f1640992bb4f08f8bc89b434cd906a81e0df2",
+            "outputBytes": 1048527
+          },
+          {
+            "elapsedMs": 21.0615,
+            "cpuMs": 15.625,
+            "allocatedBytes": 153105016,
+            "outputSha256": "2bcb8a6ffdc7f332577bbc68dc2f1640992bb4f08f8bc89b434cd906a81e0df2",
+            "outputBytes": 1048527
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "responses-single-line-2MiB",
+        "category": "collector",
+        "inputBytes": 2097152,
+        "chunkBytes": 16384,
+        "deltas": null,
+        "medianElapsedMs": 105.2077,
+        "medianCpuMs": 93.75,
+        "medianAllocatedBytes": 574655992,
+        "expectedSha256": "e8250c13c2eff34de096159307f0615d607b943f5708a8bb86249fd9f13a624c",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 107.2489,
+            "cpuMs": 140.625,
+            "allocatedBytes": 574655368,
+            "outputSha256": "e8250c13c2eff34de096159307f0615d607b943f5708a8bb86249fd9f13a624c",
+            "outputBytes": 2097103
+          },
+          {
+            "elapsedMs": 105.2077,
+            "cpuMs": 93.75,
+            "allocatedBytes": 574656328,
+            "outputSha256": "e8250c13c2eff34de096159307f0615d607b943f5708a8bb86249fd9f13a624c",
+            "outputBytes": 2097103
+          },
+          {
+            "elapsedMs": 103.7861,
+            "cpuMs": 93.75,
+            "allocatedBytes": 574655992,
+            "outputSha256": "e8250c13c2eff34de096159307f0615d607b943f5708a8bb86249fd9f13a624c",
+            "outputBytes": 2097103
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "responses-single-line-4MiB",
+        "category": "collector",
+        "inputBytes": 4194304,
+        "chunkBytes": 16384,
+        "deltas": null,
+        "medianElapsedMs": 409.0285,
+        "medianCpuMs": 484.375,
+        "medianAllocatedBytes": 2223053032,
+        "expectedSha256": "db9b6f77db616e532682317158477e4cf5f0ecfcadd3e80c5fdabc3add0f77a8",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 403.3634,
+            "cpuMs": 484.375,
+            "allocatedBytes": 2223053368,
+            "outputSha256": "db9b6f77db616e532682317158477e4cf5f0ecfcadd3e80c5fdabc3add0f77a8",
+            "outputBytes": 4194255
+          },
+          {
+            "elapsedMs": 418.3598,
+            "cpuMs": 437.5,
+            "allocatedBytes": 2223052696,
+            "outputSha256": "db9b6f77db616e532682317158477e4cf5f0ecfcadd3e80c5fdabc3add0f77a8",
+            "outputBytes": 4194255
+          },
+          {
+            "elapsedMs": 409.0285,
+            "cpuMs": 546.875,
+            "allocatedBytes": 2223053032,
+            "outputSha256": "db9b6f77db616e532682317158477e4cf5f0ecfcadd3e80c5fdabc3add0f77a8",
+            "outputBytes": 4194255
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "responses-single-line-8MiB",
+        "category": "collector",
+        "inputBytes": 8388608,
+        "chunkBytes": 16384,
+        "deltas": null,
+        "medianElapsedMs": 1548.5974,
+        "medianCpuMs": 1765.625,
+        "medianAllocatedBytes": 8741098416,
+        "expectedSha256": "164c484a226354555a08fb8b9d35869326ad1fcf79e8655f4fa503df8c997abd",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 1540.0088,
+            "cpuMs": 1625,
+            "allocatedBytes": 8741098080,
+            "outputSha256": "164c484a226354555a08fb8b9d35869326ad1fcf79e8655f4fa503df8c997abd",
+            "outputBytes": 8388559
+          },
+          {
+            "elapsedMs": 1551.5766,
+            "cpuMs": 1796.875,
+            "allocatedBytes": 8741098416,
+            "outputSha256": "164c484a226354555a08fb8b9d35869326ad1fcf79e8655f4fa503df8c997abd",
+            "outputBytes": 8388559
+          },
+          {
+            "elapsedMs": 1548.5974,
+            "cpuMs": 1765.625,
+            "allocatedBytes": 8741099088,
+            "outputSha256": "164c484a226354555a08fb8b9d35869326ad1fcf79e8655f4fa503df8c997abd",
+            "outputBytes": 8388559
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "journal-sse-512KiB",
+        "category": "journal",
+        "inputBytes": 524288,
+        "chunkBytes": 512,
+        "deltas": null,
+        "medianElapsedMs": 191.5431,
+        "medianCpuMs": 250,
+        "medianAllocatedBytes": 584226024,
+        "expectedSha256": "6673c4eecf1390105d6de7e9d0a495df411071635d250a64369cb40d10e6a540",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 178.548,
+            "cpuMs": 187.5,
+            "allocatedBytes": 584245152,
+            "outputSha256": "6673c4eecf1390105d6de7e9d0a495df411071635d250a64369cb40d10e6a540",
+            "outputBytes": 524288
+          },
+          {
+            "elapsedMs": 191.5431,
+            "cpuMs": 265.625,
+            "allocatedBytes": 584226024,
+            "outputSha256": "6673c4eecf1390105d6de7e9d0a495df411071635d250a64369cb40d10e6a540",
+            "outputBytes": 524288
+          },
+          {
+            "elapsedMs": 195.4441,
+            "cpuMs": 250,
+            "allocatedBytes": 582642280,
+            "outputSha256": "6673c4eecf1390105d6de7e9d0a495df411071635d250a64369cb40d10e6a540",
+            "outputBytes": 524288
+          }
+        ],
+        "log": {
+          "savedResponseBodyBytes": 524288,
+          "savedRequestBodyBytes": 56,
+          "metadataCorrect": true,
+          "reportedModel": "upstream-bench",
+          "reportedEffort": "high",
+          "status": 200,
+          "tokenUsage": null
+        }
+      }
+    ],
+    "pluginAssemblyVersion": "0.3.8.0"
+  },
+  "fixed": {
+    "variant": "fixed",
+    "runAtUtc": "2026-10-29T13:53:51.0951851+08:00",
+    "runtimeVersion": "10.0.12",
+    "processorCount": 20,
+    "gcSettings": "server=False;latency=Interactive",
+    "pluginAssemblyPath": "bin/fixed/Plugins.UniversalForward.dll",
+    "pluginAssemblySha256": "fbf41ebd910049c83b50b2fb13a4685036d2568d21539a73250862df02dab36d",
+    "measuredRepetitions": 3,
+    "warmupsPerCase": 1,
+    "cases": [
+      {
+        "id": "claude-100char-2500-deltas",
+        "category": "collector",
+        "inputBytes": 470431,
+        "chunkBytes": 16384,
+        "deltas": 2500,
+        "medianElapsedMs": 10.9719,
+        "medianCpuMs": 15.625,
+        "medianAllocatedBytes": 7481968,
+        "expectedSha256": "3ea9d419ff950201adcb43bb5a8470e5d91a84e2ea35785cdd99b6d017599cb4",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 12.8299,
+            "cpuMs": 0,
+            "allocatedBytes": 7481968,
+            "outputSha256": "3ea9d419ff950201adcb43bb5a8470e5d91a84e2ea35785cdd99b6d017599cb4",
+            "outputBytes": 250193
+          },
+          {
+            "elapsedMs": 10.9719,
+            "cpuMs": 15.625,
+            "allocatedBytes": 7481968,
+            "outputSha256": "3ea9d419ff950201adcb43bb5a8470e5d91a84e2ea35785cdd99b6d017599cb4",
+            "outputBytes": 250193
+          },
+          {
+            "elapsedMs": 10.9029,
+            "cpuMs": 15.625,
+            "allocatedBytes": 7482976,
+            "outputSha256": "3ea9d419ff950201adcb43bb5a8470e5d91a84e2ea35785cdd99b6d017599cb4",
+            "outputBytes": 250193
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "claude-100char-5000-deltas",
+        "category": "collector",
+        "inputBytes": 940431,
+        "chunkBytes": 16384,
+        "deltas": 5000,
+        "medianElapsedMs": 23.0095,
+        "medianCpuMs": 15.625,
+        "medianAllocatedBytes": 14931208,
+        "expectedSha256": "2146ff42126546f77fecd0f2bb63579070eaf323f7a458268c32bc6bbcaddb5b",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 23.2289,
+            "cpuMs": 15.625,
+            "allocatedBytes": 14930536,
+            "outputSha256": "2146ff42126546f77fecd0f2bb63579070eaf323f7a458268c32bc6bbcaddb5b",
+            "outputBytes": 500193
+          },
+          {
+            "elapsedMs": 21.9817,
+            "cpuMs": 31.25,
+            "allocatedBytes": 14931208,
+            "outputSha256": "2146ff42126546f77fecd0f2bb63579070eaf323f7a458268c32bc6bbcaddb5b",
+            "outputBytes": 500193
+          },
+          {
+            "elapsedMs": 23.0095,
+            "cpuMs": 15.625,
+            "allocatedBytes": 14931208,
+            "outputSha256": "2146ff42126546f77fecd0f2bb63579070eaf323f7a458268c32bc6bbcaddb5b",
+            "outputBytes": 500193
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "claude-100char-10000-deltas",
+        "category": "collector",
+        "inputBytes": 1880431,
+        "chunkBytes": 16384,
+        "deltas": 10000,
+        "medianElapsedMs": 51.7973,
+        "medianCpuMs": 46.875,
+        "medianAllocatedBytes": 29843456,
+        "expectedSha256": "58fd51091ff3b6a22facc71958498d447390b3df67667329d2902fb190ae6114",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 54.5851,
+            "cpuMs": 46.875,
+            "allocatedBytes": 29842736,
+            "outputSha256": "58fd51091ff3b6a22facc71958498d447390b3df67667329d2902fb190ae6114",
+            "outputBytes": 1000193
+          },
+          {
+            "elapsedMs": 51.7973,
+            "cpuMs": 46.875,
+            "allocatedBytes": 29843456,
+            "outputSha256": "58fd51091ff3b6a22facc71958498d447390b3df67667329d2902fb190ae6114",
+            "outputBytes": 1000193
+          },
+          {
+            "elapsedMs": 45.5659,
+            "cpuMs": 46.875,
+            "allocatedBytes": 29843744,
+            "outputSha256": "58fd51091ff3b6a22facc71958498d447390b3df67667329d2902fb190ae6114",
+            "outputBytes": 1000193
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "responses-single-line-1MiB",
+        "category": "collector",
+        "inputBytes": 1048576,
+        "chunkBytes": 16384,
+        "deltas": null,
+        "medianElapsedMs": 1.3555,
+        "medianCpuMs": 0,
+        "medianAllocatedBytes": 14732512,
+        "expectedSha256": "2bcb8a6ffdc7f332577bbc68dc2f1640992bb4f08f8bc89b434cd906a81e0df2",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 1.857,
+            "cpuMs": 0,
+            "allocatedBytes": 14732512,
+            "outputSha256": "2bcb8a6ffdc7f332577bbc68dc2f1640992bb4f08f8bc89b434cd906a81e0df2",
+            "outputBytes": 1048527
+          },
+          {
+            "elapsedMs": 1.3555,
+            "cpuMs": 0,
+            "allocatedBytes": 14732512,
+            "outputSha256": "2bcb8a6ffdc7f332577bbc68dc2f1640992bb4f08f8bc89b434cd906a81e0df2",
+            "outputBytes": 1048527
+          },
+          {
+            "elapsedMs": 1.1723,
+            "cpuMs": 0,
+            "allocatedBytes": 14732800,
+            "outputSha256": "2bcb8a6ffdc7f332577bbc68dc2f1640992bb4f08f8bc89b434cd906a81e0df2",
+            "outputBytes": 1048527
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "responses-single-line-2MiB",
+        "category": "collector",
+        "inputBytes": 2097152,
+        "chunkBytes": 16384,
+        "deltas": null,
+        "medianElapsedMs": 3.253,
+        "medianCpuMs": 0,
+        "medianAllocatedBytes": 29419992,
+        "expectedSha256": "e8250c13c2eff34de096159307f0615d607b943f5708a8bb86249fd9f13a624c",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 3.5231,
+            "cpuMs": 0,
+            "allocatedBytes": 29419656,
+            "outputSha256": "e8250c13c2eff34de096159307f0615d607b943f5708a8bb86249fd9f13a624c",
+            "outputBytes": 2097103
+          },
+          {
+            "elapsedMs": 3.1667,
+            "cpuMs": 0,
+            "allocatedBytes": 29419992,
+            "outputSha256": "e8250c13c2eff34de096159307f0615d607b943f5708a8bb86249fd9f13a624c",
+            "outputBytes": 2097103
+          },
+          {
+            "elapsedMs": 3.253,
+            "cpuMs": 15.625,
+            "allocatedBytes": 29419992,
+            "outputSha256": "e8250c13c2eff34de096159307f0615d607b943f5708a8bb86249fd9f13a624c",
+            "outputBytes": 2097103
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "responses-single-line-4MiB",
+        "category": "collector",
+        "inputBytes": 4194304,
+        "chunkBytes": 16384,
+        "deltas": null,
+        "medianElapsedMs": 7.6598,
+        "medianCpuMs": 15.625,
+        "medianAllocatedBytes": 58794376,
+        "expectedSha256": "db9b6f77db616e532682317158477e4cf5f0ecfcadd3e80c5fdabc3add0f77a8",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 7.6598,
+            "cpuMs": 0,
+            "allocatedBytes": 58794376,
+            "outputSha256": "db9b6f77db616e532682317158477e4cf5f0ecfcadd3e80c5fdabc3add0f77a8",
+            "outputBytes": 4194255
+          },
+          {
+            "elapsedMs": 8.3598,
+            "cpuMs": 15.625,
+            "allocatedBytes": 58794376,
+            "outputSha256": "db9b6f77db616e532682317158477e4cf5f0ecfcadd3e80c5fdabc3add0f77a8",
+            "outputBytes": 4194255
+          },
+          {
+            "elapsedMs": 7.6015,
+            "cpuMs": 15.625,
+            "allocatedBytes": 58793416,
+            "outputSha256": "db9b6f77db616e532682317158477e4cf5f0ecfcadd3e80c5fdabc3add0f77a8",
+            "outputBytes": 4194255
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "responses-single-line-8MiB",
+        "category": "collector",
+        "inputBytes": 8388608,
+        "chunkBytes": 16384,
+        "deltas": null,
+        "medianElapsedMs": 16.4766,
+        "medianCpuMs": 15.625,
+        "medianAllocatedBytes": 117542856,
+        "expectedSha256": "164c484a226354555a08fb8b9d35869326ad1fcf79e8655f4fa503df8c997abd",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 19.3916,
+            "cpuMs": 15.625,
+            "allocatedBytes": 117542184,
+            "outputSha256": "164c484a226354555a08fb8b9d35869326ad1fcf79e8655f4fa503df8c997abd",
+            "outputBytes": 8388559
+          },
+          {
+            "elapsedMs": 15.2245,
+            "cpuMs": 0,
+            "allocatedBytes": 117543144,
+            "outputSha256": "164c484a226354555a08fb8b9d35869326ad1fcf79e8655f4fa503df8c997abd",
+            "outputBytes": 8388559
+          },
+          {
+            "elapsedMs": 16.4766,
+            "cpuMs": 15.625,
+            "allocatedBytes": 117542856,
+            "outputSha256": "164c484a226354555a08fb8b9d35869326ad1fcf79e8655f4fa503df8c997abd",
+            "outputBytes": 8388559
+          }
+        ],
+        "log": null
+      },
+      {
+        "id": "journal-sse-512KiB",
+        "category": "journal",
+        "inputBytes": 524288,
+        "chunkBytes": 512,
+        "deltas": null,
+        "medianElapsedMs": 1.016,
+        "medianCpuMs": 0,
+        "medianAllocatedBytes": 8457488,
+        "expectedSha256": "6673c4eecf1390105d6de7e9d0a495df411071635d250a64369cb40d10e6a540",
+        "allOutputsMatchExpected": true,
+        "samples": [
+          {
+            "elapsedMs": 0.9767,
+            "cpuMs": 0,
+            "allocatedBytes": 8457488,
+            "outputSha256": "6673c4eecf1390105d6de7e9d0a495df411071635d250a64369cb40d10e6a540",
+            "outputBytes": 524288
+          },
+          {
+            "elapsedMs": 1.016,
+            "cpuMs": 0,
+            "allocatedBytes": 8458448,
+            "outputSha256": "6673c4eecf1390105d6de7e9d0a495df411071635d250a64369cb40d10e6a540",
+            "outputBytes": 524288
+          },
+          {
+            "elapsedMs": 1.0384,
+            "cpuMs": 0,
+            "allocatedBytes": 6868240,
+            "outputSha256": "6673c4eecf1390105d6de7e9d0a495df411071635d250a64369cb40d10e6a540",
+            "outputBytes": 524288
+          }
+        ],
+        "log": {
+          "savedResponseBodyBytes": 0,
+          "savedRequestBodyBytes": 0,
+          "metadataCorrect": true,
+          "reportedModel": "upstream-bench",
+          "reportedEffort": "high",
+          "status": 200,
+          "tokenUsage": {
+            "inputTokens": 7,
+            "outputTokens": 9,
+            "cacheReadTokens": null,
+            "cacheWriteTokens": null
+          }
+        }
+      }
+    ],
+    "pluginAssemblyVersion": "0.3.9.0"
+  },
+  "comparisons": [
+    {
+      "id": "claude-100char-2500-deltas",
+      "inputBytes": 470431,
+      "chunkBytes": 16384,
+      "baselineMedianMs": 122.6518,
+      "fixedMedianMs": 10.9719,
+      "elapsedSpeedup": 11.178720185200374,
+      "baselineMedianAllocatedBytes": 635876312,
+      "fixedMedianAllocatedBytes": 7481968,
+      "allocationReductionFactor": 84.98784170154163,
+      "outputSha256": "3ea9d419ff950201adcb43bb5a8470e5d91a84e2ea35785cdd99b6d017599cb4",
+      "outputsMatch": true,
+      "baselineLog": null,
+      "fixedLog": null
+    },
+    {
+      "id": "claude-100char-5000-deltas",
+      "inputBytes": 940431,
+      "chunkBytes": 16384,
+      "baselineMedianMs": 434.7159,
+      "fixedMedianMs": 23.0095,
+      "elapsedSpeedup": 18.892887720289444,
+      "baselineMedianAllocatedBytes": 2521695504,
+      "fixedMedianAllocatedBytes": 14931208,
+      "allocationReductionFactor": 168.88757453516152,
+      "outputSha256": "2146ff42126546f77fecd0f2bb63579070eaf323f7a458268c32bc6bbcaddb5b",
+      "outputsMatch": true,
+      "baselineLog": null,
+      "fixedLog": null
+    },
+    {
+      "id": "claude-100char-10000-deltas",
+      "inputBytes": 1880431,
+      "chunkBytes": 16384,
+      "baselineMedianMs": 1668.1503,
+      "fixedMedianMs": 51.7973,
+      "elapsedSpeedup": 32.20535240253836,
+      "baselineMedianAllocatedBytes": 10043260328,
+      "fixedMedianAllocatedBytes": 29843456,
+      "allocationReductionFactor": 336.53141003508443,
+      "outputSha256": "58fd51091ff3b6a22facc71958498d447390b3df67667329d2902fb190ae6114",
+      "outputsMatch": true,
+      "baselineLog": null,
+      "fixedLog": null
+    },
+    {
+      "id": "responses-single-line-1MiB",
+      "inputBytes": 1048576,
+      "chunkBytes": 16384,
+      "baselineMedianMs": 22.4375,
+      "fixedMedianMs": 1.3555,
+      "elapsedSpeedup": 16.552932497233495,
+      "baselineMedianAllocatedBytes": 153105016,
+      "fixedMedianAllocatedBytes": 14732512,
+      "allocationReductionFactor": 10.392322504132357,
+      "outputSha256": "2bcb8a6ffdc7f332577bbc68dc2f1640992bb4f08f8bc89b434cd906a81e0df2",
+      "outputsMatch": true,
+      "baselineLog": null,
+      "fixedLog": null
+    },
+    {
+      "id": "responses-single-line-2MiB",
+      "inputBytes": 2097152,
+      "chunkBytes": 16384,
+      "baselineMedianMs": 105.2077,
+      "fixedMedianMs": 3.253,
+      "elapsedSpeedup": 32.341746080541036,
+      "baselineMedianAllocatedBytes": 574655992,
+      "fixedMedianAllocatedBytes": 29419992,
+      "allocationReductionFactor": 19.53283984577562,
+      "outputSha256": "e8250c13c2eff34de096159307f0615d607b943f5708a8bb86249fd9f13a624c",
+      "outputsMatch": true,
+      "baselineLog": null,
+      "fixedLog": null
+    },
+    {
+      "id": "responses-single-line-4MiB",
+      "inputBytes": 4194304,
+      "chunkBytes": 16384,
+      "baselineMedianMs": 409.0285,
+      "fixedMedianMs": 7.6598,
+      "elapsedSpeedup": 53.39937074075041,
+      "baselineMedianAllocatedBytes": 2223053032,
+      "fixedMedianAllocatedBytes": 58794376,
+      "allocationReductionFactor": 37.81064080006564,
+      "outputSha256": "db9b6f77db616e532682317158477e4cf5f0ecfcadd3e80c5fdabc3add0f77a8",
+      "outputsMatch": true,
+      "baselineLog": null,
+      "fixedLog": null
+    },
+    {
+      "id": "responses-single-line-8MiB",
+      "inputBytes": 8388608,
+      "chunkBytes": 16384,
+      "baselineMedianMs": 1548.5974,
+      "fixedMedianMs": 16.4766,
+      "elapsedSpeedup": 93.9876794969836,
+      "baselineMedianAllocatedBytes": 8741098416,
+      "fixedMedianAllocatedBytes": 117542856,
+      "allocationReductionFactor": 74.36520358157709,
+      "outputSha256": "164c484a226354555a08fb8b9d35869326ad1fcf79e8655f4fa503df8c997abd",
+      "outputsMatch": true,
+      "baselineLog": null,
+      "fixedLog": null
+    },
+    {
+      "id": "journal-sse-512KiB",
+      "inputBytes": 524288,
+      "chunkBytes": 512,
+      "baselineMedianMs": 191.5431,
+      "fixedMedianMs": 1.016,
+      "elapsedSpeedup": 188.52667322834645,
+      "baselineMedianAllocatedBytes": 584226024,
+      "fixedMedianAllocatedBytes": 8457488,
+      "allocationReductionFactor": 69.07796073727802,
+      "outputSha256": "6673c4eecf1390105d6de7e9d0a495df411071635d250a64369cb40d10e6a540",
+      "outputsMatch": true,
+      "baselineLog": {
+        "savedResponseBodyBytes": 524288,
+        "savedRequestBodyBytes": 56,
+        "metadataCorrect": true,
+        "reportedModel": "upstream-bench",
+        "reportedEffort": "high",
+        "status": 200,
+        "tokenUsage": null
+      },
+      "fixedLog": {
+        "savedResponseBodyBytes": 0,
+        "savedRequestBodyBytes": 0,
+        "metadataCorrect": true,
+        "reportedModel": "upstream-bench",
+        "reportedEffort": "high",
+        "status": 200,
+        "tokenUsage": {
+          "inputTokens": 7,
+          "outputTokens": 9,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null
+        }
+      }
+    }
+  ]
+}

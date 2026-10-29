@@ -15,11 +15,11 @@ public sealed class RequestJournalModelTests
         => store.Begin("forward", "channel", "Channel", "routed-model", "/v1/responses", "direct", "trace",
             null, incoming, null)!;
 
-    private static async Task<string> ReadFragmented(HttpResponseMessage response)
+    private static async Task<string> ReadFragmented(HttpResponseMessage response, int bufferSize = 3)
     {
         using var source = await response.Content.ReadAsStreamAsync();
         using var output = new MemoryStream();
-        var buffer = new byte[3];
+        var buffer = new byte[bufferSize];
         int read;
         while ((read = await source.ReadAsync(buffer)) > 0) output.Write(buffer, 0, read);
         return Encoding.UTF8.GetString(output.ToArray());
@@ -39,6 +39,12 @@ public sealed class RequestJournalModelTests
             after = result.GetProperty("next").GetInt32();
         }
         return Encoding.UTF8.GetString(body.ToArray());
+    }
+    private static void AssertNoUpstreamBodies(RequestLogStore store, string id)
+    {
+        var names = store.Detail(id)!["parts"]!.AsArray().Select(part => part!["name"]!.ToString());
+        foreach (var name in names)
+            Assert.IsFalse(RequestLogStore.IsUpstreamBodyPart(name), "Unexpected retained upstream body: " + name);
     }
 
     [TestMethod]
@@ -69,7 +75,8 @@ public sealed class RequestJournalModelTests
         var detail = store.Detail(id)!;
         Assert.AreEqual("model", detail["attempts"]![0]!["sentModel"]!.ToString());
         Assert.AreEqual("upstream-snapshot", detail["attempts"]![0]!["reportedModel"]!.ToString());
-        Assert.AreEqual(body, await ReadPart(store, id, "attempt-1-response"));
+        Assert.AreEqual("", await ReadPart(store, id, "attempt-1-response"));
+        AssertNoUpstreamBodies(store, id);
     }
 
     [TestMethod]
@@ -104,6 +111,8 @@ public sealed class RequestJournalModelTests
     [DataRow("data: {\"model\":\"上游😀\",\"choices\":[]}\n\n", "Text/Event-Stream")]
     [DataRow("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"上游😀\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "text/event-stream")]
     [DataRow("data: {\"model\":\"上游😀\",\"choices\":[]}\n\ndata: [DONE]\n\n", "text/event-stream")]
+    [DataRow("\uFEFF: heartbeat\rdata: {\"model\":\"上游😀\",\rdata: \"choices\":[]}\r\r", "text/event-stream")]
+    [DataRow("data: {\"model\":\"上游😀\",\r\ndata: \"choices\":[]}\r\n\r\n", "text/event-stream")]
     public async Task FragmentedResponsesCaptureDeclaredModelAndPreserveEveryByte(string body, string? mediaType)
     {
         using var store = new RequestLogStore();
@@ -116,10 +125,128 @@ public sealed class RequestJournalModelTests
         capture.Received(number, response);
         Assert.AreEqual(body, await ReadFragmented(response));
         capture.Complete("completed", 200);
-        Assert.AreEqual(body, await ReadPart(store, capture.Id, "attempt-1-response"));
+        Assert.AreEqual("", await ReadPart(store, capture.Id, "attempt-1-response"));
+        AssertNoUpstreamBodies(store, capture.Id);
         var detail = store.Detail(capture.Id)!;
         Assert.AreEqual("上游😀", detail["reportedModel"]!.ToString());
         Assert.AreEqual("上游😀", detail["attempts"]![0]!["reportedModel"]!.ToString());
+    }
+
+    [TestMethod]
+    public async Task UnterminatedSseFrameDoesNotReportMetadataAtEof()
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        var number = capture.Sending(request, "{}"u8);
+        const string body = "data: {\"model\":\"unfinished\"}\n";
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(body, Encoding.UTF8, "text/event-stream") };
+        capture.Received(number, response);
+        Assert.AreEqual(body, await ReadFragmented(response));
+        capture.Complete("completed", 200);
+        Assert.AreEqual("", await ReadPart(store, capture.Id, "attempt-1-response"));
+        AssertNoUpstreamBodies(store, capture.Id);
+        Assert.IsNull(store.Detail(capture.Id)!["reportedModel"]);
+    }
+
+    [TestMethod]
+    public async Task OversizeSseMetadataKeepsPassthroughAndPreviouslyReportedMetadata()
+    {
+        using var store = new RequestLogStore(4096);
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        var number = capture.Sending(request, "{}"u8);
+        const string first = "data: {\"response\":{\"model\":\"initial\",\"reasoning\":{\"effort\":\"low\"}}}\n\n";
+        var body = first + "data: {\"model\":\"oversize\",\"padding\":\"" + new string('x', 1024 * 1024)
+            + "\"}\n\ndata: {\"model\":\"later\"}\n\n";
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(body, Encoding.UTF8, "text/event-stream") };
+        capture.Received(number, response);
+        Assert.AreEqual(body, await ReadFragmented(response, 4096));
+        capture.Complete("completed", 200);
+        Assert.AreEqual("", await ReadPart(store, capture.Id, "attempt-1-response"));
+        AssertNoUpstreamBodies(store, capture.Id);
+        var detail = store.Detail(capture.Id)!;
+        Assert.AreEqual("initial", detail["reportedModel"]!.ToString());
+        Assert.AreEqual("low", detail["reportedReasoning"]!["reasoning.effort"]!.ToString());
+        Assert.IsFalse(detail["incomplete"]?.GetValue<bool>() ?? false,
+            "Skipping oversized metadata must not mark request metadata or headers incomplete.");
+    }
+
+    [TestMethod]
+    public async Task OversizeJsonMetadataDoesNotInterruptPassthrough()
+    {
+        using var store = new RequestLogStore(4096);
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        var number = capture.Sending(request, "{}"u8);
+        var body = "{\"model\":\"oversize\",\"padding\":\"" + new string('x', 1024 * 1024) + "\"}";
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        capture.Received(number, response);
+        Assert.AreEqual(body, await ReadFragmented(response, 8192));
+        capture.Complete("completed", 200);
+        Assert.AreEqual("", await ReadPart(store, capture.Id, "attempt-1-response"));
+        AssertNoUpstreamBodies(store, capture.Id);
+        Assert.IsNull(store.Detail(capture.Id)!["reportedModel"]);
+    }
+
+    [TestMethod]
+    public async Task InvalidUtf8InSseMetadataDoesNotChangeRawBytes()
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        var number = capture.Sending(request, "{}"u8);
+        var body = "data: {\"model\":\""u8.ToArray().Concat(new byte[] { 0xff })
+            .Concat("\"}\n\n"u8.ToArray()).ToArray();
+        using var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(body) };
+        response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
+        capture.Received(number, response);
+        using var stream = await response.Content.ReadAsStreamAsync();
+        using var output = new MemoryStream();
+        await stream.CopyToAsync(output);
+        CollectionAssert.AreEqual(body, output.ToArray());
+        capture.Complete("completed", 200);
+        await store.FlushAsync();
+        Assert.AreEqual("\uFFFD", store.Detail(capture.Id)!["reportedModel"]!.ToString());
+        AssertNoUpstreamBodies(store, capture.Id);
+    }
+
+    [TestMethod]
+    public async Task RepeatedSseMetadataDoesNotEnqueueRedundantSnapshots()
+    {
+        using var store = new RequestLogStore(32);
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        var number = capture.Sending(request, "{}"u8);
+        const string frame = "data: {\"response\":{\"model\":\"same-model\",\"reasoning\":{\"effort\":\"low\"}}}\n\n";
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(string.Concat(Enumerable.Repeat(frame, 64)), Encoding.UTF8, "text/event-stream") };
+        capture.Received(number, response);
+        using var stream = await response.Content.ReadAsStreamAsync();
+        var prefix = new byte[Encoding.UTF8.GetByteCount(frame)];
+        await stream.ReadExactlyAsync(prefix);
+        await store.FlushAsync();
+
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        Assert.IsTrue(store.Enqueue("", _ => { entered.Set(); release.Wait(TimeSpan.FromSeconds(10)); }));
+        Assert.IsTrue(entered.Wait(TimeSpan.FromSeconds(5)));
+        try
+        {
+            await stream.CopyToAsync(Stream.Null);
+            capture.Complete("completed", 200);
+        }
+        finally { release.Set(); }
+        await store.FlushAsync();
+        var status = JsonSerializer.SerializeToElement(store.Status, RequestLogStore.Json);
+        Assert.AreEqual(0L, status.GetProperty("droppedWrites").GetInt64(),
+            "Unchanged model/reasoning in every SSE event must not fill the metadata queue.");
+        var detail = store.Detail(capture.Id)!;
+        Assert.AreEqual("same-model", detail["reportedModel"]!.ToString());
+        Assert.AreEqual("low", detail["reportedReasoning"]!["reasoning.effort"]!.ToString());
     }
 
     [TestMethod]
@@ -189,6 +316,48 @@ public sealed class RequestJournalModelTests
     }
 
     [TestMethod]
+    public async Task ComplementaryReasoningFieldsMergeWithoutLeakingAcrossAttempts()
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/messages");
+        var first = capture.Sending(request, "{}"u8);
+        const string start = "data: {\"type\":\"message_start\",\"message\":{\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":1024}}}\n\n";
+        const string delta = "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens_details\":{\"reasoning_tokens\":10}}}\n\n";
+        const string changed = "data: {\"type\":\"message_delta\",\"thinking\":{\"budget_tokens\":2048}}\n\n";
+        const string late = "data: {\"type\":\"message_delta\",\"thinking\":{\"effort\":\"high\"},\"usage\":{\"output_tokens_details\":{\"reasoning_tokens\":11}}}\n\n";
+        using var firstResponse = new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(start + delta + changed + late, Encoding.UTF8, "text/event-stream") };
+        capture.Received(first, firstResponse);
+        using var firstStream = await firstResponse.Content.ReadAsStreamAsync();
+        await firstStream.ReadExactlyAsync(new byte[Encoding.UTF8.GetByteCount(start + delta + changed)]);
+        await store.FlushAsync();
+        var reasoning = store.Detail(capture.Id)!["reportedReasoning"]!;
+        Assert.AreEqual("enabled", reasoning["thinking.type"]!.ToString());
+        Assert.AreEqual(2048, reasoning["thinking.budget_tokens"]!.GetValue<int>());
+        Assert.AreEqual(10, reasoning["usage.output_tokens_details.reasoning_tokens"]!.GetValue<int>());
+
+        var second = capture.Sending(request, "{}"u8);
+        const string secondBody = "data: {\"type\":\"message_start\",\"message\":{\"thinking\":{\"type\":\"disabled\"}}}\n\n";
+        using var secondResponse = new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(secondBody, Encoding.UTF8, "text/event-stream") };
+        capture.Received(second, secondResponse);
+        await ReadFragmented(secondResponse);
+        await firstStream.CopyToAsync(Stream.Null);
+        capture.Complete("completed", 200);
+        await store.FlushAsync();
+        var detail = store.Detail(capture.Id)!;
+        var current = detail["reportedReasoning"]!.AsObject();
+        Assert.AreEqual(1, current.Count);
+        Assert.AreEqual("disabled", current["thinking.type"]!.ToString());
+        var previous = detail["attempts"]![0]!["reportedReasoning"]!;
+        Assert.AreEqual("enabled", previous["thinking.type"]!.ToString());
+        Assert.AreEqual(2048, previous["thinking.budget_tokens"]!.GetValue<int>());
+        Assert.AreEqual("high", previous["thinking.effort"]!.ToString());
+        Assert.AreEqual(11, previous["usage.output_tokens_details.reasoning_tokens"]!.GetValue<int>());
+    }
+
+    [TestMethod]
     public async Task RealWebSocketResponseModelIsCapturedFromConvertedEvents()
     {
         const string created = """{"type":"response.created","response":{"model":"ws-upstream"}}""";
@@ -219,6 +388,7 @@ public sealed class RequestJournalModelTests
         Assert.AreEqual("ws-sent", detail["sentModel"]!.ToString());
         Assert.AreEqual("ws-upstream", detail["reportedModel"]!.ToString());
         Assert.AreEqual(101, detail["attempts"]![0]!["status"]!.GetValue<int>());
-        Assert.AreEqual(created + "\n" + done + "\n", await ReadPart(store, capture.Id, "attempt-1-websocket-events"));
+        Assert.AreEqual("", await ReadPart(store, capture.Id, "attempt-1-websocket-events"));
+        AssertNoUpstreamBodies(store, capture.Id);
     }
 }

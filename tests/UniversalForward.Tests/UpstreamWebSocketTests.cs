@@ -90,7 +90,9 @@ public sealed class UpstreamWebSocketTests
         var headers = JsonNode.Parse(await LogPart(store, id, "attempt-1-response-headers"))!;
         Assert.IsNotNull(headers["Sec-WebSocket-Accept"]);
         Assert.IsNull(headers["Content-Type"]);
-        Assert.AreEqual(Created + "\n" + Delta + "\n" + Done + "\n", await LogPart(store, id, "attempt-1-websocket-events"));
+        Assert.AreEqual("", await LogPart(store, id, "attempt-1-websocket-events"));
+        Assert.IsFalse(detail["parts"]!.AsArray().Any(part =>
+            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
     }
 
     [TestMethod]

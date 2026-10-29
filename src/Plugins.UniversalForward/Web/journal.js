@@ -2,13 +2,13 @@
   let journalDetail = null, journalRawBody = '', journalPartEpoch = 0;
   const journalStates = { running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '中断' };
   const journalKinds = { forward: '转发', 'connection-test': '连接测试', 'models-discover': '获取模型', 'models-refresh': '刷新模型' };
+  const journalRetainedPart = name => !/^attempt-\d+-(request|response|websocket-events)$/.test(name);
+  const journalParts = detail => (detail.parts || []).filter(part => journalRetainedPart(part.name));
   const journalPartLabel = name => {
     const labels = { incoming: '插件收到的请求体', extensions: '宿主传入的扩展参数', 'incoming-headers': '宿主提供的请求头' };
     if (labels[name]) return labels[name];
-    const websocket = /^attempt-(\d+)-websocket-events$/.exec(name);
-    if (websocket) return `尝试 ${websocket[1]} · WebSocket 原始消息`;
-    const match = /^attempt-(\d+)-(request|response)(-headers)?$/.exec(name);
-    return match ? `尝试 ${match[1]} · ${match[2] === 'request' ? '实际发送' : '上游响应'}${match[3] ? '头' : '正文'}` : name;
+    const match = /^attempt-(\d+)-(request|response)-headers$/.exec(name);
+    return match ? `尝试 ${match[1]} · ${match[2] === 'request' ? '实际发送' : '上游响应'}头` : name;
   };
   const journalEffort = value => value && Object.keys(value).length
     ? Object.entries(value).map(([key, v]) => `${key}=${JSON.stringify(v)}`).join('；') : '未提供';
@@ -24,6 +24,13 @@
   }
   const journalModel = (value, fallback = '未提供') => typeof value === 'string' && value.trim() ? value : fallback;
   const journalRequestedModel = value => journalModel(value.requestedModel, journalModel(value.model));
+  const journalTokenFormat = new Intl.NumberFormat('en-US');
+  const journalToken = value => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? journalTokenFormat.format(value) : '未返回';
+  const journalTokenValues = usage => [
+    ['输入 Token', journalToken(usage?.inputTokens)], ['输出 Token', journalToken(usage?.outputTokens)],
+    ['缓存读取', journalToken(usage?.cacheReadTokens)], ['缓存写入', journalToken(usage?.cacheWriteTokens)]
+  ];
   const journalMappingSource = mapping => (mapping.source === 'model' ? '模型规则：' + mapping.model : '渠道默认规则')
     + ' · ' + (mapping.reason === 'default' ? '未提供时使用缺省值' : mapping.mode === 'fixed' ? '固定等级' : '按值映射');
   function journalError(error) { feedback('journalStatus', error.message || String(error), true); }
@@ -103,7 +110,8 @@
         reported.title = '上游响应模型：' + journalModel(row.reportedModel, '未返回'); model.append(reported);
         stateCell.append(el('div', `${journalStates[row.state] || row.state} · HTTP ${row.status ?? '—'}${row.incomplete ? ' · 日志不完整' : ''}`, 'console-badge ' + (row.state === 'completed' ? 'is-success' : row.state === 'failed' ? 'is-error' : row.state === 'running' ? 'is-active' : 'is-neutral')),
           el('div', '', 'record-metrics'));
-        for (const [label, value] of [['首字', `${row.firstByteMs ?? '—'} ms`], ['耗时', `${row.durationMs ?? '—'} ms`], ['重试', String(row.retries || 0)]]) {
+        for (const [label, value] of [['首字', `${row.firstByteMs ?? '—'} ms`], ['耗时', `${row.durationMs ?? '—'} ms`], ['重试', String(row.retries || 0)],
+          ['输入 Token', journalToken(row.tokenUsage?.inputTokens)], ['输出 Token', journalToken(row.tokenUsage?.outputTokens)]]) {
           const metric = el('span');
           metric.append(el('small', label), el('strong', value));
           stateCell.lastChild.append(metric);
@@ -142,15 +150,16 @@
     const epoch = ++journalPartEpoch;
     journalDetail = null; journalRawBody = ''; $('journalBody').textContent = '';
     try {
-      const detail = await api('GET', 'logs/detail?id=' + encodeURIComponent(id));
+      const received = await api('GET', 'logs/detail?id=' + encodeURIComponent(id));
       if (epoch !== journalPartEpoch || !journalActive()) return;
+      const detail = { ...received, parts: journalParts(received) };
       journalDetail = detail;
       renderJournalOverview(detail);
       if (!$('journalDetail').open) $('journalDetail').showModal();
       $('journalMetadata').textContent = JSON.stringify(detail, null, 2);
       $('journalDelete').disabled = detail.state === 'running';
       $('journalPart').replaceChildren(...(detail.parts || []).map(part => option(part.name, journalPartLabel(part.name))));
-      const response = (detail.parts || []).filter(p => /^attempt-\d+-response$/.test(p.name)).at(-1);
+      const response = detail.parts.filter(p => /^attempt-\d+-response-headers$/.test(p.name)).at(-1);
       if (response) $('journalPart').value = response.name;
       await loadJournalPart();
     } catch (error) { if (epoch === journalPartEpoch) journalError(error); }
@@ -184,6 +193,7 @@
       ['原因', hostReasons[detail.hostContinuationReason] || detail.hostContinuationReason]]);
     group('模型信息', [['本地请求模型', journalRequestedModel(detail)],
       ['实际发送模型', journalModel(detail.sentModel)], ['上游响应模型', journalModel(detail.reportedModel, '未返回')]]);
+    group('Token 明细', journalTokenValues(detail.tokenUsage));
     if (detail.proxy) group('实际代理', [['节点地址', detail.proxy.address], ['代理 ID', detail.proxy.id], ['来源 ID', detail.proxy.subscriptionId]]);
     group('思考参数', [...(detail.reasoningMapping ? [
       ['客户端', journalEffort(detail.receivedReasoning)], ['命中规则', journalMappingSource(detail.reasoningMapping)]] : []),
@@ -193,7 +203,7 @@
       ['连接方式', attempt.transport === 'websocket' ? 'WebSocket' : 'HTTP'],
       ['实际发送模型', journalModel(attempt.sentModel)], ['上游响应模型', journalModel(attempt.reportedModel, '未返回')],
       ['请求地址', attempt.url], ['最终地址', attempt.finalUrl], ['状态码', attempt.status],
-      ['重试原因', attempt.retryReason || '无']]);
+      ['重试原因', attempt.retryReason || '无'], ...journalTokenValues(attempt.tokenUsage)]);
   }
   async function readJournalChunks(id, part, consume, current) {
     let after = -1;
@@ -208,9 +218,14 @@
   }
   async function loadJournalPart() {
     const detail = journalDetail, part = $('journalPart').value, epoch = ++journalPartEpoch;
-    if (!detail || !part) return;
+    const stat = detail && journalParts(detail).find(p => p.name === part);
+    $('journalPart').disabled = !detail?.parts.length;
+    $('journalRaw').disabled = !stat; $('journalJson').disabled = !stat; $('journalCopy').disabled = true;
+    if (!stat) {
+      journalRawBody = ''; $('journalBody').textContent = '（没有可查看的原始内容）'; $('journalPartStatus').textContent = '';
+      return;
+    }
     journalRawBody = ''; $('journalBody').textContent = '正在读取正文…'; $('journalCopy').disabled = true;
-    const stat = detail.parts.find(p => p.name === part);
     $('journalPartStatus').textContent = `已保存 ${stat.savedBytes} 字节 · 已观察 ${stat.observedBytes} 字节${stat.truncated ? ' · 已截断或读取不完整' : ''}`;
     const decoder = new TextDecoder(), segments = [];
     const current = () => epoch === journalPartEpoch && journalActive();
@@ -281,9 +296,10 @@
     $('journalExport').disabled = true;
     const current = () => epoch === journalPartEpoch && journalActive();
     try {
-      const pieces = [JSON.stringify({ ...detail, format: 'universalforward-request-log-v1' }).slice(0, -1), ',"bodyChunks":['];
+      const parts = journalParts(detail);
+      const pieces = [JSON.stringify({ ...detail, parts, format: 'universalforward-request-log-v1' }).slice(0, -1), ',"bodyChunks":['];
       let first = true;
-      for (const part of detail.parts || [])
+      for (const part of parts)
         await readJournalChunks(detail.id, part.name, chunk => {
           pieces.push((first ? '' : ',') + JSON.stringify({ part: part.name, ...chunk })); first = false;
         }, current);

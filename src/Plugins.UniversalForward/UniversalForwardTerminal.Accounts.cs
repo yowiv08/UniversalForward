@@ -259,8 +259,9 @@ public sealed partial class UniversalForwardTerminal
             var result = await FetchModelsAsync(settings, "models-discover", existing?.Id, existing?.Label, context.CancellationToken);
             if (result.Error is not null)
             {
-                await TryLogAsync("models.discover.failed", result.Error, "Error",
-                    statusCode: result.StatusCode, details: new { response = result.Error });
+                var diagnostic = ModelDiagnosticLog(result.Error);
+                await TryLogAsync("models.discover.failed", diagnostic!, "Error",
+                    statusCode: result.StatusCode, details: new { diagnostic });
                 return context.Json(result.StatusCode, new { error = result.Error });
             }
             return context.Ok(new { models = result.Models, count = result.Models!.Length, networkMode, updatedAt = DateTimeOffset.UtcNow });
@@ -348,14 +349,15 @@ public sealed partial class UniversalForwardTerminal
             var result = await FetchModelsAsync(settings, "models-refresh", account.Id, account.Label, context.CancellationToken);
             if (result.Error is not null)
             {
+                var diagnostic = ModelDiagnosticLog(result.Error);
                 await TryLogAsync(
                     "models.refresh.failed",
-                    result.Error,
+                    diagnostic!,
                     "Error",
                     accountId: account.Id,
                     statusCode: result.StatusCode,
                     durationMs: (int)stopwatch.ElapsedMilliseconds,
-                    details: new { response = result.Error });
+                    details: new { diagnostic });
                 return context.Json(result.StatusCode, new { error = result.Error });
             }
 
@@ -395,7 +397,7 @@ public sealed partial class UniversalForwardTerminal
             var error = SanitizeMessage(exception.Message, settings);
             await TryLogAsync(
                 "models.refresh.failed",
-                error,
+                ModelDiagnosticLog(error)!,
                 "Error",
                 accountId: account.Id,
                 durationMs: (int)stopwatch.ElapsedMilliseconds);
@@ -447,12 +449,12 @@ public sealed partial class UniversalForwardTerminal
         try
         {
             var result = await FetchModelsCoreAsync(settings, capture, cancellationToken);
-            capture?.Complete(result.Error is null ? "completed" : "failed", result.StatusCode, result.Error);
+            capture?.Complete(result.Error is null ? "completed" : "failed", result.StatusCode, ModelDiagnosticLog(result.Error));
             return result;
         }
         catch (Exception error)
         {
-            capture?.Complete(error is OperationCanceledException ? "cancelled" : "failed", error: error.Message);
+            capture?.Complete(error is OperationCanceledException ? "cancelled" : "failed", error: ModelDiagnosticLog(error.Message));
             throw;
         }
     }

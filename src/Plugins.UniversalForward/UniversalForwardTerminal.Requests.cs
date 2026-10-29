@@ -17,7 +17,7 @@ public sealed partial class UniversalForwardTerminal
     public async Task<PluginInvocationResult> InvokeAsync(PluginAttemptContext context)
     {
         var hostRetry = new ForwardHostRetry();
-        TryReadSettings(context.Account, out var settings);
+        var validSettings = TryReadSettings(context.Account, out var settings);
         var capture = BeginRequestLog(store => store.Begin(context.HttpClient is ConnectionTestClient ? "connection-test" : "forward",
             context.Account.Id, context.Account.Label, context.Request.Model, context.Request.Endpoint,
             settings.NetworkMode, context.TraceId,
@@ -25,7 +25,7 @@ public sealed partial class UniversalForwardTerminal
             context.Request.OriginalBody?.GetRawText(), JsonSerializer.Serialize(context.Request.Extensions, JsonOptions)));
         try
         {
-            var result = await InvokeCoreAsync(context, capture, hostRetry);
+            var result = await InvokeCoreAsync(context, capture, hostRetry, validSettings ? settings : null);
             var decision = hostRetry.Decide(result, context.CancellationToken.IsCancellationRequested,
                 context.HttpClient is ConnectionTestClient);
             result = result with { Attempt = decision.ToResult(result.Attempt.StatusCode, result.Attempt.Reason) };
@@ -43,17 +43,18 @@ public sealed partial class UniversalForwardTerminal
             throw;
         }
     }
-    private async Task<PluginInvocationResult> InvokeCoreAsync(PluginAttemptContext context, RequestLogCapture? capture, ForwardHostRetry hostRetry)
+    private async Task<PluginInvocationResult> InvokeCoreAsync(PluginAttemptContext context, RequestLogCapture? capture,
+        ForwardHostRetry hostRetry, ForwardApiSettings? settings)
     {
         context.CancellationToken.ThrowIfCancellationRequested();
-        if (!TryReadSettings(context.Account, out var settings))
+        if (settings is null)
             return LocalFailure("账号配置无效");
-        if (!IsAccountEligible(context.Account, context.Request, context.HttpClient is ConnectionTestClient))
+        if (!IsAccountEligible(context.Account, context.Request, context.HttpClient is ConnectionTestClient, settings))
             return LocalFailure("账号未启用此模型或端点");
         if (!TryValidateBaseUrl(settings.BaseUrl, out var urlError)) return LocalFailure(urlError);
         if (!TryReadReplaceHeaders(ReadExtraParams(settings), out var headers, out var headerError))
             return LocalFailure(headerError);
-        byte[] payload;
+        JsonObject body;
         ReasoningMappingDecision? reasoningMapping;
         var upstreamModel = ReadModels(context.Account).Contains(context.Request.Model, StringComparer.OrdinalIgnoreCase)
             ? context.Request.Model : UpstreamModel(context.Request.Model);
@@ -68,10 +69,9 @@ public sealed partial class UniversalForwardTerminal
             }
             if (context.Request.OriginalBody is not { ValueKind: JsonValueKind.Object } original)
                 return LocalFailure("请求体必须为 JSON 对象");
-            var body = JsonNode.Parse(original.GetRawText())!.AsObject();
+            body = JsonNode.Parse(original.GetRawText())!.AsObject();
             body["model"] = upstreamModel;
             reasoningMapping = settings.ReasoningPolicy.Resolve(body, upstreamModel, upstreamEndpoint);
-            payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
         }
         catch (Exception error) when (error is JsonException or FormatException or ArgumentException)
         { return LocalFailure(error.Message); }
@@ -120,6 +120,7 @@ public sealed partial class UniversalForwardTerminal
                 settings.EndpointHeaderOverrides, upstreamEndpoint);
             HeaderOverrides.Validate(headerConfig);
             var profile = ClientProfiles.Profile(headerConfig);
+            // Identity and history matching use the incoming body before channel rewrites.
             var identityBody = isTest ? null : JsonNode.Parse(context.Request.OriginalBody!.Value.GetRawText());
             var identitySource = isTest ? null : ClientProfiles.IdentitySource(identityBody, clientHeaderText, headerConfig, headers);
             var session = !isTest && profile is not null && identitySource is null
@@ -141,35 +142,27 @@ public sealed partial class UniversalForwardTerminal
             {
                 resolvedHeaders["Accept"] = "text/event-stream";
                 var testModel = upstreamModel;
-                var testBody = ClientProfiles.TestBody(profile, testModel, resolvedHeaders);
-                payload = JsonSerializer.SerializeToUtf8Bytes(testBody, JsonOptions);
+                body = ClientProfiles.TestBody(profile, testModel, resolvedHeaders);
             }
             else if (profile == "codex" && upstreamEndpoint == "/v1/responses")
             {
-                var body = ClientProfiles.PrepareCodexRequest(JsonNode.Parse(payload)!.AsObject(), resolvedHeaders);
-                payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
+                body = ClientProfiles.PrepareCodexRequest(body, resolvedHeaders);
             }
             else if (profile == "claude" && upstreamEndpoint == "/v1/messages")
             {
-                var body = ClientProfiles.PrepareClaudeRequest(JsonNode.Parse(payload)!.AsObject(), resolvedHeaders, variables["device_id"]);
-                payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
+                body = ClientProfiles.PrepareClaudeRequest(body, resolvedHeaders, variables["device_id"]);
             }
             if (nativeStream)
             {
-                var body = JsonNode.Parse(payload)!.AsObject();
                 body["stream"] = true;
-                payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
             }
             if (reasoningMapping is not null)
             {
-                var body = JsonNode.Parse(payload)!.AsObject();
                 ReasoningPolicy.Apply(body, reasoningMapping);
-                payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
                 capture?.MappedReasoning(reasoningMapping);
             }
             if (settings.SystemPromptPolicy.Mode != "off")
             {
-                var body = JsonNode.Parse(payload)!.AsObject();
                 var rewrite = settings.SystemPromptPolicy.Apply(body, upstreamEndpoint);
                 if (rewrite is not null)
                 {
@@ -178,7 +171,6 @@ public sealed partial class UniversalForwardTerminal
                         ClientProfiles.EnsureClaudeSystemIdentity(body);
                         rewrite = rewrite with { TemplateIdentityPreserved = true };
                     }
-                    payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
                     capture?.RewroteSystemPrompt(rewrite);
                     await TryLogAsync("request.system_prompt.rewritten", "已应用渠道系统提示词规则",
                         traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
@@ -187,13 +179,12 @@ public sealed partial class UniversalForwardTerminal
             }
             if (settings.StripResponsesResourceState && upstreamEndpoint == "/v1/responses")
             {
-                var body = JsonNode.Parse(payload)!.AsObject();
                 var strippedFields = ResponsesResourceState.Strip(body, out var removedReasoningItems);
-                payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
                 await TryLogAsync("request.responses.state.stripped", "已剥离 Responses 资源状态",
                     traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
                     details: new { strippedFields, removedReasoningItems });
             }
+            var payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
             if (websocket) payload = UpstreamWebSocket.CreatePayload(payload);
             var responseStarted = false;
             var targetEndpoint = profile == "claude" && upstreamEndpoint == "/v1/messages"
@@ -253,7 +244,6 @@ public sealed partial class UniversalForwardTerminal
                     var sse = type.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase);
                     var probeStream = response.IsSuccessStatusCode && sse && (!nativeStream || context.Request.Stream);
                     var buffered = await BufferResponseAsync(response, policy.StreamIdleTimeoutSeconds, total.Token, probeStream);
-                    if (buffered.Completed) capture?.EndPart($"attempt-{logAttempt}-response", true);
                     var bytesRead = buffered.Bytes;
                     if (buffered.Started)
                     {
@@ -384,8 +374,7 @@ public sealed partial class UniversalForwardTerminal
                         StatusCode = mappedCode, ContentType = contentType, IsStreaming = true,
                         IsRawPassthrough = true, Lifetime = lifetime,
                         RawStream = ReadBudgetedStreamAsync(lifetime, policy.StreamIdleTimeoutSeconds, context, settings,
-                            streamPrefix ?? [], contentType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase),
-                            () => capture?.EndPart($"attempt-{logAttempt}-response", true))
+                            streamPrefix ?? [], contentType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase))
                     };
                     transferred = true; response = null;
                     hostRetry.StreamTransferred = true;
@@ -425,8 +414,11 @@ public sealed partial class UniversalForwardTerminal
                     Usage = response.IsSuccessStatusCode ? TryReadUsage(bytes) : null
                 };
                 if (!response.IsSuccessStatusCode)
-                    await TryLogAsync("request.upstream.failed", inspectResponses ? $"HTTP {originalCode}" : Encoding.UTF8.GetString(bytes), "Error",
-                        context.TraceId, context.Account.Id, context.Request.Model, originalCode);
+                    await TryLogAsync("request.upstream.failed", $"上游返回 HTTP {originalCode}", "Error",
+                        context.TraceId, context.Account.Id, context.Request.Model, originalCode,
+                        details: new { originalCode, mappedCode, reason = hostRetry.StopReason ?? hostRetry.Candidate,
+                            upstreamRequestId = ResponseHeader(response, "x-request-id"),
+                            upstreamTraceId = ResponseHeader(response, "x-trace-id"), gatewayRay = ResponseHeader(response, "cf-ray") });
                 return Completed(output, originalCode);
             }
         }

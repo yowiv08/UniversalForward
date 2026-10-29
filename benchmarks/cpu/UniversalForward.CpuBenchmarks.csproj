@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>UniversalForward.Tests</AssemblyName>
+    <RootNamespace>UniversalForward.CpuBenchmarks</RootNamespace>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin\**;obj\**</DefaultItemExcludes>
+    <ContractsBin Condition="'$(ContractsBin)' == ''">$(PluginBin)</ContractsBin>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Plugins.UniversalForward">
+      <HintPath>$(PluginBin)\Plugins.UniversalForward.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Router.Contracts">
+      <HintPath>$(ContractsBin)\Router.Contracts.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <Target Name="RequirePluginBin" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(PluginBin)\Plugins.UniversalForward.dll')" Text="PluginBin must identify an already built plugin directory." />
+    <Error Condition="!Exists('$(ContractsBin)\Router.Contracts.dll')" Text="ContractsBin must identify an already built Router.Contracts.dll directory." />
+  </Target>
+</Project>

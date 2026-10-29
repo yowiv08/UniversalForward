@@ -19,7 +19,7 @@ public sealed class ModelDiscoveryDiagnosticsTests
     [DataRow(200, "{\"data\":[]}", "application/json")]
     [DataRow(401, "{\"error\":{\"message\":\"client denied\",\"detail\":\"full detail\"}}", "application/json")]
     [DataRow(429, "rate limited\ntry later", "text/plain")]
-    public async Task FailuresPreserveBodyAndMetadata(int status, string body, string type)
+    public async Task FailuresPreserveApiDiagnosticButLogsOnlyIncludeMetadata(int status, string body, string type)
     {
         var (text, host) = await Discover(_ => new HttpResponseMessage((HttpStatusCode)status)
         {
@@ -32,7 +32,13 @@ public sealed class ModelDiscoveryDiagnosticsTests
         StringAssert.Contains(text, type);
         StringAssert.Contains(text, body.Length == 0 ? "响应正文为空" : body);
         var log = Mock.Get(host.Services.Log).Invocations.Select(i => i.Arguments[0]).OfType<PluginLog>().Single();
-        StringAssert.Contains(JsonSerializer.Serialize(log), JsonSerializer.Serialize(body.Length == 0 ? "响应正文为空" : body)[1..^1]);
+        StringAssert.Contains(log.Message, $"HTTP: {status}");
+        StringAssert.Contains(log.Message, "请求地址: https://upstream.example/v1/models");
+        StringAssert.Contains(log.Message, "最终地址: https://upstream.example/login");
+        StringAssert.Contains(log.Message, type);
+        var logged = JsonSerializer.Serialize(log);
+        Assert.IsFalse(logged.Contains(JsonSerializer.Serialize(body.Length == 0 ? "响应正文为空" : body)[1..^1], StringComparison.Ordinal));
+        Assert.IsFalse(logged.Contains(JsonSerializer.Serialize("响应正文:")[1..^1], StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -57,6 +63,49 @@ public sealed class ModelDiscoveryDiagnosticsTests
         StringAssert.Contains(text, "HttpRequestException: TLS failure [REDACTED]");
         StringAssert.Contains(text, "HTTP: 未收到响应");
         StringAssert.Contains(text, "https://upstream.example/v1/models");
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task DiscoveryAndRefreshJournalExcludeBodyFromFailureDiagnostic(bool refresh)
+    {
+        const string body = "private gateway response body";
+        var account = ChannelKeysTests.Account([new ChannelKey { Id = "key", Secret = "draft-secret" }]);
+        var host = ChannelKeysTests.Host(account);
+        using var handler = new Handler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "text/plain")
+        });
+        Mock.Get(host.Services.Http).Setup(value => value.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
+            .Returns(() => new HttpClient(handler, false));
+        using var store = new RequestLogStore();
+        using var terminal = new UniversalForwardTerminal(host) { RequestLogs = store };
+
+        var result = refresh
+            ? await terminal.RefreshModelsAsync(ChannelKeysTests.Context(new { id = account.Id }))
+            : await terminal.DiscoverModelsAsync(ChannelKeysTests.Context(new { baseUrl = "https://upstream.example", apiKey = "draft-secret" }));
+
+        Assert.AreEqual(401, result.StatusCode);
+        StringAssert.Contains(FindError(JsonSerializer.SerializeToElement(result))!, body);
+        await store.FlushAsync();
+        var rows = JsonSerializer.SerializeToNode(store.List(new Dictionary<string, string>()), RequestLogStore.Json)!["rows"]!.AsArray();
+        Assert.AreEqual(1, rows.Count);
+        var detail = store.Detail(rows[0]!["id"]!.GetValue<string>())!;
+        var parts = detail["parts"]!.AsArray();
+        Assert.IsFalse(parts.Any(part => part!["name"]!.GetValue<string>() == "attempt-1-response"));
+        var errorPart = JsonSerializer.SerializeToNode(store.ReadPart(detail["id"]!.GetValue<string>(), "error", -1), RequestLogStore.Json)!;
+        var errorText = string.Concat(errorPart["chunks"]!.AsArray().Select(chunk =>
+            Encoding.UTF8.GetString(Convert.FromBase64String(chunk!["base64"]!.GetValue<string>()))));
+        StringAssert.Contains(errorText, "HTTP: 401");
+        StringAssert.Contains(errorText, "https://upstream.example/v1/models");
+        StringAssert.Contains(errorText, "text/plain");
+        Assert.IsFalse(errorText.Contains(body, StringComparison.Ordinal));
+        Assert.IsFalse(errorText.Contains("响应正文:", StringComparison.Ordinal));
+        var log = Mock.Get(host.Services.Log).Invocations.Select(call => call.Arguments[0]).OfType<PluginLog>().Single();
+        Assert.IsFalse(JsonSerializer.Serialize(log).Contains(body, StringComparison.Ordinal));
+        StringAssert.Contains(log.Message, "HTTP: 401");
+        StringAssert.Contains(log.Message, "https://upstream.example/v1/models");
     }
 
     [TestMethod]

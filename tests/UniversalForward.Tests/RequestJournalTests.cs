@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -24,6 +25,12 @@ public sealed class RequestJournalTests
         }
     }
     private static JsonElement Json(object value) => JsonSerializer.SerializeToElement(value, RequestLogStore.Json);
+    private static int PendingGaps(RequestLogStore store)
+    {
+        var gaps = (System.Collections.Concurrent.ConcurrentDictionary<string, byte>)typeof(RequestLogStore)
+            .GetField("_gaps", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
+        return gaps.Count;
+    }
     private static async Task<string> ReadBody(RequestLogStore store, string id, string part)
     {
         await store.FlushAsync();
@@ -66,7 +73,7 @@ public sealed class RequestJournalTests
     }
 
     [TestMethod]
-    public async Task CapturePreservesHeadersPayloadAndUpstreamReasoningAcrossRetries()
+    public async Task CapturePreservesHeadersAndUpstreamReasoningAcrossRetriesWithoutUpstreamBodies()
     {
         using var store = new RequestLogStore();
         var account = ChannelKeysTests.Account([new ChannelKey { Id = "key", Secret = "real-api-key" }], 1);
@@ -103,8 +110,10 @@ public sealed class RequestJournalTests
         Assert.IsFalse(row.GetProperty("hostContinuationAllowed").GetBoolean());
         Assert.AreEqual("success", row.GetProperty("hostContinuationReason").GetString());
         StringAssert.Contains(await ReadBody(store, id, "attempt-2-request-headers"), "real-api-key");
-        StringAssert.Contains(await ReadBody(store, id, "attempt-2-request"), "private prompt");
-        StringAssert.Contains(await ReadBody(store, id, "attempt-2-response"), "private answer");
+        Assert.AreEqual("", await ReadBody(store, id, "attempt-2-request"));
+        Assert.AreEqual("", await ReadBody(store, id, "attempt-2-response"));
+        Assert.IsFalse(store.Detail(id)!["parts"]!.AsArray().Any(part =>
+            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
         StringAssert.Contains(store.Detail(id)!["attempts"]![0]!["retryReason"]!.ToString(), "502");
     }
 
@@ -125,8 +134,86 @@ public sealed class RequestJournalTests
         while ((count = await stream.ReadAsync(bytes)) > 0) output.Write(bytes, 0, count);
         capture.Complete("completed", 200);
         Assert.AreEqual(body, Encoding.UTF8.GetString(output.ToArray()));
-        Assert.AreEqual(body, await ReadBody(store, capture.Id, "attempt-1-response"));
+        Assert.AreEqual("", await ReadBody(store, capture.Id, "attempt-1-response"));
         Assert.AreEqual("low", store.Detail(capture.Id)!["reportedReasoning"]!["reasoning.effort"]!.ToString());
+    }
+
+    [TestMethod]
+    public async Task LongSentAndResponseBodiesDoNotIncreaseRetainedBodyBytes()
+    {
+        using var store = new RequestLogStore();
+        var capture = Begin(store);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://upstream.example/v1/responses");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "kept-key");
+        var payload = Encoding.UTF8.GetBytes("{\"model\":\"sent-model\",\"reasoning\":{\"effort\":\"high\"},\"input\":\""
+            + new string('x', 512 * 1024) + "\"}");
+        var number = capture.Sending(request, payload);
+        const string start = "data: {\"response\":{\"model\":\"reported-model\",\"reasoning\":{\"effort\":\"low\"}}}\n\n";
+        const string delta = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"";
+        var body = start + delta + new string('y', 512 * 1024) + "\"}\n\n";
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(body, Encoding.UTF8, "text/event-stream") };
+        capture.Received(number, response);
+        await store.FlushAsync();
+        var retainedBeforeResponse = Json(store.Status).GetProperty("bodyBytes").GetInt64();
+        var expectedRetained = Encoding.UTF8.GetByteCount(await ReadBody(store, capture.Id, "incoming-headers"))
+            + Encoding.UTF8.GetByteCount(await ReadBody(store, capture.Id, "incoming"))
+            + Encoding.UTF8.GetByteCount(await ReadBody(store, capture.Id, "extensions"))
+            + Encoding.UTF8.GetByteCount(await ReadBody(store, capture.Id, "attempt-1-request-headers"))
+            + Encoding.UTF8.GetByteCount(await ReadBody(store, capture.Id, "attempt-1-response-headers"));
+        Assert.AreEqual((long)expectedRetained, retainedBeforeResponse,
+            "Sending a long payload must retain only incoming data and request/response headers.");
+
+        using (var source = await response.Content.ReadAsStreamAsync())
+        using (var output = new MemoryStream())
+        {
+            await source.CopyToAsync(output);
+            Assert.AreEqual(body, Encoding.UTF8.GetString(output.ToArray()));
+        }
+        capture.Complete("completed", 200);
+        await store.FlushAsync();
+        Assert.AreEqual(retainedBeforeResponse, Json(store.Status).GetProperty("bodyBytes").GetInt64(),
+            "Reading the response must not retain its body bytes.");
+        var detail = store.Detail(capture.Id)!;
+        Assert.AreEqual("sent-model", detail["sentModel"]!.ToString());
+        Assert.AreEqual("reported-model", detail["reportedModel"]!.ToString());
+        Assert.AreEqual("low", detail["reportedReasoning"]!["reasoning.effort"]!.ToString());
+        Assert.IsNotNull(detail["firstByteMs"]);
+        Assert.IsFalse(detail["parts"]!.AsArray().Any(part =>
+            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
+        StringAssert.Contains(await ReadBody(store, capture.Id, "attempt-1-request-headers"), "kept-key");
+    }
+
+    [TestMethod]
+    public async Task UpstreamBodyGuardIgnoresLegacyCallsWithoutCreatingPartsOrQueueWrites()
+    {
+        using var store = new RequestLogStore(32);
+        var capture = Begin(store);
+        await store.FlushAsync();
+        var before = Json(store.Status).GetProperty("bodyBytes").GetInt64();
+        var bytes = Encoding.UTF8.GetBytes(new string('x', 512 * 1024));
+        var text = Encoding.UTF8.GetString(bytes);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        Assert.IsTrue(store.Enqueue("", _ => { entered.Set(); release.Wait(TimeSpan.FromSeconds(10)); }));
+        Assert.IsTrue(entered.Wait(TimeSpan.FromSeconds(5)));
+        try
+        {
+            foreach (var name in new[] { "attempt-1-request", "attempt-1-response", "attempt-1-websocket-events", "attempt-99-response" })
+            {
+                capture.AddText(name, text);
+                capture.Observe(name, bytes);
+                capture.EndPart(name, false);
+            }
+        }
+        finally { release.Set(); }
+        await store.FlushAsync();
+        Assert.AreEqual(before, Json(store.Status).GetProperty("bodyBytes").GetInt64());
+        Assert.AreEqual(0L, Json(store.Status).GetProperty("droppedWrites").GetInt64(),
+            "Ignored upstream body calls must not enqueue any writes.");
+        Assert.IsFalse(store.Detail(capture.Id)!["incomplete"]?.GetValue<bool>() ?? false);
+        Assert.IsFalse(store.Detail(capture.Id)!["parts"]!.AsArray().Any(part =>
+            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
     }
 
     [TestMethod]
@@ -169,6 +256,31 @@ public sealed class RequestJournalTests
         await store.FlushAsync();
         var row = Json(store.List(new Dictionary<string, string>())).GetProperty("rows")[0];
         Assert.IsTrue(row.GetProperty("incomplete").GetBoolean());
+        Assert.AreEqual(0, PendingGaps(store), "Applied gaps must not be scanned again on every subsequent write.");
+    }
+
+    [TestMethod]
+    public async Task OverflowForUninsertedRecordsDoesNotRetainPendingGaps()
+    {
+        using var store = new RequestLogStore(2);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        Assert.IsTrue(store.Enqueue("", _ => { entered.Set(); release.Wait(TimeSpan.FromSeconds(10)); }));
+        Assert.IsTrue(entered.Wait(TimeSpan.FromSeconds(5)));
+        try
+        {
+            Assert.IsTrue(store.Enqueue("", _ => { }));
+            Assert.IsTrue(store.Enqueue("", _ => { }));
+            for (var i = 0; i < 128; i++)
+                Assert.IsFalse(store.Enqueue("missing-" + i, _ => { }));
+            var rejected = Begin(store);
+            rejected.Complete("completed", 200);
+        }
+        finally { release.Set(); }
+        await store.FlushAsync();
+        Assert.AreEqual(0, PendingGaps(store), "IDs without an accepted insert must not remain as permanent gaps.");
+        Assert.AreEqual(0, Json(store.Status).GetProperty("records").GetInt32());
+        Assert.IsTrue(Json(store.Status).GetProperty("droppedWrites").GetInt64() > 0);
     }
 
     [TestMethod]
@@ -230,6 +342,7 @@ public sealed class RequestJournalTests
         Assert.IsNull(store.Detail(overflow.Id));
         Assert.AreEqual(1, Json(store.Status).GetProperty("records").GetInt32());
         Assert.IsTrue(Json(store.Status).GetProperty("droppedWrites").GetInt64() > 0);
+        Assert.AreEqual(0, PendingGaps(store), "Record-limit rejection must not leave a permanent pending gap.");
     }
 
     [TestMethod]

@@ -64,7 +64,7 @@ mode 支持 off、append、replace；text 最多 32000 个 UTF-16 单元，保�
 
 执行顺序为：选择实际上游协议 → 客户端模板补全／生成测试请求 → 思考等级映射 → 系统提示词处理 → Responses 资源状态剥离 → HTTP 或 WebSocket 发送。内部重试复用处理后的请求体，宿主下一次尝试基于原始请求重新处理，避免累积追加。模型获取不经过该处理。
 
-日志元数据 systemPromptRewrite 记录 mode、field、textLength、removedMessages、templateIdentityPreserved，不重复放入提示词全文。原有 received 与 attempt-N-request 内容仍可用于核对完整前后请求。
+日志元数据 systemPromptRewrite 记录 mode、field、textLength、removedMessages、templateIdentityPreserved，不重复放入提示词全文。从 v0.3.9 起，日志保留插件收到的请求正文，改写结果通过这些元数据核对；实际发送正文停止采集。
 
 ## 验证
 

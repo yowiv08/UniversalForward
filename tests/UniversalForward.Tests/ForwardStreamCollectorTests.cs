@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Plugins.UniversalForward;
 
@@ -64,6 +65,73 @@ public sealed class ForwardStreamCollectorTests
         Assert.AreEqual(19, message["usage"]!["input_tokens"]!.GetValue<int>());
         Assert.AreEqual(8, message["usage"]!["cache_read_input_tokens"]!.GetValue<int>());
         Assert.AreEqual(10, message["usage"]!["output_tokens"]!.GetValue<int>());
+    }
+
+    [TestMethod]
+    public async Task LongResponsesEventAcrossChunksUsesBoundedAllocations()
+    {
+        await ForwardStreamCollector.CollectAsync(
+            Chunks("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n", 7),
+            "/v1/responses", CancellationToken.None);
+        var text = new string('x', 1024 * 1024) + "你好😀";
+        var frames = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\""
+            + text + "\"}]}],\"unknown\":\"keep\"}}\n\n";
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        // This in-memory source completes synchronously, keeping the allocation measurement on one thread.
+        var collection = ForwardStreamCollector.CollectAsync(Chunks(frames, 4093), "/v1/responses", CancellationToken.None);
+        Assert.IsTrue(collection.IsCompletedSuccessfully);
+        var bytes = await collection;
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        var response = JsonNode.Parse(bytes)!;
+        Assert.AreEqual(text, response["output"]![0]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.AreEqual("keep", response["unknown"]!.GetValue<string>());
+        // Re-copying the unfinished line on each chunk allocates over 250 MiB for this input.
+        Assert.IsLessThan(96L * 1024 * 1024, allocated, $"Collector allocated {allocated} bytes for a 1 MiB event.");
+    }
+
+    [TestMethod]
+    public async Task ClaudeInterleavedDeltasKeepInitialContentWithBoundedAllocations()
+    {
+        const string start = "data: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"content\":[]}}\n\n";
+        const string end = "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n";
+        await ForwardStreamCollector.CollectAsync(Chunks(start + end, 7), "/v1/messages", CancellationToken.None);
+        const int count = 2048;
+        var textDelta = new string('x', 256);
+        var thinkingDelta = new string('y', 128);
+        var signatureDelta = new string('z', 64);
+        var frames = new StringBuilder(start);
+        frames.Append("data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"text\",\"text\":\"prefix-你好\",\"unknown\":\"keep\"}}\n\n");
+        frames.Append("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"initial-thinking-\",\"signature\":\"initial-signature-\"}}\n\n");
+        var textEvent = Delta(2, "text_delta", "text", textDelta);
+        var thinkingEvent = Delta(0, "thinking_delta", "thinking", thinkingDelta);
+        var signatureEvent = Delta(0, "signature_delta", "signature", signatureDelta);
+        for (var i = 0; i < count; i++) frames.Append(textEvent).Append(thinkingEvent).Append(signatureEvent);
+        frames.Append("data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"untouched\"}}\n\n");
+        foreach (var index in new[] { 2, 1, 0 })
+            frames.Append("data: {\"type\":\"content_block_stop\",\"index\":").Append(index).Append("}\n\n");
+        frames.Append(end);
+        var input = frames.ToString();
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var collection = ForwardStreamCollector.CollectAsync(Chunks(input, 4093), "/v1/messages", CancellationToken.None);
+        Assert.IsTrue(collection.IsCompletedSuccessfully);
+        var bytes = await collection;
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        var content = JsonNode.Parse(bytes)!["content"]!.AsArray();
+        Assert.HasCount(3, content);
+        Assert.AreEqual("initial-thinking-" + string.Concat(Enumerable.Repeat(thinkingDelta, count)), content[0]!["thinking"]!.GetValue<string>());
+        Assert.AreEqual("initial-signature-" + string.Concat(Enumerable.Repeat(signatureDelta, count)), content[0]!["signature"]!.GetValue<string>());
+        Assert.AreEqual("untouched", content[1]!["text"]!.GetValue<string>());
+        Assert.AreEqual("prefix-你好" + string.Concat(Enumerable.Repeat(textDelta, count)), content[2]!["text"]!.GetValue<string>());
+        Assert.AreEqual("keep", content[2]!["unknown"]!.GetValue<string>());
+        // Rebuilding accumulated strings for each delta allocates over 1 GiB for this input.
+        Assert.IsLessThan(128L * 1024 * 1024, allocated, $"Collector allocated {allocated} bytes for interleaved deltas.");
+
+        static string Delta(int index, string type, string property, string value)
+            => "data: " + JsonSerializer.Serialize(new JsonObject
+            {
+                ["type"] = "content_block_delta", ["index"] = index,
+                ["delta"] = new JsonObject { ["type"] = type, [property] = value }
+            }) + "\n\n";
     }
 
     [TestMethod]

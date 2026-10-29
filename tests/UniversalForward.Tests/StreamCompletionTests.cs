@@ -50,8 +50,8 @@ public sealed class StreamCompletionTests
         Assert.AreEqual("completed", row.GetProperty("state").GetString());
         Assert.IsFalse(row.TryGetProperty("incomplete", out var incomplete) && incomplete.GetBoolean());
         var detail = logs.Detail(row.GetProperty("id").GetString()!)!;
-        var responsePart = detail["parts"]!.AsArray().Single(part => part!["name"]!.ToString() == "attempt-1-response")!;
-        Assert.IsFalse(responsePart["truncated"]!.GetValue<bool>());
+        Assert.IsFalse(detail["parts"]!.AsArray().Any(part =>
+            RequestLogStore.IsUpstreamBodyPart(part!["name"]!.ToString())));
         Assert.IsFalse(Mock.Get(host.Services.Log).Invocations.Select(call => call.Arguments[0])
             .OfType<PluginLog>().Any(log => log.EventType == "request.stream.failed"));
     }

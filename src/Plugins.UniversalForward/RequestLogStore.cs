@@ -22,6 +22,7 @@ internal sealed class RequestLogStore : IDisposable
     private readonly object _gate = new();
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _gaps = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _pendingInserts = new(StringComparer.Ordinal);
     private readonly Channel<Action<RequestLogStore>> _queue;
     private readonly Task _writer;
     private RequestLogSettings _settings = new();
@@ -63,6 +64,18 @@ internal sealed class RequestLogStore : IDisposable
         Gap(id, "日志队列已满或采集已停止，部分内容未保留");
         return false;
     }
+    internal bool EnqueueInsert(string id, string json)
+    {
+        _pendingInserts.TryAdd(id, 0);
+        if (Enqueue(id, store =>
+        {
+            try { store.Insert(id, json); }
+            finally { store._pendingInserts.TryRemove(id, out _); }
+        })) return true;
+        _pendingInserts.TryRemove(id, out _);
+        _gaps.TryRemove(id, out _);
+        return false;
+    }
     private void Gap(string id, string error)
     {
         Interlocked.Increment(ref _dropped); Volatile.Write(ref _error, error);
@@ -80,8 +93,16 @@ internal sealed class RequestLogStore : IDisposable
     }
     private void ApplyGaps()
     {
-        foreach (var id in _gaps.Keys)
-            if (_entries.TryGetValue(id, out var entry)) entry.Info["incomplete"] = true;
+        if (_gaps.IsEmpty) return;
+        foreach (var gap in _gaps)
+        {
+            if (_entries.TryGetValue(gap.Key, out var entry))
+            {
+                entry.Info["incomplete"] = true;
+                _gaps.TryRemove(gap.Key, out _);
+            }
+            else if (!_pendingInserts.ContainsKey(gap.Key)) _gaps.TryRemove(gap.Key, out _);
+        }
     }
     public RequestLogCapture? Begin(string kind, string? channel, string? label, string? model,
         string? endpoint, string? network, string? trace, object? headers, string? body, string? extensions)
@@ -120,14 +141,28 @@ internal sealed class RequestLogStore : IDisposable
         if (!entry.Parts.TryGetValue(name, out var part)) entry.Parts[name] = part = new Part();
         return part;
     }
+    internal static bool IsUpstreamBodyPart(string name)
+    {
+        if (!name.StartsWith("attempt-", StringComparison.Ordinal)) return false;
+        var suffix = name.AsSpan(8);
+        var separator = suffix.IndexOf('-');
+        if (separator <= 0) return false;
+        foreach (var digit in suffix[..separator])
+            if (digit is < '0' or > '9') return false;
+        suffix = suffix[(separator + 1)..];
+        return suffix.SequenceEqual("request") || suffix.SequenceEqual("response")
+            || suffix.SequenceEqual("websocket-events");
+    }
     internal void EndPart(string id, string name, long observed, bool truncated)
     {
+        if (IsUpstreamBodyPart(name)) return;
         if (!_entries.TryGetValue(id, out var entry)) return;
         var part = GetPart(entry, name); part.Observed = observed; part.Truncated |= truncated;
         if (part.Truncated) entry.Info["incomplete"] = true;
     }
     internal void AppendChunk(string id, string name, long observed, byte[] chunk)
     {
+        if (IsUpstreamBodyPart(name)) return;
         if (!_entries.TryGetValue(id, out var entry)) return;
         var part = GetPart(entry, name); part.Observed = observed;
         while (_bodyBytes + chunk.Length > Settings.CapacityBytes && EvictOldest()) { }
@@ -225,6 +260,6 @@ internal sealed class RequestLogStore : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _queue.Writer.TryComplete(); _writer.GetAwaiter().GetResult();
-        lock (_gate) { foreach (var id in _entries.Keys.ToArray()) Remove(id); _gaps.Clear(); }
+        lock (_gate) { foreach (var id in _entries.Keys.ToArray()) Remove(id); _gaps.Clear(); _pendingInserts.Clear(); }
     }
 }

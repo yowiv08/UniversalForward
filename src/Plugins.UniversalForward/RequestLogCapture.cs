@@ -16,6 +16,8 @@ internal sealed class RequestLogCapture
     private readonly Stopwatch _watch = Stopwatch.StartNew();
     private readonly JsonObject _info;
     private readonly List<JsonObject> _attempts = [];
+    private readonly List<RequestTokenUsage> _tokenUsage = [];
+    private readonly bool _anthropic;
     private readonly Dictionary<string, Part> _parts = new(StringComparer.Ordinal);
     private int _finished;
     private readonly int _limit;
@@ -25,15 +27,17 @@ internal sealed class RequestLogCapture
         string? endpoint, string? network, string? trace, object? headers)
     {
         _store = store; _limit = store.Settings.BodyLimitBytes;
+        _anthropic = endpoint?.EndsWith("/messages", StringComparison.OrdinalIgnoreCase) == true;
         var started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         _info = new JsonObject
         {
             ["id"] = Id, ["started"] = started, ["kind"] = kind, ["channel"] = channel,
             ["channelLabel"] = label, ["model"] = model, ["requestedModel"] = model, ["endpoint"] = endpoint,
-            ["network"] = network, ["trace"] = trace, ["state"] = "running", ["retries"] = 0, ["internalSends"] = 0
+            ["network"] = network, ["trace"] = trace, ["state"] = "running", ["retries"] = 0, ["internalSends"] = 0,
+            ["tokenUsage"] = new RequestTokenUsage(_anthropic).ToJson()
         };
         var json = _info.ToJsonString();
-        _store.Enqueue(Id, c => c.Insert(Id, json));
+        _store.EnqueueInsert(Id, json);
         AddText("incoming-headers", JsonSerializer.Serialize(headers, RequestLogStore.Json));
     }
     private sealed class Part
@@ -44,14 +48,16 @@ internal sealed class RequestLogCapture
     }
     public void AddText(string name, string text)
     {
+        if (RequestLogStore.IsUpstreamBodyPart(name)) return;
         var bytes = Encoding.UTF8.GetBytes(text);
         Observe(name, bytes); EndPart(name, true);
         lock (_gate)
         {
             if (name == "incoming")
             {
-                _info["receivedReasoning"] = Reasoning(text);
-                _info["requestedModel"] = Model(text) ?? _info["model"]?.ToString();
+                var node = Parse(text);
+                _info["receivedReasoning"] = Reasoning(node);
+                _info["requestedModel"] = Model(node) ?? _info["model"]?.ToString();
             }
             if (name == "extensions") _info["extensionReasoning"] = Reasoning(text);
         }
@@ -82,6 +88,7 @@ internal sealed class RequestLogCapture
     }
     public void Observe(string name, ReadOnlySpan<byte> bytes)
     {
+        if (RequestLogStore.IsUpstreamBodyPart(name)) return;
         lock (_gate)
         {
             if (!_parts.TryGetValue(name, out var part)) _parts[name] = part = new Part();
@@ -98,6 +105,7 @@ internal sealed class RequestLogCapture
     }
     public void EndPart(string name, bool eof)
     {
+        if (RequestLogStore.IsUpstreamBodyPart(name)) return;
         lock (_gate)
         {
             if (!_parts.TryGetValue(name, out var part)) _parts[name] = part = new Part();
@@ -120,17 +128,23 @@ internal sealed class RequestLogCapture
         lock (_gate)
         {
             var number = _attempts.Count + 1;
-            var text = Encoding.UTF8.GetString(body);
+            var node = Parse(body);
+            var path = request.RequestUri?.AbsolutePath;
+            var anthropic = path?.EndsWith("/messages", StringComparison.OrdinalIgnoreCase) == true ? true
+                : path?.EndsWith("/responses", StringComparison.OrdinalIgnoreCase) == true ? false : _anthropic;
+            var tokens = new RequestTokenUsage(anthropic);
             var info = new JsonObject
             {
                 ["number"] = number, ["method"] = request.Method.Method, ["url"] = request.RequestUri?.ToString(),
                 ["transport"] = transport,
                 ["proxy"] = _info["proxy"]?.DeepClone(),
-                ["startedMs"] = _watch.ElapsedMilliseconds, ["sentReasoning"] = Reasoning(text),
-                ["sentModel"] = Model(text)
+                ["startedMs"] = _watch.ElapsedMilliseconds, ["sentReasoning"] = Reasoning(node),
+                ["sentModel"] = Model(node), ["tokenUsage"] = tokens.ToJson()
             };
             if (transport == "websocket") info["url"] = UpstreamWebSocket.Address(request.RequestUri!).ToString();
             _attempts.Add(info);
+            _tokenUsage.Add(tokens);
+            _info["tokenUsage"] = tokens.ToJson();
             _info["retries"] = number - 1;
             _info["sentReasoning"] = info["sentReasoning"]?.DeepClone();
             _info["sentModel"] = info["sentModel"]?.DeepClone();
@@ -139,7 +153,6 @@ internal sealed class RequestLogCapture
             _info["reasoningChanged"] = !JsonNode.DeepEquals(_info["receivedReasoning"], _info["sentReasoning"]);
             if (transport != "websocket")
                 AddText($"attempt-{number}-request-headers", JsonSerializer.Serialize(RequestHeaders(request), RequestLogStore.Json));
-            Observe($"attempt-{number}-request", body); EndPart($"attempt-{number}-request", true);
             SaveAttempt(number); Save();
             return number;
         }
@@ -226,32 +239,62 @@ internal sealed class RequestLogCapture
             Save(); _store.Enqueue(Id, c => c.Cleanup());
         }
     }
-    public static JsonObject Reasoning(string text)
+    private void CompleteInterrupted(string state, int status, string? error = null)
+    {
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _finished) != 0) return;
+            if (_info["firstByteMs"] is not null) _info["incomplete"] = true;
+            Complete(state, status, error);
+        }
+    }
+    private static readonly (string Name, string[] Keys)[] ReasoningPaths =
+    [
+        ("reasoning_effort", ["reasoning_effort"]), ("effort", ["effort"]),
+        ("reasoning.effort", ["reasoning", "effort"]), ("thinking.type", ["thinking", "type"]),
+        ("thinking.effort", ["thinking", "effort"]), ("thinking.budget_tokens", ["thinking", "budget_tokens"]),
+        ("output_config.effort", ["output_config", "effort"]),
+        ("usage.output_tokens_details.reasoning_tokens", ["usage", "output_tokens_details", "reasoning_tokens"]),
+        ("usage.completion_tokens_details.reasoning_tokens", ["usage", "completion_tokens_details", "reasoning_tokens"])
+    ];
+    public static JsonObject Reasoning(string text) => Reasoning(Parse(text));
+    private static JsonObject Reasoning(JsonNode? root)
     {
         var result = new JsonObject();
-        try
+        if (root is not JsonObject) return result;
+        foreach (var (name, keys) in ReasoningPaths)
         {
-            var root = JsonNode.Parse(text);
-            if (root is not JsonObject) return result;
-            foreach (var path in new[] { "reasoning_effort", "effort", "reasoning.effort", "thinking.type",
-                "thinking.effort", "thinking.budget_tokens", "output_config.effort",
-                "usage.output_tokens_details.reasoning_tokens", "usage.completion_tokens_details.reasoning_tokens" })
-            {
-                JsonNode? value = root;
-                foreach (var key in path.Split('.')) value = value is JsonObject obj ? obj[key] : null;
-                if (value is JsonValue) result[path] = value.DeepClone();
-            }
+            JsonNode? value = root;
+            foreach (var key in keys) value = value is JsonObject obj ? obj[key] : null;
+            if (value is JsonValue) result[name] = value.DeepClone();
         }
-        catch (JsonException) { }
         return result;
+    }
+    private static bool MergeReasoning(JsonObject target, JsonObject report)
+    {
+        if (report.Count == 0) return false;
+        var values = target["reportedReasoning"] as JsonObject;
+        var changed = false;
+        foreach (var (name, value) in report)
+        {
+            if (values is not null && JsonNode.DeepEquals(values[name], value)) continue;
+            if (values is null) { values = new JsonObject(); target["reportedReasoning"] = values; }
+            values[name] = value?.DeepClone(); changed = true;
+        }
+        return changed;
     }
     private static string? Model(JsonNode? node)
         => node is JsonObject obj && obj["model"] is JsonValue value
             && value.TryGetValue<string>(out var model) && !string.IsNullOrWhiteSpace(model) ? model : null;
 
-    private static string? Model(string text)
+    private static JsonNode? Parse(string text)
     {
-        try { return Model(JsonNode.Parse(text)); }
+        try { return JsonNode.Parse(text); }
+        catch (JsonException) { return null; }
+    }
+    private static JsonNode? Parse(ReadOnlySpan<byte> bytes)
+    {
+        try { return JsonNode.Parse(bytes); }
         catch (JsonException) { return null; }
     }
 
@@ -267,20 +310,31 @@ internal sealed class RequestLogCapture
                 else if (obj["message"] is JsonObject message) payload = message;
             }
             var model = Model(payload) ?? Model(node);
-            if (payload != node) text = payload!.ToJsonString();
-            var report = Reasoning(text);
-            if (report.Count == 0 && model is null) return;
+            var report = Reasoning(payload);
+            JsonNode? usage = null;
+            var hasUsage = payload is JsonObject fields && fields.TryGetPropertyValue("usage", out usage);
+            var anthropic = (node as JsonObject)?["type"]?.ToString() is "message_start" or "message_delta";
+            if (report.Count == 0 && model is null && !hasUsage) return;
             lock (_gate)
             {
                 var attempt = _attempts[number - 1];
-                if (report.Count > 0) attempt["reportedReasoning"] = report;
-                if (model is not null) attempt["reportedModel"] = model;
+                var attemptChanged = MergeReasoning(attempt, report);
+                if (model is not null && attempt["reportedModel"]?.ToString() != model)
+                { attempt["reportedModel"] = model; attemptChanged = true; }
+                var tokensChanged = hasUsage && _tokenUsage[number - 1].Observe(usage, anthropic);
+                if (tokensChanged)
+                { attempt["tokenUsage"] = _tokenUsage[number - 1].ToJson(); attemptChanged = true; }
+                var summaryChanged = false;
                 if (number == _attempts.Count)
                 {
-                    if (report.Count > 0) _info["reportedReasoning"] = report.DeepClone();
-                    if (model is not null) _info["reportedModel"] = model;
+                    summaryChanged = MergeReasoning(_info, report);
+                    if (model is not null && _info["reportedModel"]?.ToString() != model)
+                    { _info["reportedModel"] = model; summaryChanged = true; }
+                    if (tokensChanged)
+                    { _info["tokenUsage"] = _tokenUsage[number - 1].ToJson(); summaryChanged = true; }
                 }
-                SaveAttempt(number); Save();
+                if (attemptChanged) SaveAttempt(number);
+                if (summaryChanged) Save();
             }
         }
         catch (JsonException) { }
@@ -310,14 +364,18 @@ internal sealed class RequestLogCapture
         { length = _original.Headers.ContentLength ?? 0; return _original.Headers.ContentLength.HasValue; }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { _capture.EndPart($"attempt-{_number}-response", false); _original.Dispose(); }
+            if (disposing) { _stream?.Dispose(); _original.Dispose(); }
             base.Dispose(disposing);
         }
     }
     private sealed class CapturedStream(Stream source, RequestLogCapture capture, int number, bool sse) : Stream
     {
-        private readonly StringBuilder _text = new();
-        private readonly Decoder _decoder = Encoding.UTF8.GetDecoder();
+        private const int MetadataLimit = 1024 * 1024;
+        private readonly SseEventReader? _events = sse ? new(MetadataLimit, strictUtf8: false) : null;
+        private readonly Func<string, bool> _report = text => { capture.Report(number, text); return false; };
+        private readonly StringBuilder? _text = sse ? null : new();
+        private readonly Decoder? _decoder = sse ? null : Encoding.UTF8.GetDecoder();
+        private readonly char[]? _chars = sse ? null : new char[4096];
         private bool _oversize;
         public override bool CanRead => source.CanRead;
         public override bool CanSeek => false;
@@ -339,28 +397,33 @@ internal sealed class RequestLogCapture
                     if (capture._info["firstByteMs"] is null)
                     { capture._info["firstByteMs"] = capture._watch.ElapsedMilliseconds; capture.Save(); }
                 }
-                capture.Observe($"attempt-{number}-response", bytes);
             }
-            else capture.EndPart($"attempt-{number}-response", true);
             if (_oversize) return;
-            var chars = new char[Encoding.UTF8.GetMaxCharCount(bytes.Length)];
-            var count = _decoder.GetChars(bytes, chars, bytes.IsEmpty);
-            _text.Append(chars, 0, count);
-            if (sse)
+            if (_events is not null)
             {
-                var text = _text.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
-                int end;
-                while ((end = text.IndexOf("\n\n", StringComparison.Ordinal)) >= 0)
+                try
                 {
-                    var frame = text[..end]; text = text[(end + 2)..];
-                    capture.Report(number, string.Join("\n", frame.Split('\n').Where(l => l.StartsWith("data:", StringComparison.Ordinal)).Select(l => l[5..].TrimStart())));
+                    if (bytes.IsEmpty) _events.Complete();
+                    else _events.Observe(bytes, _report);
                 }
-                _text.Clear().Append(text);
+                catch (Exception error) when (error is IOException or InvalidDataException)
+                { _oversize = true; _events.Dispose(); }
+                return;
             }
-            else if (bytes.IsEmpty) capture.Report(number, _text.ToString());
-            if (_text.Length > 1024 * 1024) { _text.Clear(); _oversize = true; }
+            var eof = bytes.IsEmpty;
+            bool complete;
+            do
+            {
+                _decoder!.Convert(bytes, _chars.AsSpan(), eof, out var used, out var count, out complete);
+                if (_text!.Length + count > MetadataLimit)
+                { _text.Clear(); _oversize = true; return; }
+                _text.Append(_chars.AsSpan(0, count));
+                bytes = bytes[used..];
+            } while (!complete);
+            if (eof) capture.Report(number, _text!.ToString());
         }
-        protected override void Dispose(bool disposing) { if (disposing) source.Dispose(); base.Dispose(disposing); }
+        protected override void Dispose(bool disposing)
+        { if (disposing) { _events?.Dispose(); source.Dispose(); } base.Dispose(disposing); }
         public override void Flush() => throw new NotSupportedException();
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
@@ -370,7 +433,22 @@ internal sealed class RequestLogCapture
     public AdapterResponse Attach(AdapterResponse response)
     {
         if (response.RawStream is not { } stream)
-        { Complete(response.StatusCode is >= 200 and < 300 ? "completed" : "failed", response.StatusCode); return response; }
+        {
+            if (response.Usage is { } usage)
+            {
+                lock (_gate)
+                {
+                    if (_tokenUsage.Count > 0 && _tokenUsage[^1].FillMissing(usage))
+                    {
+                        _attempts[^1]["tokenUsage"] = _tokenUsage[^1].ToJson();
+                        _info["tokenUsage"] = _tokenUsage[^1].ToJson();
+                        SaveAttempt(_attempts.Count); Save();
+                    }
+                }
+            }
+            Complete(response.StatusCode is >= 200 and < 300 ? "completed" : "failed", response.StatusCode);
+            return response;
+        }
         return new AdapterResponse
         {
             StatusCode = response.StatusCode, IsStreaming = response.IsStreaming, Completion = response.Completion,
@@ -391,19 +469,19 @@ internal sealed class RequestLogCapture
                 bool next;
                 try { next = await enumerator.MoveNextAsync(); }
                 catch (Exception error)
-                { Complete(error is OperationCanceledException ? "cancelled" : "failed", status, error.Message); throw; }
+                { CompleteInterrupted(error is OperationCanceledException ? "cancelled" : "failed", status, error.Message); throw; }
                 if (!next) { Complete(status is >= 200 and < 300 ? "completed" : "failed", status); yield break; }
                 yield return enumerator.Current;
             }
         }
-        finally { Complete("interrupted", status); }
+        finally { CompleteInterrupted("interrupted", status); }
     }
     private sealed class CapturedLifetime(IAsyncDisposable? original, RequestLogCapture capture, int status) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
             try { if (original is not null) await original.DisposeAsync(); }
-            finally { capture.Complete("interrupted", status); }
+            finally { capture.CompleteInterrupted("interrupted", status); }
         }
     }
 }

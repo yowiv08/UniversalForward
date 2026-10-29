@@ -2,7 +2,7 @@
 
 Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配置和连接测试。
 
-**0.3.8 适配官方 Router2API 2.1.2（Router.Contracts 2.0.0）。** 新增渠道级系统提示词追加与替换，沿用现有渠道设置存储，无需数据库迁移。
+**0.3.9 适配官方 Router2API 2.1.2（Router.Contracts 2.0.0）。** 修复长流式响应的 CPU 与分配热点，停止记录发送／响应正文，并增加 Token 明细，无需数据库迁移。
 
 管理界面参考 shadcn/ui Dashboard 与 Ant Design 数据展示规范重构，使用黑白灰控件和侧栏导航。渠道管理与请求日志分别展示，渠道默认以卡片展示，可切换为列表；禁用渠道使用灰色背景与「已禁用」标识，文字保持清晰。点击名称或模型数量进入相应设置，启用／禁用按钮直接可用，更多菜单依次提供「日志」「复制」和「删除」。
 
@@ -101,7 +101,7 @@ HTTP 200 表示上游已开始正常响应，宿主尝试详情中的 `Healthy` 
 
 每次请求独立建立 WS 连接，发送 `response.create`，不发送 `stream` / `background` 字段。后台请求不受支持。客户端仍使用 HTTP / SSE，非流式请求汇总为 Responses JSON。不提供跨请求连接复用或连接内续接缓存；`previous_response_id` 是否可用取决于上游持久化能力。
 
-连接失败不回退 HTTP；首次有效输出前沿用渠道重试设置，输出后不重放。HTTP 4xx/5xx 握手拒绝保留上游响应；普通 HTTP 2xx 不算握手成功，按连接失败处理。WS 事件按顺序转换为 SSE。连接测试详情显示上游连接方式，日志保留真实握手状态、响应头和原始 WS 消息。
+连接失败不回退 HTTP；首次有效输出前沿用渠道重试设置，输出后不重放。HTTP 4xx/5xx 握手拒绝保留上游响应；普通 HTTP 2xx 不算握手成功，按连接失败处理。WS 事件按顺序转换为 SSE。连接测试详情显示上游连接方式，日志保留真实握手状态、响应头及从 WS 事件提取的响应元数据。
 
 配置地址继续填写 `http://` 或 `https://`，连接时自动使用对应的 `ws://` 或 `wss://`。协议参考：[OpenAI WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)。
 
@@ -121,7 +121,7 @@ HTTP 200 表示上游已开始正常响应，宿主尝试详情中的 `Healthy` 
 
 客户端需要携带完整对话历史；仅靠 `previous_response_id` 恢复的历史无法由插件补回。模型每轮重新推理，不再跨轮接续隐藏推理状态或历史推理摘要。若直接历史包含 `compaction` 加密检查点或 `item_reference` 引用，插件会在发送前返回 400，提示恢复完整历史；这些条目无法在删除密文或 ID 后恢复原内容，不能静默丢弃。
 
-渠道查询和 `accounts/save` 使用可选布尔字段 `stripResponsesResourceState`。传 `true` 开启，传 `false` 关闭，省略或传 `null` 保留已有设置；仍保存在渠道 settings JSON 中，无需宿主升级或数据库迁移。诊断事件 `request.responses.state.stripped` 分别记录 `strippedFields`（其他字段删除数）和 `removedReasoningItems`（推理条目移除数），现有请求日志可查看收到与实际发送的请求体。
+渠道查询和 `accounts/save` 使用可选布尔字段 `stripResponsesResourceState`。传 `true` 开启，传 `false` 关闭，省略或传 `null` 保留已有设置；仍保存在渠道 settings JSON 中，无需宿主升级或数据库迁移。诊断事件 `request.responses.state.stripped` 分别记录 `strippedFields`（其他字段删除数）和 `removedReasoningItems`（推理条目移除数），请求日志保留插件收到的请求及剥离结果元数据。
 
 剥离规则参考 [codex-strip-proxy](https://github.com/AnnaofArendelle/codex-strip-proxy)。
 
@@ -178,7 +178,7 @@ Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`。�
 
 规则在模板补全后、发送前处理，HTTP、SSE、WebSocket、连接测试共用；内部重试复用处理后的请求，宿主再次尝试从原始请求生成，避免重复追加。连接测试使用已保存设置，模型获取不应用。替换处理本次请求中的指令，上游保存的历史上下文仍由上游管理。
 
-`accounts/save` 接收 `systemPromptPolicy: { "mode": "append", "text": "请使用中文回答。" }`，`mode` 为 off／append／replace；省略或传 null 保留旧值。配置保存在现有渠道 settings JSON 中。日志元数据记录 `systemPromptRewrite`，完整的收到／发送请求仍可从原始内容核对。
+`accounts/save` 接收 `systemPromptPolicy: { "mode": "append", "text": "请使用中文回答。" }`，`mode` 为 off／append／replace；省略或传 null 保留旧值。配置保存在现有渠道 settings JSON 中。日志元数据记录 `systemPromptRewrite`，插件收到的请求正文仍可查看，改写结果通过这些元数据核对。
 
 ## 请求头配置
 
@@ -228,14 +228,16 @@ Codex 覆盖预设保留固定 User-Agent 和协议头，不重复填写会话�
 
 ## 请求日志
 
-- 「请求日志」提供筛选、原始请求与响应、重试记录、一键复制和分段导出。
+- 「请求日志」提供筛选、请求元信息、重试记录、Token 明细、一键复制和分段导出。实际发送正文、上游响应正文和 WebSocket 原始消息不再采集或导出；插件收到的请求、宿主扩展参数、请求／响应头和错误信息继续保留。
 - 列表默认每页 10 条，可切换为 25、50 或 100 条，并显示当前页和总页数；删除或清理日志后自动回到有效页。
 - 列表显示「本地请求模型」和「上游响应模型」，详情另显示「实际发送模型」。各次重试保留自己的发送与响应模型，摘要使用最后一次尝试。支持 JSON、Responses / Messages / Chat Completions SSE 和 Responses WebSocket，导出包含这些模型字段。
 - 上游响应模型取自响应正文中的有效 `model`；未返回时显示「未返回」，不使用请求模型补填。这是上游声明的名称，不能据此验证其内部实际运行的模型。
 - 思考参数分别显示插件收到的请求体、宿主扩展参数、实际发送内容和上游明确报告的值；未返回的值不作推断。
-- 模型和思考参数沿用 1 MiB 字符解析缓冲限制；超大 JSON 或单个 SSE 帧可能无法提取这些字段，正文保存受独立的正文限额控制。
+- 「Token 明细」显示输入 Token、输出 Token、缓存读取和缓存写入，各次重试独立记录，摘要使用最后一次尝试，不累加重试用量。数字使用千分位，合法零值显示 0，未报告或无效值显示「未返回」。Claude 输入总量包含缓存读取与写入，OpenAI 输入总量已含缓存，不重复相加。
+- 模型、思考参数和用量仅增量解析，元数据未变化时不重复保存。解析缓冲限制为 1 MiB 字符；超大 JSON 或单个 SSE 事件可能无法提取这些字段。非流式响应用量可由契约补充输入与输出，缺失缓存计数显示「未返回」；原始网络响应继续完整转发。
 - 原文包含密钥、Cookie 和对话内容，不脱敏；仅通过管理员插件端点访问，导出文件应妥善保管。
 - 日志及日志设置仅保存在本次运行内存，不写入磁盘，重启或重新加载插件后清空。
+- 日志操作队列默认最多 256 项，普通请求入队时不等待容量；队列满时丢弃日志操作并标记不完整。
 - 默认最多保留 1000 条，正文容量 64 MiB，每份正文最多 4 MiB；超限优先清理最旧的已结束日志。活动日志占满容量时丢弃新采集内容并提示，不影响转发。
 - 截断、采集缺失和异常中断均标记为不完整。日志故障不触发模型请求重试。
 

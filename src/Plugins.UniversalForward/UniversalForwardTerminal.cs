@@ -94,11 +94,12 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
     private readonly ChannelKeySelector _keySelector = new();
     private readonly ClientSessionResolver _clientSessions = new();
     private static List<ChannelKey> ReadKeys(ForwardApiSettings settings) => ChannelKeys.Read(settings.Keys, settings.ApiKey);
-    private bool IsAccountEligible(Account account, AdapterRequest request, bool connectionTest = false)
+    private bool IsAccountEligible(Account account, AdapterRequest request, bool connectionTest = false,
+        ForwardApiSettings? settings = null)
     {
         if (!SupportedEndpoints.Contains(NormalizeEndpoint(request.Endpoint), StringComparer.OrdinalIgnoreCase))
             return false;
-        var policy = GetAccountModelPolicy(account);
+        var policy = GetAccountModelPolicy(account, settings);
         if (policy is null || (!connectionTest && !policy.Enabled))
             return false;
         if (!policy.Endpoints.Contains(NormalizeEndpoint(request.Endpoint), StringComparer.OrdinalIgnoreCase))
@@ -106,12 +107,12 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         return policy.Models.Contains(request.Model, StringComparer.OrdinalIgnoreCase)
             || policy.Models.Contains(UpstreamModel(request.Model), StringComparer.OrdinalIgnoreCase);
     }
-    private AccountModelPolicy? GetAccountModelPolicy(Account account)
+    private AccountModelPolicy? GetAccountModelPolicy(Account account, ForwardApiSettings? settings = null)
     {
         var snapshot = Volatile.Read(ref _accountModelSnapshot);
         if (snapshot.Accounts.TryGetValue(account.Id, out var cached))
             return cached;
-        if (!TryReadSettings(account, out var settings))
+        if (settings is null && !TryReadSettings(account, out settings))
             return null;
         return new AccountModelPolicy(settings.Enabled && ReadKeys(settings).Any(k => k.Enabled), settings.Weight, settings.Endpoints, ReadModels(account));
     }

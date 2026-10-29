@@ -72,6 +72,12 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     await next.click();
     await expectPage(2, 2, 11, 1);
     await rows.getByRole('button', { name: '详情' }).click();
+    await frame.locator('#journalBody').filter({ hasText: '没有可查看的原始内容' }).waitFor();
+    assert.equal(await frame.locator('#journalPart option').count(), 0);
+    assert.equal(await frame.locator('#journalPart').isDisabled(), true);
+    assert.equal(await frame.locator('#journalRaw').isDisabled(), true);
+    assert.equal(await frame.locator('#journalJson').isDisabled(), true);
+    assert.equal(await frame.locator('#journalCopy').isDisabled(), true);
     await frame.locator('#journalDelete').click();
     await frame.locator('#confirmYes').click();
     await expectPage(1, 1, 10, 10);

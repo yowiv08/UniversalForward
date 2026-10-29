@@ -60,7 +60,7 @@ internal static class UpstreamWebSocket
             socket.Options.HttpVersionPolicy = HttpVersionPolicy.RequestVersionExact;
             await socket.ConnectAsync(Address(request.RequestUri!), invoker, cancellationToken);
             await socket.SendAsync(payload.AsMemory(), WebSocketMessageType.Text, true, cancellationToken);
-            var content = new StreamContent(new EventStream(socket, capture, attempt));
+            var content = new StreamContent(new EventStream(socket));
             content.Headers.ContentType = new("text/event-stream");
             var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content, RequestMessage = request };
             foreach (var header in handshake.Headers)
@@ -112,7 +112,7 @@ internal static class UpstreamWebSocket
         }
     }
 
-    private sealed class EventStream(ClientWebSocket socket, RequestLogCapture? capture, int attempt) : Stream
+    private sealed class EventStream(ClientWebSocket socket) : Stream
     {
         private const int MaxMessageBytes = 32 * 1024 * 1024;
         private static readonly UTF8Encoding Utf8 = new(false, true);
@@ -121,7 +121,6 @@ internal static class UpstreamWebSocket
         private int _offset;
         private bool _terminal;
         private int _disposed;
-        private string Part => $"attempt-{attempt}-websocket-events";
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
@@ -153,8 +152,6 @@ internal static class UpstreamWebSocket
                 }
                 catch (WebSocketException error) { throw new IOException("上游 WebSocket 中断: " + error.Message, error); }
                 var bytes = message.ToArray();
-                capture?.Observe(Part, bytes);
-                capture?.Observe(Part, "\n"u8);
                 string text;
                 string type;
                 try
@@ -173,7 +170,6 @@ internal static class UpstreamWebSocket
                 while (lines.ReadLine() is { } line) framed.Append("data: ").Append(line).Append('\n');
                 framed.Append('\n');
                 _pending = Utf8.GetBytes(framed.ToString()); _offset = 0;
-                if (_terminal) capture?.EndPart(Part, true);
             }
             var count = Math.Min(buffer.Length, _pending.Length - _offset);
             _pending.AsMemory(_offset, count).CopyTo(buffer);
@@ -184,7 +180,6 @@ internal static class UpstreamWebSocket
         {
             if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0)
             {
-                capture?.EndPart(Part, _terminal);
                 socket.Dispose();
             }
             base.Dispose(disposing);

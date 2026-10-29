@@ -5,6 +5,13 @@ namespace Plugins.UniversalForward;
 
 public sealed partial class UniversalForwardTerminal
 {
+    private static string? ModelDiagnosticLog(string? diagnostic)
+    {
+        const string bodyMarker = "\n响应正文:\n";
+        var bodyStart = diagnostic?.IndexOf(bodyMarker, StringComparison.Ordinal) ?? -1;
+        return bodyStart >= 0 ? diagnostic![..bodyStart] : diagnostic;
+    }
+
     private static string ModelResponseDiagnostic(ForwardApiSettings settings, HttpRequestMessage request,
         HttpResponseMessage? response, string? body, string? error = null)
     {
