@@ -1,6 +1,6 @@
 # 渠道系统提示词设计与开源参考
 
-UniversalForward 0.3.8 提供渠道级的系统提示词规则：不改写、追加、替换。规则保存在渠道 settings JSON 中，作用于该渠道的所有模型，默认不改写。本功能沿用现有保存接口和转发链路。
+UniversalForward 从 0.3.8 起提供渠道级的系统提示词规则：不改写、追加、替换。规则保存在渠道 settings JSON 中，作用于该渠道的所有模型，默认不改写。本功能沿用现有保存接口和转发链路。当前实现把插件文本放在本次请求的最后一条系统指令中，不再只拼接到原 instructions 字符串。
 
 ## 开源实现核查
 
@@ -33,19 +33,25 @@ LiteLLM 核查提交 `c7c895db456eda349a7be9661b4b21f578f9b589`：
 
 | 协议与原值 | 追加 | 替换 |
 | --- | --- | --- |
-| Responses instructions 字符串 | 原文 + 两个换行 + 渠道文本；保留 input 指令消息 | 设为渠道文本，删除 input 中普通 system／developer 指令消息 |
-| Responses instructions 缺失、null 或空串 | 使用渠道文本 | 使用渠道文本 |
-| Claude system 字符串 | 原文 + 两个换行 + 渠道文本 | 使用渠道文本 |
-| Claude system 块数组 | 末尾新增 text 块；原块及缓存属性保留 | 使用渠道文本 |
-| Claude system 缺失、null 或空串 | 使用渠道文本 | 使用渠道文本 |
+| Responses instructions 字符串 | 原文转为首条 developer 消息；普通旧 system 消息改为 developer；渠道文本作为 input 的最后一条 system 消息 | 删除原 instructions 及 input 中普通 system／developer 指令消息；渠道文本作为最后一条 system 消息 |
+| Responses instructions 缺失、null 或空串 | 无原 instructions 消息；渠道文本作为最后一条 system 消息 | 渠道文本作为最后一条 system 消息 |
+| Claude system 字符串 | 原文转为第一个 text 块；渠道文本作为最后一个独立 text 块 | 只包含渠道文本的 system 数组 |
+| Claude system 块数组 | 末尾新增 text 块；原块及缓存属性保留 | 只包含渠道文本的 system 数组 |
+| Claude system 缺失、null 或空串 | 只包含渠道文本的 system 数组 | 只包含渠道文本的 system 数组 |
 
-Responses 删除只检查 input 数组的直接对象，类型须缺失或为 message，role 须为 system 或 developer。显式工具项、无法识别的类型、带非空动态 tools 声明的消息和嵌套字段保留。用户与助手消息、工具调用、工具结果、顶层工具定义、思考参数及其他协议字段沿用原流程。
+Responses 对旧指令的删除或角色降级只检查 input 数组的直接对象，类型须缺失或为 message，role 须为 system 或 developer。显式工具项、无法识别的类型、带非空动态 tools 声明的消息和嵌套字段保留。字符串 input 转为原文不变的 user 消息；追加遇到非字符串 instructions，或改写遇到非字符串／数组的 input 时，在修改前返回明确错误。顶层 instructions 保留为空字符串以兼容 Codex，渠道文本只出现一次。用户与助手消息、工具调用、工具结果、顶层工具定义、思考参数及其他协议字段沿用原流程。
 
-Claude Code 请求头模板仍要求客户端身份段。替换后使用既有模板身份补全，再发送自定义系统文本；管理员界面明确说明这一例外。追加保留原块，方便上游继续利用原有缓存前缀。
+Claude Code 请求头模板仍要求客户端身份段。替换后使用既有模板身份补全，身份段在前，插件文本仍在最后；管理员界面明确说明这一例外。追加保留原块，方便上游继续利用原有缓存前缀。
 
 追加遇到错误类型的 instructions／system 时返回明确的请求错误，不把对象或数字转为文本。替换直接写入合法文本。不改写沿用全部已有处理，不因为本功能验证或改写客户端指令。
 
 替换只处理本次请求中的指令；通过 previous_response_id 引用或其他上游机制保存的历史仍由上游管理，插件不能清除未提供的远程上下文。
+
+## 优先级与文本边界
+
+2026-11-01 核对 [OpenAI Docs 的消息角色说明](https://developers.openai.com/api/docs/guides/prompt-engineering)和 [Responses Create API](https://developers.openai.com/api/reference/resources/responses/methods/create)：system／developer 属于指令层级，input 的普通 user 消息层级较低，instructions 表示插入上下文的系统或开发者消息。API 没有可填写的数值优先级。插件使用显式的 system 角色，将普通旧系统消息降为 developer，并把插件消息放到 input 末尾，避免后面的普通客户端指令抢占同一层级。
+
+填写的文本原样发送，包括空格、换行和形如 `{api_key}` 的字面内容。插件不自动写入前缀、后缀或“冲突时以插件规则为准”之类的文字。Claude 的 system 块之间没有单独优先级字段，保留旧块时只能采用最后一个独立系统块；若需要只保留插件普通指令，使用替换模式。动态工具声明保留原角色，不能据此声称所有条目都已降级。插件无法控制上游在接收请求后追加的规则，也不能保证模型完全遵循。
 
 ## 设置与执行顺序
 
@@ -64,10 +70,10 @@ mode 支持 off、append、replace；text 最多 32000 个 UTF-16 单元，保�
 
 执行顺序为：选择实际上游协议 → 客户端模板补全／生成测试请求 → 思考等级映射 → 系统提示词处理 → Responses 资源状态剥离 → HTTP 或 WebSocket 发送。内部重试复用处理后的请求体，宿主下一次尝试基于原始请求重新处理，避免累积追加。模型获取不经过该处理。
 
-日志元数据 systemPromptRewrite 记录 mode、field、textLength、removedMessages、templateIdentityPreserved，不重复放入提示词全文。从 v0.3.10 起，收到与实际发送的请求正文均停止采集，改写结果通过这些元数据核对。
+日志元数据 systemPromptRewrite 记录 mode、field、textLength、removedMessages、demotedMessages、priorityRole（system）、placement（last）、templateIdentityPreserved，不重复放入提示词全文。Responses 的 field 为 input，Messages 的 field 为 system。从 v0.3.10 起，收到与实际发送的请求正文均停止采集，改写结果通过这些元数据核对。
 
 ## 验证
 
-SystemPromptPolicyTests 检查字段边界、Claude 缓存块、默认关闭、文本校验、持久化、内部重试、模板、连接测试及 WebSocket。HostAdaptationTests 补充真实宿主执行器的 3×3 次发送及映射切换，检查始终只追加一次并保留原始请求。
+SystemPromptPolicyTests 检查末尾系统角色、晚出现的旧指令降级、原文与工具历史保留、不添加额外文本、字段边界、Claude 缓存块、默认关闭、文本校验、持久化、内部重试、模板、连接测试及 WebSocket。RequestPreparationTests 检查状态剥离后系统消息仍在末尾。HostAdaptationTests 补充真实宿主执行器的 3×3 次发送及映射切换，检查始终只追加一次并保留原始请求。这些验证检查实际发送结构，未调用收费模型来测量指令遵循概率。
 
 system-prompt.cjs 在不含 allow-same-origin 的 iframe 沙箱中检查模式和页签键盘操作、草稿及失败恢复、复制、长度和空白校验、文本对比度及 320px／390px 布局。使用本地模拟宿主和上游进行验证。

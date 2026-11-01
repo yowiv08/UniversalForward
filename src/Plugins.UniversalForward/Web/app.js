@@ -137,7 +137,8 @@
       if (active) $(id).setAttribute('aria-current', 'page'); else $(id).removeAttribute('aria-current');
     }
     closeNavigation();
-    window.scrollTo({ top: 0 });
+    const content = page === 'journal' ? $('journal').querySelector('.journal-content') : $('channelsWorkspace');
+    content.scrollTo({ top: 0, left: 0 });
   }
   $('showChannels').onclick = () => { closeJournal(); $('statusFilter').value = 'all'; render(); };
   for (const [id, state] of [['showEnabled', 'enabled'], ['showDisabled', 'disabled']]) $(id).onclick = () => {
@@ -484,8 +485,8 @@
     const mode = form.elements.systemPromptMode.value;
     const hints = {
       off: '当前不改写系统提示词，下面的文字会保留；选择追加或替换后可编辑。',
-      append: '保留原系统提示词，在后面补充你填写的内容。',
-      replace: '使用下方内容覆盖原系统提示词；Claude Code 模板会保留必要的客户端身份声明。'
+      append: '保留原提示词，将下方内容作为最后一条系统指令；Responses 中普通旧 system 消息改为 developer。',
+      replace: '使用下方内容覆盖原提示词，并作为最后一条系统指令；Claude Code 模板会保留必要的客户端身份声明。'
     };
     $('systemPromptText').readOnly = mode === 'off';
     $('systemPromptModeHint').textContent = hints[mode];

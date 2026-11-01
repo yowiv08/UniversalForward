@@ -52,25 +52,35 @@ public sealed class SystemPromptPolicyTests
     [DataRow("{}")]
     [DataRow("{\"instructions\":null}")]
     [DataRow("{\"instructions\":\"\"}")]
-    public void ResponsesAppendProvidesMissingInstructionsWithoutChangingInput(string json)
+    public void ResponsesAppendUsesFinalSystemRoleWithoutChangingExistingDeveloperText(string json)
     {
         var body = Object(json); body["input"] = new JsonArray(new JsonObject { ["role"] = "developer", ["content"] = "keep" });
         var input = body["input"]!.DeepClone();
         var decision = Policy().Apply(body, "/v1/responses")!;
-        Assert.AreEqual(ConfiguredText, body["instructions"]!.GetValue<string>());
-        Assert.IsTrue(JsonNode.DeepEquals(input, body["input"]));
-        Assert.AreEqual("instructions", decision.Field);
+        Assert.AreEqual("", body["instructions"]!.GetValue<string>());
+        var sentInput = body["input"]!.AsArray();
+        Assert.AreEqual(2, sentInput.Count);
+        Assert.IsTrue(JsonNode.DeepEquals(input![0], sentInput[0]));
+        AssertMessage(sentInput[^1], "system", ConfiguredText);
+        Assert.AreEqual("input", decision.Field);
+        Assert.AreEqual("system", decision.PriorityRole);
+        Assert.AreEqual("last", decision.Placement);
         Assert.AreEqual(0, decision.RemovedMessages);
+        Assert.AreEqual(0, decision.DemotedMessages);
     }
 
     [TestMethod]
     public void ResponsesAppendPreservesExactWhitespaceHistoryAndNestedInstructions()
     {
         var body = Object("""{"instructions":"  old\nline  ","input":[{"role":"system","content":"original"},{"role":"developer","content":"development"},{"type":"function_call_output","call_id":"call","output":"result"}],"tools":[{"type":"function","name":"tool","parameters":{"properties":{"instructions":{"type":"string"}}}}],"metadata":{"instructions":"nested"},"previous_response_id":"previous"}""");
-        var expected = body.DeepClone(); expected["instructions"] = "  old\nline  \n\n" + ConfiguredText;
+        var expected = body.DeepClone(); expected["instructions"] = "";
+        expected["input"]![0]!["role"] = "developer";
+        expected["input"]!.AsArray().Insert(0, Message("developer", "  old\nline  "));
+        expected["input"]!.AsArray().Add(Message("system", ConfiguredText));
         var decision = Policy().Apply(body, "/v1/responses")!;
         Assert.IsTrue(JsonNode.DeepEquals(expected, body));
         Assert.AreEqual(ConfiguredText.Length, decision.TextLength);
+        Assert.AreEqual(1, decision.DemotedMessages);
     }
 
     [TestMethod]
@@ -80,8 +90,9 @@ public sealed class SystemPromptPolicyTests
         body["input"]!.AsArray().Add(new JsonObject { ["role"] = "system", ["content"] = "dynamic tools", ["tools"] = new JsonArray(new JsonObject { ["name"] = "keep" }) });
         body["input"]!.AsArray().Add(new JsonObject { ["type"] = "message", ["role"] = "developer", ["content"] = "dynamic tools", ["tools"] = new JsonObject { ["name"] = "keep" } });
         var expected = body.DeepClone();
-        expected["instructions"] = ConfiguredText;
+        expected["instructions"] = "";
         expected["input"]!.AsArray().RemoveAt(1); expected["input"]!.AsArray().RemoveAt(0);
+        expected["input"]!.AsArray().Add(Message("system", ConfiguredText));
         var decision = Policy("replace").Apply(body, "/v1/responses")!;
         Assert.IsTrue(JsonNode.DeepEquals(expected, body));
         Assert.AreEqual(2, decision.RemovedMessages);
@@ -90,13 +101,85 @@ public sealed class SystemPromptPolicyTests
     [TestMethod]
     [DataRow("question")]
     [DataRow(null)]
-    public void ResponsesReplacePreservesStringOrMissingInput(string? input)
+    public void ResponsesReplacePreservesStringInputAsUserAndAddsFinalSystem(string? input)
     {
         var body = new JsonObject { ["instructions"] = "old" };
         if (input is not null) body["input"] = input;
         Policy("replace").Apply(body, "/v1/responses");
-        Assert.AreEqual(input, body["input"]?.GetValue<string>());
-        Assert.AreEqual(ConfiguredText, body["instructions"]!.GetValue<string>());
+        Assert.AreEqual("", body["instructions"]!.GetValue<string>());
+        var messages = body["input"]!.AsArray();
+        Assert.AreEqual(input is null ? 1 : 2, messages.Count);
+        if (input is not null) AssertMessage(messages[0], "user", input);
+        AssertMessage(messages[^1], "system", ConfiguredText);
+    }
+
+    [TestMethod]
+    [DataRow("append")]
+    [DataRow("replace")]
+    public void ResponsesFinalSystemFollowsLateInstructionAndToolItemsWithoutAddingText(string mode)
+    {
+        const string text = "  {api_key} {{SESSION_ID}}\r\n  插件规则 😀  ";
+        var body = Object("""
+            {"instructions":"old instructions","input":[
+              {"role":"user","content":[{"type":"input_text","text":"question"},{"type":"input_image","image_url":"data:image/png;base64,AA=="}]},
+              {"role":"assistant","content":"answer","phase":"final_answer"},
+              {"type":"function_call","call_id":"call","name":"lookup","arguments":"{\"role\":\"system\"}"},
+              {"type":"function_call_output","call_id":"call","output":"result"},
+              {"type":"additional_tools","id":"tools","role":"system","tools":[{"type":"function","name":"dynamic"}]},
+              {"role":"system","content":"late system","tools":[{"name":"message-tools"}]},
+              {"type":"message","role":"system","content":[{"type":"input_text","text":"late override"}],"id":"system-id","custom":1},
+              {"type":"message","role":"developer","content":"late developer"}
+            ],"tools":[{"type":"function","name":"lookup","parameters":{"properties":{"instructions":{"type":"string"}}}}]}
+            """);
+        var before = (JsonObject)body.DeepClone();
+
+        var decision = Policy(mode, text).Apply(body, "/v1/responses")!;
+
+        Assert.AreEqual("", body["instructions"]!.GetValue<string>());
+        var input = body["input"]!.AsArray();
+        var offset = mode == "append" ? 1 : 0;
+        Assert.AreEqual(mode == "append" ? 10 : 7, input.Count);
+        if (mode == "append") AssertMessage(input[0], "developer", "old instructions");
+        for (var index = 0; index < 6; index++)
+            Assert.IsTrue(JsonNode.DeepEquals(before["input"]![index], input[index + offset]));
+        if (mode == "append")
+        {
+            var previousSystem = before["input"]![6]!.DeepClone(); previousSystem["role"] = "developer";
+            Assert.IsTrue(JsonNode.DeepEquals(previousSystem, input[7]));
+            Assert.IsTrue(JsonNode.DeepEquals(before["input"]![7], input[8]));
+        }
+        AssertMessage(input[^1], "system", text);
+        Assert.IsTrue(JsonNode.DeepEquals(before["tools"], body["tools"]));
+        Assert.AreEqual(mode == "append" ? 1 : 0, decision.DemotedMessages);
+        Assert.AreEqual(mode == "replace" ? 2 : 0, decision.RemovedMessages);
+        Assert.AreEqual(text.Length, decision.TextLength);
+    }
+
+    [TestMethod]
+    [DataRow("append", "{}")]
+    [DataRow("replace", "42")]
+    [DataRow("append", "false")]
+    public void InvalidResponsesInputDoesNotPartiallyRewriteInstructionsOrRoles(string mode, string value)
+    {
+        var body = new JsonObject { ["instructions"] = "keep", ["input"] = JsonNode.Parse(value) };
+        var before = body.ToJsonString();
+        Assert.ThrowsExactly<FormatException>(() => Policy(mode).Apply(body, "/v1/responses"));
+        Assert.AreEqual(before, body.ToJsonString());
+    }
+
+    [TestMethod]
+    [DataRow("append")]
+    [DataRow("replace")]
+    public void ResponsesStringInputIsPreservedWhenPolicyUsesFinalSystem(string mode)
+    {
+        const string question = "  question\n {{SESSION_ID}}  ";
+        var body = new JsonObject { ["instructions"] = "old", ["input"] = question };
+        Policy(mode).Apply(body, "/v1/responses");
+        var input = body["input"]!.AsArray();
+        Assert.AreEqual(mode == "append" ? 3 : 2, input.Count);
+        if (mode == "append") AssertMessage(input[0], "developer", "old");
+        AssertMessage(input[^2], "user", question);
+        AssertMessage(input[^1], "system", ConfiguredText);
     }
 
     [TestMethod]
@@ -107,14 +190,17 @@ public sealed class SystemPromptPolicyTests
     {
         var body = Object(json);
         Policy().Apply(body, "/v1/messages");
-        Assert.AreEqual(ConfiguredText, body["system"]!.GetValue<string>());
+        Assert.AreEqual(1, body["system"]!.AsArray().Count);
+        Assert.AreEqual(ConfiguredText, body["system"]![0]!["text"]!.GetValue<string>());
     }
 
     [TestMethod]
     public void MessagesAppendToStringKeepsConversationAndFormatting()
     {
         var body = Object("""{"system":" Original \n ","messages":[{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image","source":{"type":"base64","data":"abc"}}]}],"tools":[{"name":"tool"}],"thinking":{"type":"enabled","budget_tokens":2000},"instructions":"other protocol"}""");
-        var expected = body.DeepClone(); expected["system"] = " Original \n \n\n" + ConfiguredText;
+        var expected = body.DeepClone(); expected["system"] = new JsonArray(
+            new JsonObject { ["type"] = "text", ["text"] = " Original \n " },
+            new JsonObject { ["type"] = "text", ["text"] = ConfiguredText });
         var decision = Policy().Apply(body, "/v1/messages")!;
         Assert.IsTrue(JsonNode.DeepEquals(expected, body));
         Assert.AreEqual("system", decision.Field);
@@ -136,7 +222,8 @@ public sealed class SystemPromptPolicyTests
     [DataRow("{\"system\":42,\"metadata\":{\"system\":\"keep\"}}")]
     public void MessagesReplaceChangesOnlyTopLevelSystem(string json)
     {
-        var body = Object(json); var expected = body.DeepClone(); expected["system"] = ConfiguredText;
+        var body = Object(json); var expected = body.DeepClone();
+        expected["system"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = ConfiguredText });
         Policy("replace").Apply(body, "/v1/messages");
         Assert.IsTrue(JsonNode.DeepEquals(expected, body));
     }
@@ -247,9 +334,13 @@ public sealed class SystemPromptPolicyTests
         await store.FlushAsync();
         var row = JsonSerializer.SerializeToNode(store.List(new Dictionary<string, string>()), RequestLogStore.Json)!["rows"]![0]!;
         Assert.AreEqual(mode, row["systemPromptRewrite"]!["mode"]!.GetValue<string>());
-        Assert.AreEqual(protocol == "responses" ? "instructions" : "system", row["systemPromptRewrite"]!["field"]!.GetValue<string>());
+        Assert.AreEqual(protocol == "responses" ? "input" : "system", row["systemPromptRewrite"]!["field"]!.GetValue<string>());
         Assert.AreEqual(ConfiguredText.Length, row["systemPromptRewrite"]!["textLength"]!.GetValue<int>());
         Assert.IsNull(row["systemPromptRewrite"]!["text"]);
+        Assert.AreEqual("system", row["systemPromptRewrite"]!["priorityRole"]!.GetValue<string>());
+        Assert.AreEqual("last", row["systemPromptRewrite"]!["placement"]!.GetValue<string>());
+        Assert.AreEqual(protocol == "responses" && mode == "append" ? 1 : 0,
+            row["systemPromptRewrite"]!["demotedMessages"]!.GetValue<int>());
     }
 
     [TestMethod]
@@ -314,15 +405,21 @@ public sealed class SystemPromptPolicyTests
             JsonSerializer.SerializeToElement(new { accountId = account.Id, models = Models, endpoint = "/v1/" + protocol }), _ => { }, CancellationToken.None));
         Assert.IsTrue(result!.Value.GetProperty("rows")[0].GetProperty("success").GetBoolean(), result.ToString());
         var field = protocol == "responses" ? "instructions" : "system";
-        if (protocol == "messages" && profile)
+        if (protocol == "messages")
         {
             var blocks = sent![field]!.AsArray();
             Assert.AreEqual(ConfiguredText, blocks[^1]!["text"]!.GetValue<string>());
-            Assert.AreEqual(mode == "append" ? 3 : 2, blocks.Count);
-            StringAssert.Contains(blocks[0]!["text"]!.GetValue<string>(), "Claude agent");
+            Assert.AreEqual(profile ? mode == "append" ? 3 : 2 : 1, blocks.Count);
+            if (profile) StringAssert.Contains(blocks[0]!["text"]!.GetValue<string>(), "Claude agent");
         }
-        else if (mode == "replace" || !profile) Assert.AreEqual(ConfiguredText, sent![field]!.GetValue<string>());
-        else Assert.AreEqual("Reply only OK. Do not call tools.\n\n" + ConfiguredText, sent![field]!.GetValue<string>());
+        else
+        {
+            Assert.AreEqual("", sent!["instructions"]!.GetValue<string>());
+            var input = sent["input"]!.AsArray();
+            AssertMessage(input[^1], "system", ConfiguredText);
+            Assert.AreEqual(profile && mode == "append" ? 3 : 2, input.Count);
+            if (profile && mode == "append") AssertMessage(input[0], "developer", "Reply only OK. Do not call tools.");
+        }
     }
 
     [TestMethod]
@@ -367,8 +464,19 @@ public sealed class SystemPromptPolicyTests
     {
         if (protocol == "responses")
         {
-            Assert.AreEqual(mode == "append" ? "old responses\n\n" + ConfiguredText : ConfiguredText, sent["instructions"]!.GetValue<string>());
-            Assert.AreEqual(mode == "append" ? 4 : 2, sent["input"]!.AsArray().Count);
+            Assert.AreEqual("", sent["instructions"]!.GetValue<string>());
+            var input = sent["input"]!.AsArray();
+            Assert.AreEqual(mode == "append" ? 6 : 3, input.Count);
+            AssertMessage(input[^1], "system", ConfiguredText);
+            Assert.AreEqual(1, input.OfType<JsonObject>().Count(item => item["role"]?.ToString() == "system"));
+            if (mode == "append")
+            {
+                AssertMessage(input[0], "developer", "old responses");
+                Assert.AreEqual("developer", input[1]!["role"]!.GetValue<string>());
+                Assert.AreEqual("system input", input[1]!["content"]!.GetValue<string>());
+                Assert.AreEqual("developer", input[2]!["role"]!.GetValue<string>());
+                Assert.AreEqual("developer input", input[2]!["content"]!.GetValue<string>());
+            }
         }
         else if (profile)
         {
@@ -378,7 +486,22 @@ public sealed class SystemPromptPolicyTests
             StringAssert.Contains(blocks[0]!["text"]!.GetValue<string>(), "Claude agent");
             if (mode == "append") Assert.AreEqual("old messages", blocks[1]!["text"]!.GetValue<string>());
         }
-        else Assert.AreEqual(mode == "append" ? "old messages\n\n" + ConfiguredText : ConfiguredText, sent["system"]!.GetValue<string>());
+        else
+        {
+            var blocks = sent["system"]!.AsArray();
+            Assert.AreEqual(ConfiguredText, blocks[^1]!["text"]!.GetValue<string>());
+            Assert.AreEqual(mode == "append" ? 2 : 1, blocks.Count);
+            if (mode == "append") Assert.AreEqual("old messages", blocks[0]!["text"]!.GetValue<string>());
+        }
+    }
+    private static JsonObject Message(string role, string text) => new()
+    {
+        ["type"] = "message", ["role"] = role,
+        ["content"] = new JsonArray(new JsonObject { ["type"] = "input_text", ["text"] = text })
+    };
+    private static void AssertMessage(JsonNode? node, string role, string text)
+    {
+        Assert.IsTrue(JsonNode.DeepEquals(Message(role, text), node));
     }
     private static PluginAttemptContext Context(Account account, IPluginHttpClient client, JsonObject body, string protocol = "responses", bool stream = false)
     {

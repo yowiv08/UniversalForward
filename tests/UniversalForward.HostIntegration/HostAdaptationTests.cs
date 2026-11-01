@@ -67,7 +67,10 @@ public sealed class HostAdaptationTests
         foreach (var call in session.Calls)
         {
             using var sent = JsonDocument.Parse(call.Body);
-            Assert.AreEqual(original + "\n\n" + addition, sent.RootElement.GetProperty("system").GetString());
+            var blocks = sent.RootElement.GetProperty("system");
+            Assert.AreEqual(2, blocks.GetArrayLength());
+            Assert.AreEqual(original, blocks[0].GetProperty("text").GetString());
+            Assert.AreEqual(addition, blocks[1].GetProperty("text").GetString());
         }
         Assert.IsTrue(session.Calls.All(call => call.Body == session.Calls[0].Body));
         Assert.AreEqual(original, result.Request.OriginalBody!.Value.GetProperty("system").GetString());
@@ -91,8 +94,10 @@ public sealed class HostAdaptationTests
         foreach (var call in session.Calls)
         {
             using var sent = JsonDocument.Parse(call.Body);
-            Assert.AreEqual(mode == "append" ? original + "\n\n" + configured : configured,
-                sent.RootElement.GetProperty("system").GetString());
+            var blocks = sent.RootElement.GetProperty("system");
+            Assert.AreEqual(mode == "append" ? 2 : 1, blocks.GetArrayLength());
+            Assert.AreEqual(configured, blocks[blocks.GetArrayLength() - 1].GetProperty("text").GetString());
+            if (mode == "append") Assert.AreEqual(original, blocks[0].GetProperty("text").GetString());
             Assert.AreEqual("Please answer this local test message.",
                 sent.RootElement.GetProperty("messages")[0].GetProperty("content").GetString());
         }

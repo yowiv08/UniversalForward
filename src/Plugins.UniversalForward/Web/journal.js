@@ -41,6 +41,7 @@
     $('journalScope').hidden = !channel;
     $('journalScopeLabel').textContent = '渠道：' + (accounts.find(account => account.id === channel)?.label || channel);
     $('journalTitle').textContent = channel ? '请求日志 · ' + (accounts.find(account => account.id === channel)?.label || channel) : '请求日志';
+    $('journalTitle').title = $('journalTitle').textContent;
   }
   function closeJournal() {
     journalEpoch++; journalPartEpoch++; journalDetail = null; journalRawBody = '';
@@ -137,7 +138,7 @@
         tr.append(identity, model, stateCell, effort, actions); root.append(tr);
       }
       $('journalEmpty').hidden = !!root.childElementCount;
-      root.closest('.journal-table').scrollTop = 0;
+      root.closest('.journal-content').scrollTop = 0;
       $('journalPage').textContent = `第 ${journalPage} / ${journalPages} 页 · 共 ${data.total} 条`;
       feedback('journalStatus', state.error || '', !!state.error);
     } catch (error) { if (epoch === journalEpoch && journalActive()) journalError(error); }

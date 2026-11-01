@@ -47,19 +47,16 @@
     <p class="workspace-footnote"><span data-icon="info"></span>渠道配置保存后生效，连接测试使用已保存的配置。</p>
     </section>
   <section id="journal" class="journal-workspace page-workspace" aria-labelledby="journalTitle" hidden>
-    <header class="page-heading"><div><h1 id="journalTitle">请求日志</h1><p class="page-description">追踪转发结果，查看模型、参数和上游响应。</p></div><div class="actions"><button id="journalClose" type="button" class="secondary"><span data-icon="arrow-left"></span>返回渠道</button><button id="journalReload" type="button" class="secondary"><span data-icon="refresh"></span>刷新日志</button></div></header>
-    <div class="journal-caption"><div class="journal-caption-label"><span data-icon="journal"></span><span>本次运行</span><span id="journalRecordCount" class="count">—</span></div><span class="muted">内存日志 · 重启或重载插件后清空</span></div>
+    <div class="journal-content" role="region" aria-label="请求日志内容" tabindex="0">
+    <header class="journal-heading"><div class="journal-title-group"><h1 id="journalTitle">请求日志</h1><span id="journalRecordCount" class="count" title="本次运行记录数；内存日志在重启或重载插件后清空">—</span></div><div class="actions"><button id="journalClose" type="button" class="secondary" aria-label="返回渠道" title="返回渠道"><span data-icon="arrow-left"></span><span class="journal-action-label">返回渠道</span></button><button id="journalReload" type="button" class="secondary" aria-label="刷新日志" title="刷新日志"><span data-icon="refresh"></span><span class="journal-action-label">刷新日志</span></button></div></header>
     <div id="journalStatus" class="feedback" role="status" hidden></div>
     <section class="journal-panel" aria-label="请求记录">
-    <div class="journal-content">
       <form id="journalFilters" class="journal-filters compact-search">
-        <div class="search-main"><label>模型<input name="model" aria-label="日志模型" placeholder="搜索模型名称…"></label><label>请求类型<select name="kind" aria-label="日志类型"><option value="">全部类型</option><option value="forward">转发</option><option value="connection-test">连接测试</option><option value="models-discover">获取模型</option><option value="models-refresh">刷新模型</option></select></label><label>执行状态<select name="state" aria-label="日志执行状态"><option value="">全部状态</option><option value="running">执行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option></select></label><div class="actions"><button id="journalReset" type="button" class="text-button">重置</button><button id="journalExpand" type="button" aria-expanded="false" aria-controls="journalAdvanced">更多筛选</button><button class="primary" type="submit"><span data-icon="search"></span>查询</button></div></div>
+        <div class="search-main"><label><span class="sr-only">模型</span><input name="model" aria-label="日志模型" placeholder="搜索模型名称…"></label><label><span class="sr-only">请求类型</span><select name="kind" aria-label="日志类型"><option value="">全部类型</option><option value="forward">转发</option><option value="connection-test">连接测试</option><option value="models-discover">获取模型</option><option value="models-refresh">刷新模型</option></select></label><label><span class="sr-only">执行状态</span><select name="state" aria-label="日志执行状态"><option value="">全部状态</option><option value="running">执行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option></select></label><div class="actions"><button id="journalReset" type="button" class="text-button">重置</button><button id="journalExpand" type="button" aria-expanded="false" aria-controls="journalAdvanced">更多筛选</button><button class="primary" type="submit"><span data-icon="search"></span>查询</button></div></div>
         <div id="journalAdvanced" class="search-advanced" hidden><label>开始时间<input name="from" type="datetime-local" aria-label="开始时间"></label><label>结束时间<input name="to" type="datetime-local" aria-label="结束时间"></label><label>渠道 ID<input name="channel" aria-label="日志渠道 ID" placeholder="全部渠道"></label><label>Trace ID<input name="trace" aria-label="Trace ID" placeholder="输入 Trace ID"></label><label>状态码<input name="status" type="number" aria-label="日志状态码" placeholder="例如 200"></label><label>接口<select name="endpoint" aria-label="日志接口"><option value="">全部接口</option><option>/v1/responses</option><option>/v1/messages</option><option>/v1/models</option></select></label><label>出站方式<select name="network" aria-label="日志出站方式"><option value="">全部出站方式</option><option value="direct">直连</option><option value="proxyPool">代理池</option></select></label></div>
         <div id="journalScope" class="filter-scope" hidden><span data-icon="filter"></span><span id="journalScopeLabel"></span><button id="journalScopeClear" type="button" class="icon-button" aria-label="移除渠道筛选"><span data-icon="x"></span></button></div>
       </form>
       <div class="journal-table"><table><thead><tr><th>时间／渠道</th><th>模型／接口</th><th>结果</th><th>思考参数</th><th>操作</th></tr></thead><tbody id="journalRows"></tbody></table><div id="journalEmpty" class="empty" hidden><span data-icon="journal"></span><h3>暂无请求日志</h3><p>本次运行尚未记录请求，或没有符合筛选条件的结果。</p></div></div>
-    </div>
-    <footer class="actions journal-pagination" aria-label="日志分页"><label for="journalPageSize">每页<select id="journalPageSize"><option value="10">10 条</option><option value="25">25 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label><button id="journalPrevious" type="button" class="secondary" disabled>上一页</button><span id="journalPage" role="status"></span><button id="journalNext" type="button" class="secondary" disabled>下一页</button></footer>
     </section>
       <details class="journal-storage-settings"><summary><span data-icon="settings"></span>日志存储设置</summary>
         <div id="journalStorage" class="muted"></div>
@@ -72,7 +69,9 @@
           <button type="submit" class="primary">应用日志设置</button>
         </form>
       </details>
-      <details class="journal-explanation"><summary><span data-icon="info"></span>日志说明</summary><p>原文包含密钥及请求内容，仅供管理员查看。请求参数指插件收到及提交给 HTTP 客户端的内容，不代表网络抓包或模型内部计算强度。</p></details>
+      <details class="journal-explanation"><summary><span data-icon="info"></span>日志说明</summary><p>日志保存在内存中，重启或重载插件后清空。记录保留请求元数据、Token 用量、请求／响应头、扩展参数和错误，不保存请求／响应正文。</p><p>请求头可能包含访问密钥，仅供管理员查看。记录的参数不代表网络抓包或模型内部计算强度。</p></details>
+    </div>
+    <footer class="actions journal-pagination" aria-label="日志分页"><label for="journalPageSize">每页<select id="journalPageSize"><option value="10">10 条</option><option value="25">25 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label><button id="journalPrevious" type="button" class="secondary" disabled>上一页</button><span id="journalPage" role="status"></span><button id="journalNext" type="button" class="secondary" disabled>下一页</button></footer>
   </section>
     </main>
   </div>
@@ -194,7 +193,7 @@
               <span id="systemPromptModeLabel" class="reasoning-field-label">处理方式</span>
               <div id="systemPromptMode" class="reasoning-mode-grid" role="radiogroup" aria-labelledby="systemPromptModeLabel">
                 <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="off" class="sr-only" aria-labelledby="systemPromptOffTitle" aria-describedby="systemPromptOffHint" checked><span class="reasoning-mode-icon" data-icon="forward"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptOffTitle">不改写</strong><small id="systemPromptOffHint">保留现有提示词</small></label>
-                <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="append" class="sr-only" aria-labelledby="systemPromptAppendTitle" aria-describedby="systemPromptAppendHint"><span class="reasoning-mode-icon" data-icon="plus"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptAppendTitle">追加</strong><small id="systemPromptAppendHint">在原提示词后补充</small></label>
+                <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="append" class="sr-only" aria-labelledby="systemPromptAppendTitle" aria-describedby="systemPromptAppendHint"><span class="reasoning-mode-icon" data-icon="plus"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptAppendTitle">追加</strong><small id="systemPromptAppendHint">保留原文，插件指令优先</small></label>
                 <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="replace" class="sr-only" aria-labelledby="systemPromptReplaceTitle" aria-describedby="systemPromptReplaceHint"><span class="reasoning-mode-icon" data-icon="edit"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptReplaceTitle">替换</strong><small id="systemPromptReplaceHint">使用自定义提示词</small></label>
               </div>
             </div>
@@ -202,15 +201,15 @@
             <div class="field system-prompt-field">
               <div class="system-prompt-field-heading"><label for="systemPromptText">自定义系统提示词</label><span id="systemPromptCount" class="system-prompt-count">0 / 32,000 字符</span></div>
               <textarea id="systemPromptText" rows="10" maxlength="32000" placeholder="例如：请用简体中文回答，先给结论，再解释原因。" spellcheck="false" aria-describedby="systemPromptTextHint systemPromptCount" readonly></textarea>
-              <small id="systemPromptTextHint">直接填写文字，保留换行和空格。保存后对本渠道的新请求生效。</small>
+              <small id="systemPromptTextHint">填写的文字原样发送，不自动添加前缀或冲突说明。保存后对本渠道的新请求生效。</small>
             </div>
             <details id="systemPromptDetails" class="system-prompt-details">
               <summary>处理说明</summary>
               <div>
-                <p><strong>追加：</strong>保留原系统提示词，在末尾补充上面的内容；原提示词为空时直接使用自定义内容。</p>
-                <p><strong>替换：</strong>使用上面的内容覆盖原系统提示词。Responses 请求中直接的 system／developer 提示消息也会移除。</p>
-                <p>OpenAI Responses 写入 <code>instructions</code>；Claude 写入 <code>system</code>，追加时保留原缓存块。使用 Claude Code 请求头模板时，保留必要的客户端身份声明。</p>
-                <p>连接测试和每次重试使用同一规则，可在日志中核对收到与实际发送的请求内容。</p>
+                <p><strong>追加：</strong>保留原文，插件文本作为最后一条独立系统指令。Responses 的原 instructions 转为 developer 消息，普通旧 system 消息也改为 developer；工具声明和对话历史保留。</p>
+                <p><strong>替换：</strong>使用上面的内容覆盖原系统提示词。Responses 请求中普通的 system／developer 提示消息会移除，再添加插件系统指令。</p>
+                <p>OpenAI Responses 在 <code>input</code> 末尾写入 system 消息，<code>instructions</code> 保留为空字符串；Claude 在顶层 <code>system</code> 数组末尾写入独立文本块，追加时保留原缓存块。Claude Code 模板保留必要的客户端身份声明。</p>
+                <p>插件只调整本次请求的角色和顺序，不自动增加提示词文字，也不能控制上游后续追加规则或保证模型完全遵循。连接测试和重试共用规则，可在日志元数据中核对指令角色、位置及处理数量。</p>
               </div>
             </details>
           </section>

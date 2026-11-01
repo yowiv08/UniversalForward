@@ -2,7 +2,7 @@
 
 Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配置和连接测试。
 
-当前源码版本为 **4.0.0**，适配官方 **Router2API 2.1.2 / Router.Contracts 2.0.0**。4.0 正式版整合请求 CPU 热点修复、停止记录请求／响应正文和缓存 Token 明细，功能沿用已验证的 v0.3.10，无需数据库迁移。版本说明见 [v4.0.0](docs/releases/v4.0.0.md)。
+当前源码版本为 **4.1.0**，适配官方 **Router2API 2.1.2 / Router.Contracts 2.0.0**。4.1 调整渠道系统提示词的角色与发送位置，保持填写的文字原样发送；请求日志使用单一滚动区域，压缩标题和筛选区，让日志记录占据更多页面空间。沿用 4.0 的请求 CPU 热点修复、正文日志移除和缓存 Token 明细，无需数据库迁移。版本说明见 [v4.1.0](docs/releases/v4.1.0.md)。
 
 ## 管理界面
 
@@ -186,10 +186,12 @@ Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`。�
 在渠道编辑的「系统提示词」页签中，选择处理方式并填写多行文本，点击「保存渠道」后对该渠道的所有模型生效。
 
 - **不改写**：默认值，沿用原有请求和客户端模板；已填写的文本保留，方便再次启用。
-- **追加**：保留原提示词，在末尾补充渠道文本。原文与追加文本之间使用两个换行；原提示词缺失、为 null 或空字符串时直接使用渠道文本。
-- **替换**：使用渠道文本作为系统提示词。Responses 同时删除当前 `input` 数组中普通的 `system`／`developer` 指令消息，避免旧指令继续生效；显式工具条目、带动态工具声明的消息及嵌套字段保留。
+- **追加**：保留原文，将渠道文本作为最后一条独立系统指令。Responses 的原 `instructions` 转为首条 `developer` 消息，普通旧 `system` 消息改为 `developer`，插件文本单独写入 `input` 的最后一条 `system` 消息。
+- **替换**：移除原提示词，使用渠道文本作为最后一条系统指令。Responses 同时删除当前 `input` 数组中普通的 `system`／`developer` 指令消息；显式工具条目、带动态工具声明的消息及嵌套字段保留。
 
-Responses 改写顶层 `instructions`，Messages 改写顶层 `system`。Claude 的 `system` 为块数组时，追加在末尾新增独立文本块，保留原块顺序、`cache_control` 和其他属性。启用 Claude Code 请求头模板时，替换仍保留模板要求的客户端身份段。用户与助手消息、工具调用及结果、模型、思考和其他参数沿用已有流程。
+Responses 保留顶层 `instructions: ""` 以兼容 Codex 上游，插件文本只写入 `input` 末尾的显式 `system` 消息。字符串 `input` 转为原文不变的 `user` 消息。Messages 统一使用顶层 `system` 块数组：追加保留原块顺序、`cache_control` 和其他属性，插件文本是最后一个独立文本块；替换仅保留插件文本及 Claude Code 模板要求的客户端身份段。用户与助手消息、工具调用及结果、模型、思考和其他参数沿用已有流程。
+
+插件不自动添加前缀、后缀或“冲突时以插件规则为准”说明，填写的文本原样发送。角色优先级与末尾位置提高本次请求内的指令优先级；Claude 系统块之间没有额外的优先级字段，动态工具声明保留原角色，插件无法控制上游后续追加规则或保证模型完全遵循。需消除旧普通指令竞争时使用替换模式。官方协议参考：[OpenAI Responses 消息角色](https://developers.openai.com/api/reference/resources/responses/methods/create)。
 
 文本上限为 32000 个 UTF-16 单元，与浏览器输入框计数一致；空格和换行原样保存，追加或替换时不能只填空白。保存失败保留草稿；切换模式、明暗配色或页签不会清空文本；复制渠道带入独立的系统提示词配置。
 
@@ -206,7 +208,7 @@ Responses 改写顶层 `instructions`，Messages 改写顶层 `system`。Claude 
 }
 ```
 
-`mode` 为 `off`、`append` 或 `replace`。日志元数据中的 `systemPromptRewrite` 记录处理方式、实际字段、文本长度、移除的普通指令消息数和模板身份保留状态，改写结果通过这些元数据核对。开源实现的核查与参考链接见 [系统提示词设计](docs/system-prompt.md)。
+`mode` 为 `off`、`append` 或 `replace`。日志元数据中的 `systemPromptRewrite` 记录处理方式、实际字段、文本长度、移除和降级的普通指令消息数、指令角色 `system`、位置 `last` 及模板身份保留状态，不记录提示词全文。开源实现的核查与参考链接见 [系统提示词设计](docs/system-prompt.md)。
 
 ## 请求头配置
 

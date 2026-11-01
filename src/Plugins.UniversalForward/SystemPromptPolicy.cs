@@ -25,40 +25,64 @@ public sealed class SystemPromptPolicy
         if (Mode == "off") return null;
         if (endpoint == "/v1/responses")
         {
+            // Validate both fields before changing the request. A trailing system message has
+            // its own role; concatenating channel text into instructions leaves competing roles.
+            var original = Mode == "append" ? ReadInstructions(body["instructions"]) : null;
+            var input = ReadInput(body["input"]);
             var removed = 0;
-            if (Mode == "append") body["instructions"] = Append(ReadInstructions(body["instructions"]));
-            else
+            var demoted = 0;
+            for (var index = input.Count - 1; index >= 0; index--)
             {
-                body["instructions"] = Text;
-                if (body["input"] is JsonArray input)
-                    for (var index = input.Count - 1; index >= 0; index--)
-                        if (input[index] is JsonObject item && IsSystemMessage(item))
-                        { input.RemoveAt(index); removed++; }
+                if (input[index] is not JsonObject item || !IsSystemMessage(item)) continue;
+                if (Mode == "replace") { input.RemoveAt(index); removed++; }
+                else if (item["role"]!.GetValue<string>() == "system")
+                {
+                    item["role"] = "developer";
+                    demoted++;
+                }
             }
-            return new(Mode, "instructions", Text.Length, removed);
+            if (!string.IsNullOrEmpty(original)) input.Insert(0, Message("developer", original));
+            input.Add(Message("system", Text));
+            if (!ReferenceEquals(body["input"], input)) body["input"] = input;
+            // Codex-compatible upstreams require this field to exist even when instructions
+            // are supplied as explicit input messages. Do not send the channel text twice.
+            body["instructions"] = string.Empty;
+            return new(Mode, "input", Text.Length, removed, DemotedMessages: demoted);
         }
         if (endpoint == "/v1/messages")
         {
-            if (Mode == "replace") body["system"] = Text;
-            else if (body["system"] is JsonArray blocks)
-                blocks.Add(new JsonObject { ["type"] = "text", ["text"] = Text });
-            else body["system"] = Append(ReadSystem(body["system"]));
+            var blocks = Mode == "replace" ? new JsonArray() : ReadSystem(body["system"]);
+            blocks.Add(new JsonObject { ["type"] = "text", ["text"] = Text });
+            if (!ReferenceEquals(body["system"], blocks)) body["system"] = blocks;
             return new(Mode, "system", Text.Length, 0);
         }
         return null;
     }
 
-    private string Append(string? original) => string.IsNullOrEmpty(original) ? Text : original + "\n\n" + Text;
+    private static JsonObject Message(string role, string text) => new()
+    {
+        ["type"] = "message", ["role"] = role,
+        ["content"] = new JsonArray(new JsonObject { ["type"] = "input_text", ["text"] = text })
+    };
+    private static JsonArray ReadInput(JsonNode? node) => node switch
+    {
+        null => new JsonArray(),
+        JsonArray array => array,
+        JsonValue value when value.TryGetValue<string>(out var text) => new JsonArray(Message("user", text)),
+        _ => throw new FormatException("改写系统提示词时，Responses input 必须为字符串、数组或 null。")
+    };
     private static string? ReadInstructions(JsonNode? node) => node switch
     {
         null => null,
         JsonValue value when value.TryGetValue<string>(out var text) => text,
         _ => throw new FormatException("追加系统提示词时，Responses instructions 必须为字符串或 null。")
     };
-    private static string? ReadSystem(JsonNode? node) => node switch
+    private static JsonArray ReadSystem(JsonNode? node) => node switch
     {
-        null => null,
-        JsonValue value when value.TryGetValue<string>(out var text) => text,
+        null => new JsonArray(),
+        JsonArray array => array,
+        JsonValue value when value.TryGetValue<string>(out var text) => string.IsNullOrEmpty(text)
+            ? new JsonArray() : new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
         _ => throw new FormatException("追加系统提示词时，Messages system 必须为字符串、数组或 null。")
     };
     private static bool IsSystemMessage(JsonObject item)
@@ -71,4 +95,4 @@ public sealed class SystemPromptPolicy
 }
 
 internal sealed record SystemPromptRewriteDecision(string Mode, string Field, int TextLength, int RemovedMessages,
-    bool TemplateIdentityPreserved = false);
+    bool TemplateIdentityPreserved = false, int DemotedMessages = 0, string PriorityRole = "system", string Placement = "last");
