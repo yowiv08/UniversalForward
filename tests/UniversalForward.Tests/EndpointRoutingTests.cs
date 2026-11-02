@@ -38,6 +38,36 @@ public sealed class EndpointRoutingTests
     }
 
     [TestMethod]
+    [DataRow("https://upstream.example/gateway/v1/messages", "codex", "/gateway/v1/responses")]
+    [DataRow("https://upstream.example/gateway/v1/responses/", "claude", "/gateway/v1/messages")]
+    [DataRow("https://upstream.example/v1/models", "codex", "/v1/responses")]
+    public async Task BaseUrlEndingWithEndpointPathStillTargetsRoutedEndpoint(string baseUrl, string profile, string expectedPath)
+    {
+        var client = new Mock<IPluginHttpClient>(MockBehavior.Strict);
+        client.Setup(x => x.SendAsync(It.IsAny<HttpRequestMessage>(), false,
+            HttpCompletionOption.ResponseHeadersRead, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((HttpRequestMessage request, bool _, HttpCompletionOption _, CancellationToken _) =>
+            {
+                Assert.AreEqual(expectedPath, request.RequestUri!.AbsolutePath);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(profile == "codex"
+                        ? """{"status":"completed","output":[]}"""
+                        : """{"type":"message","content":[{"type":"text","text":"ok"}]}""")
+                };
+            });
+        var context = ForwardResponseHandlingTests.Context(client.Object, profile, false);
+        var fields = new Dictionary<string, string?>(((CustomCredential)context.Account.Credential).Fields);
+        var settings = JsonNode.Parse(fields["settings"]!)!.AsObject();
+        settings["baseUrl"] = baseUrl;
+        fields["settings"] = settings.ToJsonString();
+        context.Account.Credential = new CustomCredential(fields);
+        using var terminal = new UniversalForwardTerminal(PluginTestHost.Create("universalforward"));
+        Assert.AreEqual(200, (await terminal.InvokeAsync(context)).Response.StatusCode);
+        Assert.AreEqual(1, client.Invocations.Count);
+    }
+
+    [TestMethod]
     [DataRow("/v1/chat/completions")]
     [DataRow("/v1/completions")]
     public async Task LegacyEndpointsNeverReachUpstream(string endpoint)

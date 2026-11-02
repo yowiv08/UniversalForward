@@ -518,6 +518,8 @@ public sealed partial class UniversalForwardTerminal
         {
             var message = new HttpRequestMessage(HttpMethod.Get, uri);
             ApplyApiKeyHeader(message, settings);
+            // Anthropic 的 /v1/models 缺少此头返回 400；OpenAI 兼容上游忽略它。请求头配置仍可覆盖。
+            message.Headers.TryAddWithoutValidation("anthropic-version", AnthropicVersion);
             ApplyReplaceHeaders(message, replaceHeaders);
             ApplyReplaceHeaders(message, headerOverrides);
             return message;

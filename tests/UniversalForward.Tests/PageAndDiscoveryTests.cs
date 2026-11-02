@@ -80,6 +80,64 @@ public sealed class PageAndDiscoveryTests
         Mock.Get(host.Services.Http).Verify(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()), Times.Never);
     }
 
+    [TestMethod]
+    [DataRow(null, null, "2023-06-01")]
+    [DataRow("2024-10-22", null, "2024-10-22")]
+    [DataRow(null, "2025-01-01", "2025-01-01")]
+    public async Task DiscoverySendsAnthropicVersionUnlessConfigured(string? headerOverrideVersion, string? replaceHeaderVersion, string expected)
+    {
+        var host = PluginTestHost.Create("universalforward");
+        var sends = 0;
+        using var handler = new Handler(request =>
+        {
+            sends++;
+            Assert.AreEqual("Bearer draft-secret", request.Headers.Authorization!.ToString());
+            Assert.AreEqual(expected, request.Headers.GetValues("anthropic-version").Single());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("""{"data":[{"type":"model","id":"claude-opus-5-5"}]}""") };
+        });
+        Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
+            .Returns(() => new HttpClient(handler, false));
+        using var terminal = new UniversalForwardTerminal(host);
+        var headerOverride = new Dictionary<string, string>();
+        if (headerOverrideVersion is not null) headerOverride["anthropic-version"] = headerOverrideVersion;
+        var extraParams = new Dictionary<string, object>();
+        if (replaceHeaderVersion is not null)
+            extraParams["ReplaceHeaders"] = new Dictionary<string, string> { ["Anthropic-Version"] = replaceHeaderVersion };
+        var result = await terminal.DiscoverModelsAsync(ChannelKeysTests.Context(new
+        {
+            baseUrl = "https://api.anthropic.com", apiKey = "draft-secret", headerOverride, extraParams
+        }));
+        Assert.AreEqual(200, result.StatusCode);
+        Assert.AreEqual(1, sends);
+        StringAssert.Contains(System.Text.Json.JsonSerializer.Serialize(result), "claude-opus-5-5");
+    }
+
+    [TestMethod]
+    [DataRow("https://api.anthropic.com/v1/messages", "https://api.anthropic.com/v1/models")]
+    [DataRow("https://api.anthropic.com/v1/messages/", "https://api.anthropic.com/v1/models")]
+    [DataRow("https://upstream.example/V1/Responses", "https://upstream.example/V1/models")]
+    [DataRow("https://upstream.example/gateway/v1/models", "https://upstream.example/gateway/v1/models")]
+    [DataRow("https://upstream.example/gateway/v1", "https://upstream.example/gateway/v1/models")]
+    [DataRow("https://upstream.example/gateway", "https://upstream.example/gateway/v1/models")]
+    public async Task DiscoveryIgnoresEndpointPathAtEndOfBaseUrl(string baseUrl, string expectedUrl)
+    {
+        var host = PluginTestHost.Create("universalforward");
+        var requested = new List<string>();
+        using var handler = new Handler(request =>
+        {
+            requested.Add(request.RequestUri!.AbsoluteUri);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("""{"data":[{"id":"discovered-model"}]}""") };
+        });
+        Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
+            .Returns(() => new HttpClient(handler, false));
+        using var terminal = new UniversalForwardTerminal(host);
+        var result = await terminal.DiscoverModelsAsync(ChannelKeysTests.Context(new { baseUrl, apiKey = "draft-secret" }));
+        Assert.AreEqual(200, result.StatusCode);
+        CollectionAssert.AreEqual(new[] { expectedUrl }, requested);
+    }
+
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

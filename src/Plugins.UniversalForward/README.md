@@ -2,7 +2,7 @@
 
 Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配置和连接测试。
 
-**4.1.0 适配官方 Router2API 2.1.2（Router.Contracts 2.0.0）。** 4.1 调整渠道系统提示词的角色与发送位置，保持填写的文字原样发送；请求日志使用单一滚动区域，压缩标题和筛选区，让日志记录占据更多页面空间。沿用 4.0 的请求 CPU 热点修复、正文日志移除和缓存 Token 明细，无需数据库迁移。
+**4.2.0 适配官方 Router2API 2.1.2（Router.Contracts 2.0.0）。** 4.2 修复获取候选模型时缺少 `anthropic-version` 请求头、Anthropic 官方接口返回 400 的问题，并忽略 Base URL 末尾误填的 `/v1/messages` 等接口段。沿用 4.1 的系统提示词角色调整与日志布局，以及 4.0 的请求 CPU 热点修复、正文日志移除和缓存 Token 明细，无需数据库迁移。
 
 管理界面参考 shadcn/ui Dashboard 与 Ant Design 数据展示规范重构，使用黑白灰控件和侧栏导航。渠道管理与请求日志分别展示，渠道默认以卡片展示，可切换为列表；禁用渠道使用灰色背景与「已禁用」标识，文字保持清晰。点击名称或模型数量进入相应设置，启用／禁用按钮直接可用，更多菜单依次提供「日志」「复制」和「删除」。
 
@@ -62,6 +62,8 @@ Claude 输入用量计入缓存读取和写入，普通 JSON、SSE／WebSocket �
 - 选择渠道允许使用的模型。
 - 指定模型发现使用的 Key。
 - 使用当前表单的地址和 Key 获取候选模型。
+- 获取模型请求 `GET {Base URL}/v1/models`，默认使用 `Authorization: Bearer` 并附带 `anthropic-version: 2023-06-01`；Anthropic 官方接口缺少该头会返回 400，OpenAI 兼容上游忽略它。通用请求头或高级参数 `ReplaceHeaders` 可覆盖这两个头。
+- Base URL 填写上游根地址或 `/v1` 前缀，例如 `https://api.anthropic.com` 或 `https://api.anthropic.com/v1`；末尾误带 `/v1/messages`、`/v1/responses`、`/v1/models` 时自动忽略该接口段。
 - 为每个模型设置支持协议、首选协议和强制原生模式。
 
 ## 请求转发

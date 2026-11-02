@@ -749,10 +749,19 @@ public sealed partial class UniversalForwardTerminal
             .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+    private const string AnthropicVersion = "2023-06-01";
+    private static readonly string[] EndpointPathSuffixes = ["/v1/messages", "/v1/responses", "/v1/models"];
     private static Uri BuildUri(string baseUrl, string path)
     {
         var baseUri = new Uri(baseUrl.TrimEnd('/') + "/", UriKind.Absolute);
         var basePath = baseUri.AbsolutePath.TrimEnd('/');
+        // Base URL 误填成接口完整地址时，去掉末尾的接口段，按 /v1 前缀处理。
+        var endpointSuffix = EndpointPathSuffixes.FirstOrDefault(suffix => basePath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+        if (endpointSuffix is not null)
+        {
+            baseUri = new Uri(baseUri, "../");
+            basePath = basePath[..^endpointSuffix.Length] + "/v1";
+        }
         var route = path.Trim().TrimStart('/');
         if (basePath.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
             && route.StartsWith("v1/", StringComparison.OrdinalIgnoreCase))
@@ -870,7 +879,7 @@ public sealed partial class UniversalForwardTerminal
         request.Headers.TryAddWithoutValidation(keyHeader, prefix + settings.ApiKey);
         if (isMessages
             && !request.Headers.Contains("anthropic-version"))
-            request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+            request.Headers.TryAddWithoutValidation("anthropic-version", AnthropicVersion);
 
         ApplyReplaceHeaders(request, replaceHeaders);
     }
