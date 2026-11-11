@@ -14,7 +14,18 @@ public sealed partial class UniversalForwardTerminal
         var accounts = await _host.Accounts.ListAsync(
             context.Platform,
             context.CancellationToken);
-        return context.Ok(new { accounts = accounts.Select(ToAccountCard).ToArray() });
+        var cards = new List<object>();
+        foreach (var account in accounts)
+        {
+            var current = account;
+            if (_keyHealth.HasPending(account.Id) && TryReadSettings(account, out var settings))
+            {
+                await RefreshKeySettingsAsync(account.Id, settings, context.CancellationToken);
+                current = await _host.Accounts.GetAsync(account.Id, context.CancellationToken) ?? account;
+            }
+            cards.Add(ToAccountCard(current));
+        }
+        return context.Ok(new { accounts = cards });
     }
     [PluginEndpoint("POST", "accounts/save")]
     public async Task<PluginResult> SaveAccountAsync(PluginHttpContext context)
@@ -58,6 +69,10 @@ public sealed partial class UniversalForwardTerminal
             ChannelKeys.Validate(keys, mode);
         }
         catch (FormatException error) { return context.BadRequest(error.Message); }
+        var autoDisable = input.KeyAutoDisable ?? previous.KeyAutoDisable;
+        try { _ = autoDisable.Rules(); } catch (FormatException error) { return context.BadRequest(error.Message); }
+        if (autoDisable != previous.KeyAutoDisable)
+            keys = keys.Select(k => k with { HealthVersion = checked(k.HealthVersion + 1) }).ToList();
         var keysChanged = previous.Keys is null || mode != previous.KeySelectionMode || !keys.SequenceEqual(oldKeys);
 
         var label = input.Label?.Trim();
@@ -113,6 +128,7 @@ public sealed partial class UniversalForwardTerminal
             BaseUrl = baseUrl,
             Keys = keys,
             KeySelectionMode = mode,
+            KeyAutoDisable = autoDisable,
             KeyRevision = keysChanged ? checked(previous.KeyRevision + 1) : previous.KeyRevision,
             Weight = Math.Clamp(input.Weight ?? previous.Weight, 0, 1000),
             Endpoints = endpoints,
@@ -192,6 +208,7 @@ public sealed partial class UniversalForwardTerminal
         if (existing is not null && (mode != previous.KeySelectionMode
             || !keys.Select(k => (k.Id, k.Enabled)).SequenceEqual(oldKeys.Select(k => (k.Id, k.Enabled)))))
             _keySelector.Remove(existing.Id);
+        _keyHealth.Synchronize(saved.Id, keys);
         await RebuildAccountModelSnapshotAsync(context.PluginKey, context.CancellationToken);
         _host.Models.Invalidate(ForwardApiPlatform);
         await TryLogAsync(
@@ -223,7 +240,7 @@ public sealed partial class UniversalForwardTerminal
 
         string apiKey;
         try { apiKey = !string.IsNullOrWhiteSpace(input.ApiKey) ? input.ApiKey.Trim()
-            : _keySelector.Select(existing?.Id ?? "", ReadKeys(previous), previous.KeySelectionMode, input.KeyId, discovery: true).Secret; }
+            : SelectChannelKey(existing?.Id ?? "", previous, input.KeyId, discovery: true).Secret; }
         catch (FormatException error) { return context.BadRequest(error.Message); }
         if (string.IsNullOrWhiteSpace(apiKey)) return context.BadRequest("API Key 不能为空");
         if (!TryReadExtraParams(input.ExtraParams, previous.ExtraParams, out var extraParams, out var extraError))
@@ -321,6 +338,7 @@ public sealed partial class UniversalForwardTerminal
         var account = await _host.Accounts.GetAsync(input.Id, context.CancellationToken);
         if (account is null) return context.Json(404, new { error = "账号不存在" });
         await _host.Accounts.DeleteAsync(account.Id, context.CancellationToken);
+        _keyHealth.Remove(account.Id);
         _keySelector.Remove(account.Id);
         _clientSessions.RemoveAccount(account.Id);
         await RebuildAccountModelSnapshotAsync(context.PluginKey, context.CancellationToken);
@@ -339,8 +357,7 @@ public sealed partial class UniversalForwardTerminal
         if (!TryReadSettings(account, out var settings))
             return context.BadRequest("账号配置无效");
 
-        try { settings.ApiKey = _keySelector.Select(account.Id, ReadKeys(settings), settings.KeySelectionMode,
-            input.KeyId, discovery: true).Secret; }
+        try { settings.ApiKey = SelectChannelKey(account.Id, settings, input.KeyId, discovery: true).Secret; }
         catch (FormatException error) { return context.BadRequest(error.Message); }
         var credentialVersion = account.CredentialVersion;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -404,10 +421,10 @@ public sealed partial class UniversalForwardTerminal
             return context.Json(502, new { error });
         }
     }
-    private static object ToAccountCard(Account account)
+    private object ToAccountCard(Account account)
     {
         var hasSettings = TryReadSettings(account, out var settings);
-        var keys = hasSettings ? ReadKeys(settings) : [];
+        var keys = hasSettings ? ReadKeys(settings).Select(k => _keyHealth.Display(account.Id, k)).ToList() : [];
         var key = keys.FirstOrDefault(k => k.Enabled)?.Secret ?? "";
         return new
         {
@@ -417,7 +434,10 @@ public sealed partial class UniversalForwardTerminal
             apiKeyMasked = MaskSecret(key),
             keySelectionMode = settings.KeySelectionMode, keyRevision = settings.KeyRevision,
             enabledKeyCount = keys.Count(k => k.Enabled), totalKeyCount = keys.Count,
-            keys = keys.Select(k => new { k.Id, k.Name, k.Secret, masked = MaskSecret(k.Secret), k.Enabled }).ToArray(),
+            keys = keys.Select(k => new { k.Id, k.Name, k.Secret, masked = MaskSecret(k.Secret), k.Enabled,
+                k.AutoDisabledAt, k.AutoDisabledStatusCode, k.AutoDisabledSource, k.AutoDisabledFailures,
+                health = _keyHealth.Describe(account.Id, k) }).ToArray(),
+            keyAutoDisable = settings.KeyAutoDisable,
             hasApiKey = !string.IsNullOrWhiteSpace(key),
             weight = settings.Weight,
             endpoints = settings.Endpoints,
@@ -607,6 +627,7 @@ public sealed partial class UniversalForwardTerminal
         public string[]? DeletedKeyIds { get; init; }
         public string? KeySelectionMode { get; init; }
         public long? KeyRevision { get; init; }
+        public KeyAutoDisablePolicy? KeyAutoDisable { get; init; }
         public string? Id { get; init; }
         public string? Label { get; init; }
         public string? BaseUrl { get; init; }

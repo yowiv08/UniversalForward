@@ -9,6 +9,29 @@ namespace Plugins.UniversalForward;
 
 public sealed partial class UniversalForwardTerminal
 {
+    private readonly ConnectionTestResults _testResults = new();
+    internal ConnectionTestResults TestResults => _testResults;
+
+    [PluginEndpoint("GET", "tests/results")]
+    public Task<PluginResult> ConnectionTestResultsAsync(PluginHttpContext context)
+        => ReadTestResultsAsync(context, detail: false);
+
+    [PluginEndpoint("GET", "tests/detail")]
+    public Task<PluginResult> ConnectionTestDetailAsync(PluginHttpContext context)
+        => ReadTestResultsAsync(context, detail: true);
+
+    private Task<PluginResult> ReadTestResultsAsync(PluginHttpContext context, bool detail)
+    {
+        var id = context.Query.GetValueOrDefault("id", "");
+        var job = _host.Jobs.Get(id);
+        if (job is null || job.Name != "connection-test" || job.Platform != ForwardApiPlatform)
+            return Task.FromResult(context.Json(404, new { error = "测试不存在或已过期" }));
+        var offset = int.TryParse(context.Query.GetValueOrDefault("offset"), out var parsed) ? Math.Max(0, parsed) : 0;
+        var row = int.TryParse(context.Query.GetValueOrDefault("rowId"), out parsed) ? parsed : -1;
+        var value = detail ? _testResults.Detail(id, row, offset) : _testResults.Page(id, offset, 20);
+        return Task.FromResult(value is null ? context.Json(404, new { error = "测试结果尚未生成或已清理" }) : context.Ok(value));
+    }
+
     [PluginEndpoint("POST", "tests/start")]
     public async Task<PluginResult> StartConnectionTestsAsync(PluginHttpContext context)
     {
@@ -36,7 +59,7 @@ public sealed partial class UniversalForwardTerminal
                 && !options.Protocols.Any(p => ModelProtocolOptions.Endpoint(p) == selected))
                 return context.BadRequest("测试端点必须属于该模型支持的协议");
         }
-        var enabledKeys = ReadKeys(settings).Where(k => k.Enabled).ToArray();
+        var enabledKeys = AvailableKeys(account.Id, settings).ToArray();
         if (enabledKeys.Length == 0) return context.BadRequest("渠道没有启用的 Key");
         if (input.KeyMode is not ("strategy" or "specified" or "all")) return context.BadRequest("测试 Key 模式无效");
         if (input.KeyMode == "specified" && !enabledKeys.Any(k => k.Id == input.KeyId))
@@ -53,9 +76,13 @@ public sealed partial class UniversalForwardTerminal
         var normalized = new ConnectionTestInput
         {
             AccountId = account.Id, Models = uniqueModels, KeyMode = input.KeyMode, KeyIds = keyIds,
-            Endpoint = endpoint, Stream = input.Stream, Content = input.Content, MaxOutputTokens = input.MaxOutputTokens
+            Endpoint = endpoint, Stream = input.Stream, Content = input.Content, MaxOutputTokens = input.MaxOutputTokens,
+            AutoDisableKeys = input.AutoDisableKeys
         };
-        var job = await _host.Jobs.StartAsync("connection-test", JsonSerializer.SerializeToElement(normalized, JsonOptions),
+        var payload = JsonSerializer.SerializeToElement(normalized, JsonOptions);
+        if (Encoding.UTF8.GetByteCount(payload.GetRawText()) > 64 * 1024)
+            return context.BadRequest("测试参数序列化后超过 64 KiB，请缩短测试内容或减少模型选择");
+        var job = await _host.Jobs.StartAsync("connection-test", payload,
             new PluginJobOptions { Key = account.Id, Platform = ForwardApiPlatform }, context.CancellationToken);
         return context.Json(202, job);
     }
@@ -84,21 +111,32 @@ public sealed partial class UniversalForwardTerminal
     {
         var input = job.Input?.Deserialize<ConnectionTestInput>(JsonOptions)
             ?? throw new InvalidOperationException("缺少测试参数");
-        var rows = new List<object>();
         var keyIds = input.KeyIds ?? [null];
         if (keyIds.Length == 0 || input.Models.Length * keyIds.Length > 100)
             throw new InvalidOperationException("模型 × Key 最多 100 个组合");
+        var initialAccount = await _host.Accounts.GetAsync(input.AccountId, job.CancellationToken);
+        var initialKeys = initialAccount is not null && TryReadSettings(initialAccount, out var initialSettings)
+            ? ReadKeys(initialSettings) : [];
+        _testResults.Begin(job.Id, input.Models.SelectMany(model => keyIds.Select(keyId => (object)new
+        {
+            model, keyId, keyName = initialKeys.FirstOrDefault(k => k.Id == keyId)?.Name,
+            initialKeyName = initialKeys.FirstOrDefault(k => k.Id == keyId)?.Name
+        })));
+        var rowIndex = 0;
+        void AddRow(object row, byte[]? bytes = null) => _testResults.Set(job.Id, rowIndex++, row, bytes);
+        try
+        {
         foreach (var model in input.Models)
         foreach (var requestedKeyId in keyIds)
         {
             job.CancellationToken.ThrowIfCancellationRequested();
-            job.ReportProgress(JsonSerializer.SerializeToElement(new
-            { completed = rows.Count, total = input.Models.Length * keyIds.Length, running = model, runningKeyId = requestedKeyId, rows }, JsonOptions));
+            _testResults.Running(job.Id, rowIndex);
+            job.ReportProgress(JsonSerializer.SerializeToElement(_testResults.Progress(job.Id, rowIndex), JsonOptions));
             var watch = Stopwatch.StartNew();
             long? firstEventMs = null;
             var sends = 0;
             var keyId = requestedKeyId;
-            string? keyName = null;
+            string? keyName = initialKeys.FirstOrDefault(k => k.Id == requestedKeyId)?.Name;
             ConnectionTestClient? captureClient = null;
             string? networkMode = null;
             ProxyPoolNode? selectedProxy = null;
@@ -110,11 +148,17 @@ public sealed partial class UniversalForwardTerminal
                 if (!TryReadSettings(account, out var settings)) throw new InvalidOperationException("渠道配置无效");
                 networkMode = settings.NetworkMode;
                 endpoint = TestEndpoint(settings, model, input.Endpoint);
-                var selectedKey = _keySelector.Select(account.Id, ReadKeys(settings), settings.KeySelectionMode, requestedKeyId);
+                if (requestedKeyId is not null && !AvailableKeys(account.Id, settings).Any(k => k.Id == requestedKeyId))
+                {
+                    AddRow(new { model, keyId, keyName, skipped = true, success = false, error = "Key 已禁用或删除，已跳过" });
+                    continue;
+                }
+                var selectedKey = SelectChannelKey(account.Id, settings, requestedKeyId);
                 keyId = selectedKey.Id; keyName = selectedKey.Name;
                 using var http = await CreateNetworkClientAsync(settings, job.CancellationToken, proxy => selectedProxy = proxy);
                 http.Timeout = Timeout.InfiniteTimeSpan;
-                using var client = new ConnectionTestClient(http, () => sends++, keyId, selectedProxy);
+                using var client = new ConnectionTestClient(http, () => sends++, keyId, selectedProxy)
+                { AutoDisableKeys = input.AutoDisableKeys, OperationId = job.Id + ":" + rowIndex };
                 captureClient = client;
                 var body = CreateTestBody(model, endpoint, input.Stream, input.Content, input.MaxOutputTokens);
                 var result = await InvokeAsync(new PluginAttemptContext
@@ -206,29 +250,35 @@ public sealed partial class UniversalForwardTerminal
                 }
                 finally { if (result.Response.Lifetime is { } lifetime) await lifetime.DisposeAsync(); }
                 var status = result.Attempt.StatusCode ?? result.Response.StatusCode;
-                rows.Add(new
+                AddRow(new
                 {
                     model, keyId, keyName, endpoint, networkMode, proxy = selectedProxy, transport = client.Transport, success = status is >= 200 and < 300 && valid,
                     originalStatus = status, mappedStatus = result.Response.StatusCode,
                     durationMs = watch.ElapsedMilliseconds, firstEventMs, retries = Math.Max(0, sends - 1), error,
-                    response = client.RawBody, responseTruncated = client.Truncated
-                });
+                    responseTruncated = client.Truncated
+                }, client.RawBytes);
             }
             catch (OperationCanceledException) when (job.CancellationToken.IsCancellationRequested) { throw; }
             catch (Exception error)
             {
-                rows.Add(new { model, keyId, keyName, endpoint, networkMode, proxy = selectedProxy, transport = captureClient?.Transport, success = false, durationMs = watch.ElapsedMilliseconds,
+                AddRow(new { model, keyId, keyName, endpoint, networkMode, proxy = selectedProxy, transport = captureClient?.Transport, success = false, durationMs = watch.ElapsedMilliseconds,
                     firstEventMs, retries = Math.Max(0, sends - 1),
                     mappedStatus = error is ProxyPoolUnavailableException or ProxyServicesUnavailableException ? 503 : (int?)null,
                     code = error is ProxyServicesUnavailableException ? "proxy_selection_not_supported"
                         : error is ProxyPoolUnavailableException ? "proxy_pool_unavailable" : null,
                     error = error is ProxyPoolUnavailableException ? ProxyUnavailableMessage : error.Message,
-                    response = captureClient?.RawBody, responseTruncated = captureClient?.Truncated ?? false });
+                    responseTruncated = captureClient?.Truncated ?? false }, captureClient?.RawBytes);
             }
-            job.ReportProgress(JsonSerializer.SerializeToElement(new
-            { completed = rows.Count, total = input.Models.Length * keyIds.Length, rows }, JsonOptions));
+            job.ReportProgress(JsonSerializer.SerializeToElement(_testResults.Progress(job.Id), JsonOptions));
         }
-        return JsonSerializer.SerializeToElement(new { rows }, JsonOptions);
+        _testResults.Finish(job.Id);
+        return JsonSerializer.SerializeToElement(_testResults.Progress(job.Id), JsonOptions);
+        }
+        catch (OperationCanceledException) when (job.CancellationToken.IsCancellationRequested)
+        { _testResults.Finish(job.Id, cancelled: true); throw; }
+        catch (Exception error)
+        { _testResults.Finish(job.Id, error: error.Message); throw; }
+        finally { job.ReportProgress(JsonSerializer.SerializeToElement(_testResults.Progress(job.Id), JsonOptions)); }
     }
 
     private static string TestEndpoint(ForwardApiSettings settings, string model, string? requested)
@@ -315,12 +365,15 @@ public sealed partial class UniversalForwardTerminal
         public string KeyMode { get; init; } = "strategy";
         public string? KeyId { get; init; }
         public string?[]? KeyIds { get; init; }
+        public bool AutoDisableKeys { get; init; }
     }
 
     private sealed class ConnectionTestClient(HttpClient client, Action sent, string? keyId, ProxyPoolNode? proxy = null) : IPluginHttpClient, IDisposable
     {
         private readonly MemoryStream _capture = new();
-        public string RawBody => Encoding.UTF8.GetString(_capture.ToArray());
+        public byte[] RawBytes => _capture.ToArray();
+        public bool AutoDisableKeys { get; init; }
+        public string OperationId { get; init; } = Guid.NewGuid().ToString("N");
         public bool Truncated { get; private set; }
         public string Transport { get; private set; } = "http";
         public void Dispose() => _capture.Dispose();

@@ -108,14 +108,14 @@ public sealed class MultiKeyOperationsTests
         var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(new { accountId = account.Id, models = Models, keyIds = KeyIds }),
             p => progress.Add(p!.Value), CancellationToken.None));
-        var rows = result!.Value.GetProperty("rows");
+        var rows = ConnectionTestAssertions.Rows(terminal);
         Assert.AreEqual(2, rows.GetArrayLength());
         Assert.AreEqual("a", rows[0].GetProperty("keyId").GetString());
         Assert.AreEqual("b", rows[1].GetProperty("keyId").GetString());
         Assert.AreEqual(2, rows[0].GetProperty("retries").GetInt32());
         Assert.AreEqual(removeQueued ? 3 : 6, auth.Count);
         CollectionAssert.AreEqual(RetryHeaders, auth.Take(3).ToArray());
-        if (removeQueued) Assert.IsTrue(rows[1].GetProperty("error").GetString()!.Contains("指定 Key", StringComparison.Ordinal));
+        if (removeQueued) Assert.AreEqual("skipped", rows[1].GetProperty("state").GetString());
         else Assert.IsTrue(auth.Skip(3).All(x => x == "Bearer secret-b"));
         Assert.AreEqual(2, progress[^1].GetProperty("total").GetInt32());
     }

@@ -97,8 +97,8 @@ public sealed class ProxySelectionTests
             terminal.Configure(builder.Object);
             var result = await registration!.ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
                 JsonSerializer.SerializeToElement(new { accountId = account.Id, models = Models }), _ => { }, CancellationToken.None));
-            Assert.AreEqual("node", result!.Value.GetProperty("rows")[0].GetProperty("proxy").GetProperty("id").GetString());
-            Assert.IsTrue(result.Value.GetProperty("rows")[0].GetProperty("success").GetBoolean());
+            Assert.AreEqual("node", ConnectionTestAssertions.Rows(terminal)[0].GetProperty("proxy").GetProperty("id").GetString());
+            Assert.IsTrue(ConnectionTestAssertions.Rows(terminal)[0].GetProperty("success").GetBoolean());
         }
         else
         {

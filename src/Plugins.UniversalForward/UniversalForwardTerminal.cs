@@ -89,7 +89,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         Dispose();
         return ValueTask.CompletedTask;
     }
-    public void Dispose() { DisposeRequestLogs(); _keySelector.Clear(); _clientSessions.Dispose(); _snapshotRefreshGate.Dispose(); _settingsGate.Dispose(); }
+    public void Dispose() { DisposeRequestLogs(); _testResults.Dispose(); _keyHealth.Clear(); _keyHealthGates.Clear(); _keySelector.Clear(); _clientSessions.Dispose(); _snapshotRefreshGate.Dispose(); _settingsGate.Dispose(); }
 
     private readonly ChannelKeySelector _keySelector = new();
     private readonly ClientSessionResolver _clientSessions = new();
@@ -114,7 +114,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
             return cached;
         if (settings is null && !TryReadSettings(account, out settings))
             return null;
-        return new AccountModelPolicy(settings.Enabled && ReadKeys(settings).Any(k => k.Enabled), settings.Weight, settings.Endpoints, ReadModels(account));
+        return new AccountModelPolicy(settings.Enabled && AvailableKeys(account.Id, settings).Count > 0, settings.Weight, settings.Endpoints, ReadModels(account));
     }
     private async Task<AccountModelSnapshot> RebuildAccountModelSnapshotAsync(
         string pluginKey,
@@ -133,7 +133,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
             {
                 if (!TryReadSettings(account, out var settings)) continue;
                 policies[account.Id] = new AccountModelPolicy(
-                    settings.Enabled && ReadKeys(settings).Any(k => k.Enabled) && account.Status.State is not (ResourceState.Disabled or ResourceState.Invalid),
+                    settings.Enabled && AvailableKeys(account.Id, settings).Count > 0 && account.Status.State is not (ResourceState.Disabled or ResourceState.Invalid),
                     settings.Weight,
                     settings.Endpoints,
                     ReadModels(account));
@@ -214,8 +214,9 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         try
         {
             settings = JsonSerializer.Deserialize<ForwardApiSettings>(json, JsonOptions) ?? new ForwardApiSettings();
-            if (settings.RequestPolicy is null || settings.Endpoints is null) return false;
+            if (settings.RequestPolicy is null || settings.Endpoints is null || settings.KeyAutoDisable is null) return false;
             settings.RequestPolicy.Validate();
+            _ = settings.KeyAutoDisable.Rules();
             ValidateNetworkMode(settings.NetworkMode);
             settings.ProxySubscriptionIds = NormalizeProxySubscriptionIds(settings.ProxySubscriptionIds);
             settings.ProxyId = NormalizeProxyId(settings.ProxyId);
@@ -300,6 +301,7 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
         public List<ChannelKey>? Keys { get; set; }
         public string KeySelectionMode { get; set; } = "roundRobin";
         public long KeyRevision { get; set; }
+        public KeyAutoDisablePolicy KeyAutoDisable { get; set; } = new();
         public int Weight { get; set; }
         public string[] Endpoints { get; set; } = SupportedEndpoints.ToArray();
         public bool Enabled { get; set; } = true;

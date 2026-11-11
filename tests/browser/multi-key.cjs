@@ -197,7 +197,7 @@ const html = require('./page-source.cjs')();
     assert.match(await page.locator('#testDetailOverview').innerText(), /model-a/);
     assert.match(await page.locator('#testDetailOverview').innerText(), /WebSocket/);
     assert.match(await page.locator('#testDetailOverview').innerText(), /测试端点\s+\/v1\/responses/);
-    assert.match(await page.locator('#testDetails').innerText(), /测试端点：\/v1\/responses/);
+    assert.match(await page.locator('#testDetails').innerText(), /未收到上游响应/);
     await page.screenshot({ path: path.join(output, 'connection-detail-desktop.png'), fullPage: true });
     await page.locator('#testDetailTitle').click();
     assert.equal(await page.locator('#testDetailDialog').isVisible(), true);

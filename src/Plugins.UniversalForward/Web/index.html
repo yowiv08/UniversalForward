@@ -138,8 +138,14 @@
             </section>
           </section>
           <section id="panel-keys" role="tabpanel" aria-labelledby="tab-keys" hidden>
-            <div class="section-heading"><h3>Key 管理 <span id="keyCount" class="count">0</span></h3><p>每次请求及重试使用同一 Key</p></div>
+            <div class="section-heading"><h3>Key 管理 <span id="keyCount" class="count">0</span></h3><p>配置分配策略及失效 Key 处理方式</p></div>
             <div class="key-strategy"><div class="field"><label for="keySelectionMode">分配策略</label><select id="keySelectionMode"><option value="roundRobin">轮询</option><option value="random">随机</option><option value="priority">主备顺序</option></select></div><p id="keyModeHint" class="muted"></p></div>
+            <fieldset class="batch-box"><legend>自动禁用 Key</legend>
+              <label class="inline-check"><input id="keyAutoDisableEnabled" type="checkbox">正式请求启用自动禁用与失败切换</label>
+              <div class="field"><label for="keyAutoDisableCodes">HTTP 状态码</label><input id="keyAutoDisableCodes" value="401,403" placeholder="401,403,500-503"><small>支持 400–599，以逗号分隔状态码或区间，按上游原始状态码判断。</small></div>
+              <div class="field"><label for="keyAutoDisableThreshold">连续失败请求数</label><input id="keyAutoDisableThreshold" type="number" min="1" max="100" value="3"></div>
+              <p class="muted">同一请求对每个 Key 最多记一次；非匹配 HTTP 响应清零。达到阈值后需手动启用并保存。计数重启清零，禁用状态保留。切换使用普通重试额度，额度为 0 时不额外发送。</p>
+            </fieldset>
             <div id="keyRows" class="key-list"></div>
             <div class="batch-box"><label for="keyBatch">批量添加</label><textarea id="keyBatch" rows="3" placeholder="每行一个 Key" autocomplete="off" spellcheck="false"></textarea><div class="between"><small>名称默认取末尾 4 位 · 最多 100 个</small><button id="keyAdd" type="button" class="secondary">添加到列表</button></div></div>
           </section>
@@ -290,6 +296,7 @@
       <div class="test-setup"><div><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div><label for="testMaxTokens">输出上限 · Token</label><input id="testMaxTokens" type="number" min="1" max="32768" value="32"></div><div><label for="testStream">流式模式</label><label class="stream-control"><input id="testStream" type="checkbox" role="switch"><span id="testStreamLabel">已禁用</span></label></div></div>
       <p class="test-endpoint-hint muted">自动选择优先使用模型的首选协议；未配置时，Claude 优先使用 Messages，其他模型优先使用 Responses，仅选择渠道已启用的端点。</p>
       <div class="test-prompt"><label for="testContent">测试内容</label><textarea id="testContent" rows="2" maxlength="16000" placeholder="留空使用默认内容：Reply with OK."></textarea><p class="muted">提高输出上限可能增加费用。</p></div>
+      <label class="inline-check"><input id="testAutoDisableKeys" type="checkbox">本次测试允许自动禁用 Key</label><p id="testAutoDisableHint" class="muted"></p>
       </div></details>
       <div class="test-model-heading"><h3>渠道模型</h3><input id="testFilter" aria-label="筛选测试模型" placeholder="筛选模型…"></div>
       <div class="test-toolbar"><div class="actions"><button id="testAll" class="primary">测试全部</button><button id="testSelected" class="secondary">测试勾选</button><button id="testCancel" class="secondary" disabled>取消测试</button><button id="testResume" class="secondary" hidden>重试查询</button></div><div class="test-key-choice"><label for="testKey">测试 Key</label><select id="testKey"></select></div></div>
@@ -298,7 +305,7 @@
     </div>
     <footer class="test-pagination"><span id="testTotal"></span><label for="testPageSize">每页行数</label><select id="testPageSize"><option>10</option><option selected>30</option><option>50</option><option>100</option></select><button id="testFirst" aria-label="测试模型首页">«</button><button id="testPrevious" aria-label="测试模型上一页">‹</button><span id="testPageNumber"></span><button id="testNext" aria-label="测试模型下一页">›</button><button id="testLast" aria-label="测试模型末页">»</button></footer>
   </dialog>
-  <dialog id="testDetailDialog" class="request-detail-dialog" aria-labelledby="testDetailTitle"><header class="request-detail-heading"><h3 id="testDetailTitle">连接详情</h3><button id="testDetailClose" class="icon-button" aria-label="关闭连接详情"><span data-icon="x"></span></button></header><div id="testDetailOverview"></div><h4>响应原文</h4><pre id="testDetails" class="journal-pre"></pre></dialog>
+  <dialog id="testDetailDialog" class="request-detail-dialog" aria-labelledby="testDetailTitle"><header class="request-detail-heading"><h3 id="testDetailTitle">连接详情</h3><button id="testDetailClose" class="icon-button" aria-label="关闭连接详情"><span data-icon="x"></span></button></header><div id="testDetailOverview"></div><h4>响应原文</h4><pre id="testDetails" class="journal-pre"></pre><button id="testDetailMore" class="secondary" hidden>加载更多原文</button></dialog>
   <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmTitle"><h3 id="confirmTitle">确认操作</h3><p id="confirmText"></p><div class="actions"><button id="confirmNo" class="secondary">取消</button><button id="confirmYes" class="primary">确认</button></div></dialog>
   <script>/*__SCRIPT__*/</script>
 </body>

@@ -8,6 +8,11 @@ internal sealed record ChannelKey
     public string Name { get; init; } = "";
     public string Secret { get; init; } = "";
     public bool Enabled { get; init; } = true;
+    public long HealthVersion { get; init; }
+    public DateTimeOffset? AutoDisabledAt { get; init; }
+    public int? AutoDisabledStatusCode { get; init; }
+    public string? AutoDisabledSource { get; init; }
+    public int AutoDisabledFailures { get; init; }
 }
 /// <summary>Key 列表校验与编辑。</summary>
 internal static class ChannelKeys
@@ -69,7 +74,18 @@ internal static class ChannelKeys
             else if (!old.ContainsKey(id)) throw new FormatException("Key ID 不属于此渠道");
             if (!seen.Add(id) || remove.Contains(id)) throw new FormatException("Key ID 重复或同时提交删除");
             var secret = string.IsNullOrWhiteSpace(item.Secret) ? old[id].Secret : item.Secret.Trim();
-            result.Add(item with { Id = id, Name = NameOrDefault(item.Name, secret), Secret = secret });
+            old.TryGetValue(id, out var prior);
+            var changed = prior is not null && (secret != prior.Secret || item.Enabled != prior.Enabled);
+            var clear = prior is null || secret != prior.Secret || item.Enabled;
+            result.Add(new ChannelKey
+            {
+                Id = id, Name = NameOrDefault(item.Name, secret), Secret = secret, Enabled = item.Enabled,
+                HealthVersion = checked((prior?.HealthVersion ?? 0) + (changed ? 1 : 0)),
+                AutoDisabledAt = clear ? null : prior?.AutoDisabledAt,
+                AutoDisabledStatusCode = clear ? null : prior?.AutoDisabledStatusCode,
+                AutoDisabledSource = clear ? null : prior?.AutoDisabledSource,
+                AutoDisabledFailures = clear ? 0 : prior?.AutoDisabledFailures ?? 0
+            });
         }
         result.AddRange(previous.Where(k => !seen.Contains(k.Id) && !remove.Contains(k.Id)));
         return result;

@@ -473,9 +473,9 @@ public sealed class UpstreamWebSocketTests
         var result = await registration!.ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(new { accountId = account.Id, models = Models, endpoint = "/v1/responses", stream }),
             _ => { }, CancellationToken.None));
-        Assert.IsTrue(result!.Value.GetProperty("rows")[0].GetProperty("success").GetBoolean(), result.ToString());
-        Assert.AreEqual("websocket", result.Value.GetProperty("rows")[0].GetProperty("transport").GetString());
-        StringAssert.Contains(result.Value.GetProperty("rows")[0].GetProperty("response").GetString()!, "response.completed");
+        Assert.IsTrue(ConnectionTestAssertions.Rows(terminal)[0].GetProperty("success").GetBoolean(), result.ToString());
+        Assert.AreEqual("websocket", ConnectionTestAssertions.Rows(terminal)[0].GetProperty("transport").GetString());
+        StringAssert.Contains(ConnectionTestAssertions.Rows(terminal)[0].GetProperty("response").GetString()!, "response.completed");
         await server.Completion;
     }
 

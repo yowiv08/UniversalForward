@@ -18,6 +18,8 @@ public sealed partial class UniversalForwardTerminal
     {
         var hostRetry = new ForwardHostRetry();
         var validSettings = TryReadSettings(context.Account, out var settings);
+        if (validSettings && (settings.KeyAutoDisable.Enabled || _keyHealth.HasChannel(context.Account.Id)))
+            settings = await RefreshKeySettingsAsync(context.Account.Id, settings, context.CancellationToken);
         var capture = BeginRequestLog(store => store.Begin(context.HttpClient is ConnectionTestClient ? "connection-test" : "forward",
             context.Account.Id, context.Account.Label, context.Request.Model, context.Request.Endpoint,
             settings.NetworkMode, context.TraceId,
@@ -49,6 +51,8 @@ public sealed partial class UniversalForwardTerminal
         context.CancellationToken.ThrowIfCancellationRequested();
         if (settings is null)
             return LocalFailure("账号配置无效");
+        if ((settings.KeyAutoDisable.Enabled || _keyHealth.HasChannel(context.Account.Id)) && AvailableKeys(context.Account.Id, settings).Count == 0)
+            return Completed(RawResponse(503, JsonSerializer.SerializeToUtf8Bytes(new { error = new { code = "no_available_key", message = "渠道没有可用 Key" } }), "application/json"), 503);
         if (!IsAccountEligible(context.Account, context.Request, context.HttpClient is ConnectionTestClient, settings))
             return LocalFailure("账号未启用此模型或端点");
         if (!TryValidateBaseUrl(settings.BaseUrl, out var urlError)) return LocalFailure(urlError);
@@ -76,11 +80,16 @@ public sealed partial class UniversalForwardTerminal
         catch (Exception error) when (error is JsonException or FormatException or ArgumentException)
         { return LocalFailure(error.Message); }
 
+        var connectionTest = context.HttpClient as ConnectionTestClient;
+        var keyRuleEnabled = connectionTest?.AutoDisableKeys ?? settings.KeyAutoDisable.Enabled;
+        var keyRules = settings.KeyAutoDisable.Rules();
+        var requestIdentity = connectionTest?.OperationId ?? (string.IsNullOrWhiteSpace(context.TraceId) ? Guid.NewGuid().ToString("N") : context.TraceId);
+        var failedKeys = new HashSet<string>(StringComparer.Ordinal);
         ChannelKey selectedKey;
         try
         {
-            selectedKey = _keySelector.Select(context.Account.Id, ReadKeys(settings), settings.KeySelectionMode,
-                (context.HttpClient as ConnectionTestClient)?.KeyId);
+            selectedKey = SelectChannelKey(context.Account.Id, settings, connectionTest?.KeyId,
+                requestId: keyRuleEnabled ? requestIdentity : null);
             settings.ApiKey = selectedKey.Secret;
             if (context.HttpClient is ConnectionTestClient testClient) testClient.SelectedKey = selectedKey;
         }
@@ -192,6 +201,22 @@ public sealed partial class UniversalForwardTerminal
             for (var attempt = 0; ;)
             {
                 total.Token.ThrowIfCancellationRequested();
+                if (keyRuleEnabled || _keyHealth.HasChannel(context.Account.Id))
+                {
+                    var latest = await RefreshKeySettingsAsync(context.Account.Id, settings, total.Token);
+                    var available = AvailableKeys(context.Account.Id, latest, keyRuleEnabled ? requestIdentity : null);
+                    if (!available.Any(k => k.Id == selectedKey.Id && KeyHealthTracker.SameGeneration(k, selectedKey)))
+                    {
+                        try { selectedKey = SelectChannelKey(context.Account.Id, latest, connectionTest?.KeyId,
+                            requestId: keyRuleEnabled ? requestIdentity : null, excluded: failedKeys); }
+                        catch (FormatException)
+                        { return Completed(RawResponse(503, JsonSerializer.SerializeToUtf8Bytes(new { error = new { code = "no_available_key", message = "渠道没有可用 Key" } }), "application/json"), 503); }
+                    }
+                }
+                settings.ApiKey = selectedKey.Secret;
+                if (connectionTest is not null) connectionTest.SelectedKey = selectedKey;
+                resolvedHeaders = HeaderOverrides.Resolve(headerConfig, clientHeaderText, selectedKey.Secret, isTest, variables, headers);
+                if (isTest && nativeStream) resolvedHeaders["Accept"] = "text/event-stream";
                 using var request = new HttpRequestMessage(HttpMethod.Post, BuildUri(settings.BaseUrl, targetEndpoint))
                 { Content = new ByteArrayContent(payload) };
                 request.Content.Headers.ContentType = new("application/json");
@@ -235,9 +260,35 @@ public sealed partial class UniversalForwardTerminal
                 }
                 var originalCode = (int)response.StatusCode;
                 hostRetry.Candidate = originalCode >= 300 && rules.Contains(originalCode) ? "retryable_status" : null;
-                var skipOrdinaryRetry = false;
+                var keyRuleMatched = keyRuleEnabled && keyRules.Contains(originalCode);
+                if (keyRuleEnabled)
+                    await ObserveKeyStatusAsync(context.Account.Id, selectedKey, settings.KeyAutoDisable,
+                        requestIdentity, originalCode, keyRuleMatched, isTest, total.Token);
+                if (keyRuleMatched)
+                {
+                    failedKeys.Add(selectedKey.Id);
+                    if (!isTest && attempt < policy.MaxRetries)
+                    {
+                        var latest = await RefreshKeySettingsAsync(context.Account.Id, settings, total.Token);
+                        ChannelKey? next = null;
+                        try { next = SelectChannelKey(context.Account.Id, latest, requestId: requestIdentity, excluded: failedKeys); }
+                        catch (FormatException) { }
+                        if (next is not null)
+                        {
+                            await TryLogAsync("request.key.switched", "上游状态码命中规则，切换 Key", traceId: context.TraceId,
+                                accountId: context.Account.Id, statusCode: originalCode,
+                                details: new { previousKeyId = selectedKey.Id, nextKeyId = next.Id, retryNumber = attempt + 1 });
+                            capture?.Retry($"HTTP {originalCode}，切换 Key");
+                            response.Dispose(); response = null;
+                            selectedKey = next;
+                            attempt++;
+                            continue;
+                        }
+                    }
+                }
+                var skipOrdinaryRetry = keyRuleMatched;
                 byte[]? streamPrefix = null;
-                if (inspectResponses || response.IsSuccessStatusCode)
+                if (!keyRuleMatched && (inspectResponses || response.IsSuccessStatusCode))
                 {
                     var originalContentType = response.Content.Headers.ContentType?.ToString();
                     var type = originalContentType ?? "application/json";

@@ -245,7 +245,7 @@ public sealed class ReasoningPolicyTests
         terminal.Configure(builder.Object);
         var result = await registration!.ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(new { accountId = account.Id, models = Models, endpoint = "/v1/responses" }), _ => { }, CancellationToken.None));
-        Assert.IsTrue(result!.Value.GetProperty("rows")[0].GetProperty("success").GetBoolean(), result.ToString());
+        Assert.IsTrue(ConnectionTestAssertions.Rows(terminal)[0].GetProperty("success").GetBoolean(), result.ToString());
         Assert.AreEqual(expected, sent!["reasoning"]!["effort"]!.ToString());
     }
 

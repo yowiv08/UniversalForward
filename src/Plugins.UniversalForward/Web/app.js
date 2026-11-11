@@ -547,6 +547,9 @@
     loadSystemPrompt(account?.systemPromptPolicy);
     candidates = account?.availableModels || [];
     $('keySelectionMode').value = account?.keySelectionMode || 'roundRobin';
+    $('keyAutoDisableEnabled').checked = account?.keyAutoDisable?.enabled ?? false;
+    $('keyAutoDisableCodes').value = account?.keyAutoDisable?.statusCodes ?? '401,403';
+    $('keyAutoDisableThreshold').value = account?.keyAutoDisable?.failureThreshold ?? 3;
     for (const [name, fallback] of Object.entries(defaults)) form.elements[name].value = account?.requestPolicy?.[name] ?? fallback;
     for (const name of ['rateLimitRetryEnabled', 'emptyResponseRetryEnabled']) form.elements[name].checked = account?.requestPolicy?.[name] ?? false;
     updateResponseRetry();
@@ -621,6 +624,9 @@
       };
       nameCell.append(el('span', String(index + 1).padStart(2, '0'), 'key-ordinal'), name);
       secretCell.append(secret);
+      if (key.autoDisabledAt) secretCell.append(el('small', `自动禁用 · HTTP ${key.autoDisabledStatusCode} · 连续 ${key.autoDisabledFailures} 次 · ${key.autoDisabledSource === 'connection-test' ? '连接测试' : '正式请求'} · ${new Date(key.autoDisabledAt).toLocaleString()}`));
+      else if (key.health?.consecutiveFailures) secretCell.append(el('small', `连续失败 ${key.health.consecutiveFailures} 次`));
+      if (key.health?.saveError) secretCell.append(el('small', key.health.saveError, 'feedback error'));
       const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = key.enabled;
       enabled.onchange = () => { key.enabled = enabled.checked; fillKeyOptions($('discoveryKey'), keyDraft, false); summary(); };
       const label = el('label', undefined, 'inline-check key-enabled');
@@ -975,6 +981,14 @@
       const endpoints = [...form.querySelectorAll('input[name=endpoints]:checked')].map(x => x.value);
       if (!endpoints.length) fail('至少选择一个端点', 'basic');
       const keys = readKeys(), models = modelIds();
+      const keyAutoDisable = { enabled: $('keyAutoDisableEnabled').checked,
+        statusCodes: $('keyAutoDisableCodes').value.trim(), failureThreshold: Number($('keyAutoDisableThreshold').value) };
+      if (!Number.isInteger(keyAutoDisable.failureThreshold) || keyAutoDisable.failureThreshold < 1 || keyAutoDisable.failureThreshold > 100)
+        fail('自动禁用阈值须为 1–100', 'keys', 'keyAutoDisableThreshold');
+      if (!keyAutoDisable.statusCodes || keyAutoDisable.statusCodes.split(',').some(value => {
+        const parts = value.trim().split('-').map(x => x.trim());
+        return parts.length > 2 || parts.some(x => !/^[45]\d{2}$/.test(x)) || Number(parts.at(-1)) < Number(parts[0]);
+      })) fail('自动禁用状态码须为 400–599 的单值或区间', 'keys', 'keyAutoDisableCodes');
       if (!models.length) fail('请填写或选择允许模型', 'models', 'models');
       const modelProtocols = readProtocols();
       let headerOverride, statusCodeMapping, reasoningPolicy;
@@ -993,7 +1007,7 @@
         ...network,
         responsesTransport: form.elements.responsesTransport.value,
         stripResponsesResourceState: form.elements.stripResponsesResourceState.checked,
-        keys, deletedKeyIds, keyRevision, keySelectionMode: $('keySelectionMode').value, weight: Number(form.elements.weight.value),
+        keys, deletedKeyIds, keyRevision, keySelectionMode: $('keySelectionMode').value, keyAutoDisable, weight: Number(form.elements.weight.value),
         enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, reasoningPolicy, systemPromptPolicy, requestPolicy, headerOverride,
         headerOverrideMode: headerPolicyMode, endpointHeaderOverrides: endpointHeaderDraft, extraParams
       });
@@ -1006,7 +1020,7 @@
   const testBusy = () => testState.active || testState.starting;
   const resultId = (model, keyId) => JSON.stringify([model, keyId ?? null]);
   function updateTestControls() {
-    for (const id of ['testAll', 'testSelected', 'testEndpoint', 'testStream', 'testKey', 'testSelectAll', 'testContent', 'testMaxTokens']) $(id).disabled = testBusy();
+    for (const id of ['testAll', 'testSelected', 'testEndpoint', 'testStream', 'testKey', 'testSelectAll', 'testContent', 'testMaxTokens', 'testAutoDisableKeys']) $(id).disabled = testBusy();
     const models = testState.account?.models || [], visible = visibleTestModels().slice((testPage - 1) * +$('testPageSize').value, testPage * +$('testPageSize').value);
     $('testAll').disabled = testBusy() || !models.length;
     $('testSelected').disabled = testBusy() || !testState.selected.size;
@@ -1017,6 +1031,24 @@
     $('testCancel').disabled = !testState.active || testState.cancelling;
   }
   let testPage = 1;
+  const testRowState = r => ({ queued: '排队中', running: '测试中', succeeded: '成功', failed: '失败', skipped: '已跳过', cancelled: '已取消', notExecuted: '未执行', unavailable: '结果不可用' })[r.state]
+    || (r.cancelled ? '已取消' : r.success ? '成功' : '失败');
+  let testDetailEpoch = 0, testDetailRow = null, testDetailOffset = 0;
+  async function loadTestDetail(row, append = false) {
+    const epoch = append ? testDetailEpoch : ++testDetailEpoch;
+    if (!append) { testDetailRow = row; testDetailOffset = 0; $('testDetails').textContent = '正在读取响应…'; }
+    $('testDetailMore').hidden = true;
+    if (!row.jobId || row.rowId == null) { $('testDetails').textContent = row.response || row.error || '未收到上游响应'; return; }
+    try {
+      const detail = await api('GET', `tests/detail?id=${encodeURIComponent(row.jobId)}&rowId=${row.rowId}&offset=${testDetailOffset}`);
+      if (epoch !== testDetailEpoch) return;
+      const text = detail.evicted ? '[响应原文已因容量限制清理，测试摘要仍保留]' : detail.text || (!append ? row.error || '未收到上游响应' : '');
+      $('testDetails').textContent = (append ? $('testDetails').textContent : `${row.keyName || row.keyId || '按策略'}\n`) + text
+        + (detail.done && detail.truncated ? '\n[原始响应已截断]' : '');
+      testDetailOffset = detail.nextOffset; $('testDetailMore').hidden = detail.done;
+    } catch (e) { if (epoch === testDetailEpoch) $('testDetails').textContent = '读取失败：' + e.message; }
+  }
+  $('testDetailMore').onclick = () => loadTestDetail(testDetailRow, true);
   function visibleTestModels() {
     const q = $('testFilter').value.toLowerCase();
     return (testState.account?.models || []).filter(model => model.toLowerCase().includes(q));
@@ -1044,39 +1076,40 @@
       select.onchange = () => { if (select.checked) testState.selected.add(model); else testState.selected.delete(model); updateTestControls(); };
       cell.append(select);
       const results = [...testState.rows.values()].filter(r => r.model === model);
-      const pending = testState.active && testState.targets.has(model) && results.length < testState.combinations.filter(c => c.model === model).length;
+      const pending = testState.active && testState.targets.has(model) && (results.some(r => ['queued', 'running'].includes(r.state)) || results.length < testState.combinations.filter(c => c.model === model).length);
       const state = pending ? testState.running === model ? '测试中' : '排队中' : results.length
-        ? results.every(r => r.cancelled) ? '已取消' : results.every(r => r.success) ? '成功' : '失败' : '未测试';
+        ? results.every(r => r.cancelled) ? '已取消' : results.every(r => r.state === 'skipped') ? '已跳过'
+          : results.every(r => r.state === 'notExecuted') ? '未执行' : results.every(r => r.state === 'unavailable') ? '结果不可用'
+          : results.every(r => r.success) ? '成功' : results.some(r => r.success) ? '部分成功' : '失败' : '未测试';
       const summaryCell = el('td');
       for (const r of results) {
         const result = el('div', '', 'result-line');
         result.append(el('span', r.keyName || r.keyId || '按策略', 'result-key'),
           el('code', `${r.originalStatus ?? '—'} → ${r.mappedStatus ?? '—'}`, 'result-http'),
           el('strong', `${r.durationMs ?? '—'}ms`, 'result-duration'),
-          el('span', `重试 ${r.retries ?? 0}次`, 'result-retries'));
+          el('span', `重试 ${r.retries ?? 0}次 · ${testRowState(r)}`, 'result-retries'));
         summaryCell.append(result);
       }
       if (!results.length) summaryCell.append(el('span', pending ? '等待响应' : '—', 'result-empty'));
       const ops = el('td'), run = button('测试', () => startTests([model])); run.disabled = testBusy(); ops.append(run);
       if (results.length) ops.append(button('详情', () => {
-        $('testDetails').textContent = results.map(r =>
-          `${r.keyName || r.keyId || '按策略'} · 测试端点：${r.endpoint || '—'} · 出站方式：${r.networkMode === 'proxyPool' ? '代理池' : '直连'} · 上游连接：${r.transport === 'websocket' ? 'WebSocket' : 'HTTP'}${r.proxy ? `\n实际代理：${r.proxy.address} · ${r.proxy.id}` : ''}\n${r.response || r.error || '未收到上游响应'}${r.responseTruncated ? '\n[原始响应超过 32 MiB，展示已截断]' : ''}`
-        ).join('\n\n');
+        loadTestDetail(results[0]);
         const overview = $('testDetailOverview'); overview.replaceChildren();
         for (const r of results) {
           const section = el('section', '', 'detail-group'), values = el('dl', '', 'detail-values detail-card');
           section.append(el('h4', r.keyName || r.keyId || '按渠道策略'));
-          for (const [label, value] of [['模型', model], ['状态', r.cancelled ? '已取消' : r.success ? '成功' : '失败'],
+          for (const [label, value] of [['模型', model], ['状态', testRowState(r)],
             ['测试端点', r.endpoint || '—'], ['出站方式', r.networkMode === 'proxyPool' ? '代理池' : '直连'], ['上游连接', r.transport === 'websocket' ? 'WebSocket' : 'HTTP'],
             ...(r.proxy ? [['实际代理', r.proxy.address], ['代理 ID', r.proxy.id], ['代理来源', r.proxy.subscriptionId]] : []),
             ['状态码', `${r.originalStatus ?? '—'} → ${r.mappedStatus ?? '—'}`],
             ['响应时间', `${r.durationMs ?? '—'} ms`], ['重试次数', String(r.retries ?? 0)]]) values.append(el('dt', label), el('dd', value));
-          section.append(values); overview.append(section);
+          section.append(values, button('查看此 Key 响应', () => loadTestDetail(r), 'text-button')); overview.append(section);
         }
         $('testDetailDialog').showModal();
       }, 'text-button'));
       const stateCell = el('td');
       stateCell.append(el('span', state, 'console-badge ' + (state === '成功' ? 'is-success' : state === '失败' ? 'is-error' : pending ? 'is-active' : 'is-neutral')));
+      if (results.length) stateCell.append(el('small', `成功 ${results.filter(r => r.success).length} / 失败 ${results.filter(r => testRowState(r) === '失败').length}`));
       const modelCell = el('td', model, 'console-model');
       for (const endpoint of new Set(results.map(r => r.endpoint).filter(Boolean)))
         modelCell.append(el('code', endpoint, 'result-endpoint'));
@@ -1095,6 +1128,8 @@
     if (testBusy() && testState.account?.id !== account.id) { message('请先取消或等待当前渠道测试完成', true); return; }
     $('testTitle').textContent = '连接测试 · ' + account.label;
     if (!testBusy()) {
+      $('testAutoDisableKeys').checked = false;
+      $('testAutoDisableHint').textContent = `使用渠道规则：${account.keyAutoDisable?.statusCodes || '401,403'}，连续 ${account.keyAutoDisable?.failureThreshold || 3} 个独立测试请求后禁用。未勾选时不改变计数或 Key 状态。`;
       fillKeyOptions($('testKey'), account.keys || [], true);
       if (testState.account?.id !== account.id) {
         $('testConfiguration').open = true;
@@ -1127,7 +1162,8 @@
     for (const [id, row] of testState.rows) if (models.includes(row.model)) testState.rows.delete(id);
     feedback('testError'); $('testResume').hidden = true; renderTests();
     try {
-      const job = await api('POST', 'tests/start', { accountId: testState.account.id, models, keyMode, keyId, endpoint: $('testEndpoint').value || null, stream: $('testStream').checked, content, maxOutputTokens });
+      const job = await api('POST', 'tests/start', { accountId: testState.account.id, models, keyMode, keyId, endpoint: $('testEndpoint').value || null, stream: $('testStream').checked, content, maxOutputTokens, autoDisableKeys: $('testAutoDisableKeys').checked });
+      testState.resultsVersion = -1;
       testState.jobId = job.id; testState.active = true; testState.epoch++;
       $('testConfiguration').open = false; document.querySelector('.test-content').scrollTop = 0;
       feedback('testProgress', '测试已提交'); await pollTests(testState.epoch);
@@ -1141,18 +1177,44 @@
       const job = await api('GET', 'tests/status?id=' + encodeURIComponent(testState.jobId));
       if (epoch !== testState.epoch) return;
       const state = typeof job.state === 'number' ? ['Queued', 'Running', 'Completed', 'Failed', 'Cancelled'][job.state] : job.state;
-      const progress = job.progress || {}, rows = job.result?.rows || progress.rows || [];
-      for (const row of rows) testState.rows.set(resultId(row.model, row.keyId), row);
-      testState.running = progress.running || null;
+      const progress = job.progress || {};
+      let rows = job.result?.rows || progress.rows || [];
+      let resultsError = null;
+      const version = job.result?.resultVersion ?? progress.resultVersion;
+      if (version != null && version !== testState.resultsVersion) {
+        rows = []; let offset = 0, page;
+        try {
+          do {
+            page = await api('GET', `tests/results?id=${encodeURIComponent(testState.jobId)}&offset=${offset}`);
+            if (epoch !== testState.epoch) return;
+            rows.push(...page.rows); offset = page.nextOffset;
+          } while (offset < page.total && page.rows.length);
+        } catch (e) {
+          if (epoch !== testState.epoch) return;
+          if (!['Completed', 'Failed', 'Cancelled'].includes(state)) throw e;
+          resultsError = '测试已结束，结果读取失败或已清理：' + e.message;
+          feedback('testError', resultsError, true);
+        }
+        testState.resultsVersion = version;
+      }
+      for (const row of rows) testState.rows.set(row.jobId ? `${row.jobId}:${row.rowId}` : resultId(row.model, row.keyId), row);
+      testState.running = [...testState.rows.values()].find(r => r.jobId === testState.jobId && r.state === 'running')?.model || progress.running || null;
       feedback('testProgress', `${({ Queued: '排队中', Running: '测试中', Completed: '已完成', Failed: '失败', Cancelled: '已取消' })[state] || state} · ${progress.completed ?? rows.length}/${progress.total ?? testState.combinations.length}`);
       $('testResume').hidden = true;
       if (['Completed', 'Failed', 'Cancelled'].includes(state)) {
         testState.active = false; testState.cancelling = false; testState.running = null;
+        for (const r of testState.rows.values()) if (r.jobId === testState.jobId && ['queued', 'running'].includes(r.state))
+          Object.assign(r, { state: resultsError ? 'unavailable' : state === 'Cancelled' ? 'cancelled' : 'notExecuted', cancelled: state === 'Cancelled', error: resultsError || job.error });
         for (const combo of testState.combinations) {
-          const exists = combo.keyId === null ? [...testState.rows.values()].some(r => r.model === combo.model) : testState.rows.has(resultId(combo.model, combo.keyId));
-          if (!exists) testState.rows.set(resultId(combo.model, combo.keyId), { ...combo, success: false, cancelled: state === 'Cancelled', error: job.error || '测试未完成' });
+          const exists = [...testState.rows.values()].some(r => r.model === combo.model && (combo.keyId === null || r.keyId === combo.keyId));
+          if (!exists) testState.rows.set(resultId(combo.model, combo.keyId), { ...combo, keyName: testState.account.keys?.find(k => k.id === combo.keyId)?.name,
+            state: resultsError ? 'unavailable' : state === 'Cancelled' ? 'cancelled' : 'notExecuted', success: false, cancelled: state === 'Cancelled', error: resultsError || job.error || '测试未完成' });
         }
         if (job.error) feedback('testError', job.error, true);
+        await load();
+        if (epoch !== testState.epoch) return;
+        testState.account = accounts.find(a => a.id === testState.account.id) || testState.account;
+        fillKeyOptions($('testKey'), testState.account.keys || [], true);
       } else if (['Queued', 'Running'].includes(state)) testState.timer = setTimeout(() => pollTests(epoch), 800);
       else throw Error('无法识别任务状态，请重新查询');
       renderTests();

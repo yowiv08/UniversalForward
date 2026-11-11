@@ -105,7 +105,7 @@ const html = require('./page-source.cjs')();
       assert.equal(await page.locator('#testDialog').evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth), true);
       await claudeResult.getByRole('button', { name: '详情', exact: true }).click();
       assert.match(await page.locator('#testDetailOverview').innerText(), /测试端点\s+\/v1\/messages/);
-      assert.match(await page.locator('#testDetails').innerText(), /测试端点：\/v1\/messages/);
+      assert.equal(JSON.parse(await page.locator('#testDetails').innerText()).content[0].text, 'OK');
       assert.equal(await page.locator('#testDetailDialog').evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth), true);
       await page.screenshot({ path: path.join(output, 'details-' + viewport.width + '.png') });
       await page.locator('#testDetailClose').click();

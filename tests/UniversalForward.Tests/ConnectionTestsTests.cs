@@ -107,7 +107,7 @@ public sealed class ConnectionTestsTests
         var result = await registration.ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(new { accountId = "account", models = Models, endpoint = "/v1/responses" }),
             value => progress.Add(value!.Value), CancellationToken.None));
-        var rows = result!.Value.GetProperty("rows");
+        var rows = ConnectionTestAssertions.Rows(terminal);
         Assert.AreEqual(proxy ? "proxyPool" : "direct", rows[0].GetProperty("networkMode").GetString());
         pool.Verify(x => x.CreateClient(It.IsAny<ProxyEndpoint>(), "universalforward"), proxy ? Times.Exactly(2) : Times.Never());
         if (proxy) Mock.Get(host.Services.Http).Verify(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()), Times.Never);
@@ -134,7 +134,7 @@ public sealed class ConnectionTestsTests
         var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel }),
             _ => { }, CancellationToken.None));
-        var row = result!.Value.GetProperty("rows")[0];
+        var row = ConnectionTestAssertions.Rows(terminal)[0];
         Assert.AreEqual(503, row.GetProperty("mappedStatus").GetInt32());
         Assert.AreEqual("proxy_pool_unavailable", row.GetProperty("code").GetString());
         Assert.AreEqual("proxyPool", row.GetProperty("networkMode").GetString());
@@ -157,8 +157,8 @@ public sealed class ConnectionTestsTests
         var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel, endpoint = "/v1/responses", stream = true }),
             _ => { }, CancellationToken.None));
-        Assert.AreEqual(expected, result!.Value.GetProperty("rows")[0].GetProperty("success").GetBoolean());
-        Assert.AreEqual(body, result.Value.GetProperty("rows")[0].GetProperty("response").GetString());
+        Assert.AreEqual(expected, ConnectionTestAssertions.Rows(terminal)[0].GetProperty("success").GetBoolean());
+        Assert.AreEqual(body, ConnectionTestAssertions.Rows(terminal)[0].GetProperty("response").GetString());
     }
 
     [TestMethod]
@@ -188,7 +188,7 @@ public sealed class ConnectionTestsTests
         var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel, endpoint = "/v1/responses", stream = true }),
             _ => { }, CancellationToken.None));
-        var row = result!.Value.GetProperty("rows")[0];
+        var row = ConnectionTestAssertions.Rows(terminal)[0];
         Assert.IsFalse(row.GetProperty("success").GetBoolean());
         Assert.AreEqual("rate limit exceeded: token rate limit", row.GetProperty("error").GetString());
         Assert.AreEqual("event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"rate limit exceeded: token rate limit\"}}\n\n",
@@ -254,7 +254,7 @@ public sealed class ConnectionTestsTests
             JsonSerializer.SerializeToElement(new { accountId = "account", models = Models }),
             _ => { }, CancellationToken.None));
         CollectionAssert.AreEqual(PreferredPaths, paths);
-        Assert.IsTrue(result!.Value.GetProperty("rows").EnumerateArray().All(x => x.GetProperty("success").GetBoolean()));
+        Assert.IsTrue(ConnectionTestAssertions.Rows(terminal).EnumerateArray().All(x => x.GetProperty("success").GetBoolean()));
         Assert.AreEqual(400, (await terminal.StartConnectionTestsAsync(Context(new
         { accountId = "account", models = SingleModel, endpoint = "/v1/responses" }))).StatusCode);
     }
@@ -335,7 +335,7 @@ public sealed class ConnectionTestsTests
         Assert.AreEqual(202, (await terminal.StartConnectionTestsAsync(Context(input))).StatusCode);
         var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(input), _ => { }, CancellationToken.None));
-        var row = result!.Value.GetProperty("rows")[0];
+        var row = ConnectionTestAssertions.Rows(terminal)[0];
         Assert.AreEqual(1, sent);
         Assert.IsTrue(row.GetProperty("success").GetBoolean(), row.ToString());
         Assert.AreEqual(expectedEndpoint, row.GetProperty("endpoint").GetString());
@@ -365,7 +365,7 @@ public sealed class ConnectionTestsTests
         var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(input), _ => { }, CancellationToken.None));
         CollectionAssert.AreEqual(PreferredPaths, paths);
-        var rows = result!.Value.GetProperty("rows");
+        var rows = ConnectionTestAssertions.Rows(terminal);
         Assert.AreEqual(2, rows.GetArrayLength());
         Assert.AreEqual("/v1/messages", rows[0].GetProperty("endpoint").GetString());
         Assert.AreEqual("/v1/responses", rows[1].GetProperty("endpoint").GetString());
@@ -445,7 +445,7 @@ public sealed class ConnectionTestsTests
         var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(new { accountId = "account", models = SingleModel, endpoint, stream = false }),
             _ => { }, CancellationToken.None));
-        Assert.IsTrue(result!.Value.GetProperty("rows")[0].GetProperty("success").GetBoolean(), result.ToString());
+        Assert.IsTrue(ConnectionTestAssertions.Rows(terminal)[0].GetProperty("success").GetBoolean(), result.ToString());
         Assert.AreEqual(2, bodies.Count);
         Assert.AreEqual(bodies[0], bodies[1]);
         Assert.AreEqual(sessions[0], sessions[1]);
