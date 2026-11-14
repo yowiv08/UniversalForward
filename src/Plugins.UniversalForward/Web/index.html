@@ -74,15 +74,6 @@
       </details>
       <details class="journal-explanation"><summary><span data-icon="info"></span>日志说明</summary><p>日志保存在内存中，重启或重载插件后清空。记录包含请求元数据、Token 用量、请求／响应头、扩展参数和错误，不保存请求／响应正文。</p><p>请求头可能包含访问密钥，仅供管理员查看。思考参数来自请求和上游报告，不表示模型内部的计算强度。</p></details>
     </div>
-      <aside id="journalDetail" class="detail-panel" hidden aria-labelledby="requestDetailTitle">
-        <header class="request-detail-heading"><h3 id="requestDetailTitle">日志详情</h3><button id="journalDetailClose" class="icon-button" aria-label="关闭详情"><span data-icon="x"></span></button></header>
-        <div id="journalOverview"></div>
-        <div class="actions"><button id="journalExport" type="button" class="secondary">导出整条日志</button><button id="journalDelete" type="button" class="secondary danger">删除日志</button></div>
-        <details class="journal-metadata"><summary>请求元数据与重试记录</summary><pre id="journalMetadata" class="journal-pre" tabindex="0"></pre></details>
-        <label for="journalPart">原始内容</label><select id="journalPart"></select>
-        <div class="actions"><button id="journalRaw" type="button" class="secondary">原文</button><button id="journalJson" type="button" class="secondary">JSON</button><button id="journalCopy" type="button" class="secondary">复制原文</button></div>
-        <div id="journalPartStatus" class="muted"></div><pre id="journalBody" class="journal-pre" tabindex="0"></pre>
-      </aside>
     </div>
     <footer class="actions journal-pagination" aria-label="日志分页"><label for="journalPageSize">每页<select id="journalPageSize"><option value="10">10 条</option><option value="25">25 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label><button id="journalPrevious" type="button" class="secondary" disabled>上一页</button><span id="journalPage" role="status"></span><button id="journalNext" type="button" class="secondary" disabled>下一页</button></footer>
   </section>
@@ -101,6 +92,16 @@
     </form>
   </dialog>
 
+  <dialog id="journalDetail" class="request-detail-dialog" aria-labelledby="requestDetailTitle">
+    <header class="request-detail-heading"><h3 id="requestDetailTitle">日志详情</h3><button id="journalDetailClose" type="button" class="icon-button" aria-label="关闭详情"><span data-icon="x"></span></button></header>
+    <div id="journalDetailStatus" class="feedback" role="status" hidden></div>
+    <div id="journalOverview"></div>
+    <div class="actions"><button id="journalExport" type="button" class="secondary">导出整条日志</button><button id="journalDelete" type="button" class="secondary danger">删除日志</button></div>
+    <details class="journal-metadata"><summary>请求元数据与重试记录</summary><pre id="journalMetadata" class="journal-pre" tabindex="0"></pre></details>
+    <label for="journalPart">原始内容</label><select id="journalPart"></select>
+    <div class="actions"><button id="journalRaw" type="button" class="secondary">原文</button><button id="journalJson" type="button" class="secondary">JSON</button><button id="journalCopy" type="button" class="secondary">复制原文</button></div>
+    <div id="journalPartStatus" class="muted"></div><pre id="journalBody" class="journal-pre" tabindex="0"></pre>
+  </dialog>
   <dialog id="editor" class="editor-dialog" aria-labelledby="formTitle">
     <form id="accountForm" novalidate>
       <header class="dialog-heading"><div class="dialog-title-group"><span class="dialog-icon" data-icon="settings"></span><div><h2 id="formTitle">添加渠道</h2><p id="formDescription" class="dialog-description">配置渠道连接与转发规则</p></div></div><button type="button" id="close" class="icon-button" aria-label="关闭编辑"><span data-icon="x"></span></button></header>

@@ -34,7 +34,8 @@
   ];
   const journalMappingSource = mapping => (mapping.source === 'model' ? '模型规则：' + mapping.model : '渠道默认规则')
     + ' · ' + (mapping.reason === 'default' ? '未提供时使用缺省值' : mapping.mode === 'fixed' ? '固定等级' : '按值映射');
-  function journalError(error) { feedback('journalStatus', error.message || String(error), true); }
+  function journalFeedback(text, error = false) { feedback($('journalDetail').open ? 'journalDetailStatus' : 'journalStatus', text, error); }
+  function journalError(error) { journalFeedback(error.message || String(error), true); }
   const journalActive = () => workspacePage === 'journal' && !$('journal').hidden;
   function updateJournalScope() {
     const channel = $('journalFilters').elements.channel.value;
@@ -43,17 +44,18 @@
     $('journalTitle').textContent = channel ? '请求日志 · ' + (accounts.find(account => account.id === channel)?.label || channel) : '请求日志';
     $('journalTitle').title = $('journalTitle').textContent;
   }
-  function hideJournalDetail() {
+  function closeJournalDetail() {
     const restoreFocus = $('journalDetail').contains(document.activeElement);
     journalPartEpoch++; journalRawBody = ''; journalDetail = null;
-    $('journalDetail').hidden = true;
+    $('journalDetail').close();
     $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; $('journalOverview').replaceChildren();
+    feedback('journalDetailStatus');
     for (const item of $('journalRows').children) item.classList.remove('is-selected');
     if (restoreFocus && journalDetailTrigger?.isConnected) journalDetailTrigger.focus({ preventScroll: true });
     journalDetailTrigger = null;
   }
   function closeJournal() {
-    journalEpoch++; hideJournalDetail();
+    journalEpoch++; closeJournalDetail();
     setWorkspacePage('channels');
   }
   function updateJournalPagination() {
@@ -69,7 +71,7 @@
     $('journalExpand').setAttribute('aria-expanded', String(!!channel));
     $('journalExpand').textContent = channel ? '收起筛选' : '更多筛选';
     $('journalEmpty').hidden = true;
-    journalPage = 1; journalPages = 1; hideJournalDetail();
+    journalPage = 1; journalPages = 1; closeJournalDetail();
     setWorkspacePage('journal');
     await loadJournal();
   }
@@ -159,13 +161,15 @@
     journalDetailTrigger = document.activeElement;
     const epoch = ++journalPartEpoch;
     journalDetail = null; journalRawBody = ''; $('journalBody').textContent = '';
+    feedback('journalDetailStatus');
     try {
       const received = await api('GET', 'logs/detail?id=' + encodeURIComponent(id));
       if (epoch !== journalPartEpoch || !journalActive()) return;
       const detail = { ...received, parts: journalParts(received) };
       journalDetail = detail;
       renderJournalOverview(detail);
-      $('journalDetail').hidden = false;
+      if (!$('journalDetail').open) $('journalDetail').showModal();
+      $('journalDetail').scrollTop = 0;
       $('journalDetailClose').focus({ preventScroll: true });
       $('journalMetadata').textContent = JSON.stringify(detail, null, 2);
       $('journalDelete').disabled = detail.state === 'running';
@@ -239,7 +243,7 @@
     journalRawBody = ''; $('journalBody').textContent = '正在读取内容…'; $('journalCopy').disabled = true;
     $('journalPartStatus').textContent = `已保存 ${stat.savedBytes} 字节 · 已观察 ${stat.observedBytes} 字节${stat.truncated ? ' · 已截断或读取不完整' : ''}`;
     const decoder = new TextDecoder(), segments = [];
-    const current = () => epoch === journalPartEpoch && journalActive();
+    const current = () => epoch === journalPartEpoch && journalActive() && $('journalDetail').open;
     try {
       await readJournalChunks(detail.id, part, chunk => {
         const bytes = Uint8Array.from(atob(chunk.base64), c => c.charCodeAt(0));
@@ -252,12 +256,12 @@
     } catch (error) { if (current()) { $('journalBody').textContent = ''; journalError(error); } }
   }
   $('openJournal').onclick = () => openJournal();
-  $('journalDetailClose').onclick = hideJournalDetail;
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && journalActive() && !$('journalDetail').hidden && !document.querySelector('dialog[open]')) {
-      event.preventDefault();
-      hideJournalDetail();
-    }
+  $('journalDetailClose').onclick = closeJournalDetail;
+  $('journalDetail').addEventListener('cancel', event => {
+    event.preventDefault(); closeJournalDetail();
+  });
+  $('journalDetail').addEventListener('close', () => {
+    if (!$('journalDetail').open && journalDetail) closeJournalDetail();
   });
   $('journalExpand').onclick = () => {
     const panel = $('journalAdvanced'); panel.hidden = !panel.hidden;
@@ -278,22 +282,22 @@
   $('journalRaw').onclick = () => { $('journalBody').textContent = journalRawBody || '（内容为空）'; };
   $('journalJson').onclick = () => {
     try { $('journalBody').textContent = JSON.stringify(JSON.parse(journalRawBody), null, 2); }
-    catch { feedback('journalStatus', '内容不是单个 JSON 对象，可切换到原文查看', true); }
+    catch { journalFeedback('内容不是单个 JSON 对象，可切换到原文查看', true); }
   };
   $('journalCopy').onclick = async () => {
     const epoch = journalPartEpoch;
-    try { await copyText(journalRawBody); if (epoch === journalPartEpoch) feedback('journalStatus', '已复制原文'); }
+    try { await copyText(journalRawBody); if (epoch === journalPartEpoch) journalFeedback('已复制原文'); }
     catch (error) { if (epoch === journalPartEpoch) journalError(error); }
   };
   $('journalClear').onclick = async () => {
     if (!await ask('清空所有已结束的请求日志？', '清空请求日志')) return;
-    try { await api('POST', 'logs/clear', {}); hideJournalDetail(); await loadJournal(1); }
+    try { await api('POST', 'logs/clear', {}); closeJournalDetail(); await loadJournal(1); }
     catch (error) { journalError(error); }
   };
   $('journalDelete').onclick = async () => {
     const detail = journalDetail;
     if (!detail || !await ask('删除这条请求日志及其详细记录？', '删除请求日志')) return;
-    try { await api('POST', 'logs/delete', { id: detail.id }); hideJournalDetail(); await loadJournal(); }
+    try { await api('POST', 'logs/delete', { id: detail.id }); closeJournalDetail(); await loadJournal(); }
     catch (error) { journalError(error); }
   };
   $('journalSettings').onsubmit = async event => {
@@ -312,7 +316,7 @@
     exportWindow.document.title = '导出请求日志';
     exportWindow.document.body.textContent = '正在准备日志文件…';
     $('journalExport').disabled = true;
-    const current = () => epoch === journalPartEpoch && journalActive();
+    const current = () => epoch === journalPartEpoch && journalActive() && $('journalDetail').open;
     try {
       const parts = journalParts(detail);
       const pieces = [JSON.stringify({ ...detail, parts, format: 'universalforward-request-log-v1' }).slice(0, -1), ',"bodyChunks":['];
@@ -327,7 +331,7 @@
       const link = exportWindow.document.createElement('a'); link.href = url; link.download = `request-${detail.id}.json`;
       link.textContent = '下载日志文件'; exportWindow.document.body.replaceChildren(link);
       link.click(); setTimeout(() => URL.revokeObjectURL(url), 60000);
-      feedback('journalStatus', '已导出日志，原始内容以 Base64 分段保存');
+      journalFeedback('已导出日志，原始内容以 Base64 分段保存');
     } catch (error) { exportWindow.close(); if (current()) journalError(error); }
     finally { $('journalExport').disabled = false; }
   };

@@ -4,6 +4,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const source = require('./page-source.cjs')();
+const output = path.resolve(__dirname, '../../artifacts/journal-detail-dialog');
 const raw = '{"code":"upstream_error","message":"保留错误中文😀","html":"<img src=x onerror=window.injected=true>"}';
 const retainedBodies = {
   extensions: '{"reasoning_effort":"low"}',
@@ -42,9 +43,13 @@ window.Router2API={request:async(method,route,body)=>{
     if (route === 'execution/settings') return { defaultHostAttempts: 1, execution: window.catalog?.execution || { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
     if(route==='accounts')return {accounts:[{id:'channel',label:'Log channel',baseUrl:'https://upstream.example',models:['model'],keys:[],enabled:true}]};
  if(route==='logs/status')return {available:true,storage:'memory',settings:window.logSettings};
- if(route.startsWith('logs?'))return {rows:window.deleted?[]:[window.logRow],page:1,pageSize:25,total:window.deleted?0:1};
- if(route.startsWith('logs/detail?'))return window.logDetail;
- if(route.startsWith('logs/body?')){const query=new URLSearchParams(route.split('?')[1]);const after=+query.get('after');const chunksByPart=${JSON.stringify(chunksByPart)};const chunks=chunksByPart[query.get('part')];if(!chunks)throw Error('Unexpected part: '+query.get('part'));const selected=chunks.filter(c=>c.sequence>after).slice(0,4);return {chunks:selected,next:selected.at(-1)?.sequence??after,done:selected.length<4};}
+ if(route.startsWith('logs?')){const rows=window.deleted?[]:Array.from({length:window.logRowCount||1},(_,i)=>({...window.logRow,id:window.logRow.id+(i?'-'+i:'')}));return {rows,page:1,pageSize:25,total:rows.length};}
+ if(route.startsWith('logs/detail?'))return {...window.logDetail,id:new URLSearchParams(route.split('?')[1]).get('id')};
+ if(route.startsWith('logs/body?')){
+   if(window.holdLogBody)await new Promise(resolve=>{window.releaseLogBody=()=>{window.holdLogBody=false;resolve();};});
+   if(window.failLogBody)throw Error('模拟详情内容读取失败');
+   const query=new URLSearchParams(route.split('?')[1]);const after=+query.get('after');const chunksByPart=${JSON.stringify(chunksByPart)};const chunks=chunksByPart[query.get('part')];if(!chunks)throw Error('Unexpected part: '+query.get('part'));const selected=chunks.filter(c=>c.sequence>after).slice(0,4);return {chunks:selected,next:selected.at(-1)?.sequence??after,done:selected.length<4};
+ }
  if(route==='logs/settings'){window.logSettings=body;return{success:true};}
  if(route==='logs/delete'||route==='logs/clear'){window.deleted=true;return{success:true};}
  throw Error('Unexpected route: '+route);
@@ -52,6 +57,7 @@ window.Router2API={request:async(method,route,body)=>{
 const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:0;width:100%;height:100vh}</style></head><body><iframe sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe><script>document.querySelector('iframe').srcdoc=${JSON.stringify(source.replace('<head>', '<head>' + mock)).replaceAll('<', '\\u003c')}<\/script></body></html>`;
 
 (async () => {
+  fs.mkdirSync(output, { recursive: true });
   const server = http.createServer((_, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(html); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const browser = await chromium.launch({ headless: true });
@@ -78,8 +84,15 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.match(await frame.locator('#journalRows').innerText(), /响应：upstream-version-20261022/);
     const tokenMetrics = frame.locator('#journalRows .record-metrics > span').filter({ hasText: 'Token' });
     assert.deepEqual(await tokenMetrics.locator('strong').allTextContents(), ['128,692', '178']);
+    const listWidth = await frame.locator('.journal-content').evaluate(node => node.clientWidth);
     await frame.locator('#journalRows').getByRole('button', { name: '详情' }).click();
     await frame.locator('#journalBody').filter({ hasText: 'upstream-id' }).waitFor();
+    const detailDialog = frame.getByRole('dialog', { name: '日志详情', exact: true });
+    assert.equal(await detailDialog.evaluate(node => node.matches(':modal')), true);
+    assert.equal(await frame.locator('.journal-content').evaluate(node => node.clientWidth), listWidth, 'The dialog must overlay the full-width list');
+    const desktopBounds = await detailDialog.boundingBox();
+    assert.equal(desktopBounds.width, 680);
+    assert.equal(desktopBounds.x + desktopBounds.width, page.viewportSize().width);
     assert.equal(await frame.locator('#journalPart').inputValue(), 'attempt-2-response-headers');
     assert.deepEqual(await frame.locator('#journalPart option').evaluateAll(options => options.map(option => option.value)), Object.keys(retainedBodies));
     assert.match(await frame.locator('#journalPart option:checked').innerText(), /上游响应头/);
@@ -111,7 +124,7 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.equal(await frame.locator('#journalPart option:checked').innerText(), 'error');
     await page.screenshot({ path: path.resolve(__dirname, '../../artifacts/journal-redesign-desktop.png'), fullPage: true });
     await frame.locator('#journalCopy').click();
-    await frame.locator('#journalStatus').filter({ hasText: '已复制原文' }).waitFor();
+    await frame.locator('#journalDetailStatus').filter({ hasText: '已复制原文' }).waitFor();
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), raw);
     await frame.locator('#journalJson').click();
     assert.deepEqual(JSON.parse(await frame.locator('#journalBody').textContent()), JSON.parse(raw));
@@ -221,10 +234,60 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     assert.equal(await frame.locator('#journalDetail').evaluate(n => n.scrollWidth <= n.clientWidth + 1), true);
     await page.screenshot({ path: path.resolve(__dirname, '../../artifacts/journal-redesign-mobile.png'), fullPage: true });
     await frame.locator('#journalDetailClose').click();
+
+    // Closing the overlay preserves the list location and cancels late detail updates.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await frame.locator('body').evaluate((_, sample) => {
+      window.logRow = sample.row; window.logDetail = sample.detail; window.logRowCount = 24;
+      document.getElementById('journalFilters').requestSubmit();
+    }, { row, detail });
+    await frame.locator('#journalRows tr').nth(23).waitFor();
+    const lastDetail = frame.locator('#journalRows tr').last().getByRole('button', { name: '详情', exact: true });
+    await lastDetail.scrollIntoViewIfNeeded();
+    const listScroll = await frame.locator('.journal-content').evaluate(node => node.scrollTop);
+    assert.ok(listScroll > 0);
+    const pageLabel = await frame.locator('#journalPage').innerText();
+    const openLast = async () => { await lastDetail.click(); await detailDialog.waitFor(); };
+    await openLast();
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press('Tab');
+      assert.equal(await detailDialog.evaluate(node => node.contains(document.activeElement)), true);
+    }
+    await frame.locator('#journalDelete').click(); await page.keyboard.press('Escape');
+    assert.equal(await detailDialog.isVisible(), true, 'Escape closes the confirmation before closing log details');
+    await frame.locator('#journalDetailClose').click();
+    assert.equal(await lastDetail.evaluate(node => node === document.activeElement), true);
+    assert.equal(await frame.locator('.journal-content').evaluate(node => node.scrollTop), listScroll);
+    assert.equal(await frame.locator('#journalPage').innerText(), pageLabel);
+    assert.equal(await frame.locator('#journalFilters [name=channel]').inputValue(), 'channel');
+    await openLast(); await page.keyboard.press('Escape');
+    assert.equal(await detailDialog.isVisible(), false);
+    assert.equal(await lastDetail.evaluate(node => node === document.activeElement), true);
+    await openLast(); await page.mouse.click(20, 180);
+    assert.equal(await detailDialog.isVisible(), false);
+    assert.equal(await lastDetail.evaluate(node => node === document.activeElement), true);
+    await frame.locator('body').evaluate(() => { window.holdLogBody = true; });
+    await openLast(); await frame.locator('#journalBody').filter({ hasText: '正在读取内容' }).waitFor();
+    await frame.locator('#journalDetailClose').click();
+    await frame.locator('body').evaluate(async () => { window.releaseLogBody(); await new Promise(resolve => setTimeout(resolve, 0)); });
+    assert.equal(await detailDialog.isVisible(), false);
+    assert.equal(await frame.locator('#journalBody').textContent(), '');
+    await frame.locator('body').evaluate(() => { window.failLogBody = true; });
+    await openLast(); await frame.locator('#journalDetailStatus').filter({ hasText: '模拟详情内容读取失败' }).waitFor();
+    await frame.locator('#journalDetailClose').click();
+    await frame.locator('body').evaluate(() => { window.failLogBody = false; });
+    for (const width of [1280, 390, 320]) {
+      await page.setViewportSize({ width, height: width === 1280 ? 900 : 844 });
+      await openLast(); await frame.locator('#journalBody').filter({ hasText: 'upstream-id' }).waitFor();
+      assert.equal(await detailDialog.evaluate(node => node.scrollWidth <= node.clientWidth), true);
+      if (width < 600) assert.equal((await detailDialog.boundingBox()).width, width);
+      await page.screenshot({ path: path.join(output, 'dialog-' + width + '.png') });
+      await frame.locator('#journalDetailClose').click();
+    }
     await frame.locator('#journalClose').click();
     assert.equal(await frame.locator('#journalBody').textContent(), '');
     assert.deepEqual(errors, []);
     await context.close();
-    console.log('Journal UI passed: requested/sent/reported models, per-attempt identity, token details with grouping/zero/unknown values and export, legacy/missing model fallback, channel filtering, reasoning evidence, retained error/header chunk decoding, excluded legacy incoming/received/request/response/WS bodies, safe HTML and long models, real copy/export, confirmations, settings, mobile.');
+    console.log('Journal UI passed: right-side modal, full-width list, focus and scroll restoration, Escape/backdrop/nested confirmation, cancelled late replies, visible detail errors, 320/390px layouts, models, reasoning, token usage, safe content, copy/export and settings.');
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

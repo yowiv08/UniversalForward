@@ -780,6 +780,7 @@
       if (!dismiss) return;
       event.stopPropagation();
       if (modal.id === 'editor') closeEditor();
+      else if (modal.id === 'journalDetail') closeJournalDetail();
       else if (modal.id === 'confirmDialog') resolveConfirm(false);
       else modal.close();
     });

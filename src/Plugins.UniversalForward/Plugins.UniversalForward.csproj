@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <RootNamespace>Plugins.UniversalForward</RootNamespace>
-    <Version>4.5.0</Version>
+    <Version>4.5.1</Version>
     <AssemblyName>Plugins.UniversalForward</AssemblyName>
     <Description>Responses、Chat Completions 和 Anthropic Messages 上游转发插件，支持渠道认证、多 Key 管理、思考映射、系统提示词、请求头、代理、重试、连接测试和请求日志。</Description>
   </PropertyGroup>
