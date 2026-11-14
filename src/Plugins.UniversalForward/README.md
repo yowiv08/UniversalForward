@@ -2,7 +2,7 @@
 
 Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配置和连接测试。
 
-**4.3.0 适配官方 Router2API 2.1.2（Router.Contracts 2.0.0）。** 4.3 修复多 Key 连接测试结果超过宿主 JSON 配额的问题，新增渠道级自定义 HTTP 状态码、连续失败阈值、Key 自动禁用和失败切换。正式请求与连接测试分别控制是否自动禁用，默认关闭；禁用后需手动恢复。沿用已有渠道配置，无需数据库结构迁移。
+**4.3.0 适配官方 Router2API 2.1.2（Router.Contracts 2.0.0）。** 本版新增原生 Chat Completions、渠道认证方式选择和 Key 自动禁用，修复连接测试结果超过宿主 JSON 配额的问题，并将 Responses 资源状态剥离改为仅在明确状态错误后触发。新建渠道默认 Bearer 认证，旧渠道保留原认证；正常请求保留思考历史。沿用已有渠道配置，无需数据库结构迁移。
 
 管理界面参考 shadcn/ui Dashboard 与 Ant Design 数据展示规范重构，使用黑白灰控件和侧栏导航。渠道管理与请求日志分别展示，渠道默认以卡片展示，可切换为列表；禁用渠道使用灰色背景与「已禁用」标识，文字保持清晰。点击名称或模型数量进入相应设置，启用／禁用按钮直接可用，更多菜单依次提供「日志」「复制」和「删除」。
 
@@ -62,14 +62,23 @@ Claude 输入用量计入缓存读取和写入，普通 JSON、SSE／WebSocket �
 - 选择渠道允许使用的模型。
 - 指定模型发现使用的 Key。
 - 使用当前表单的地址和 Key 获取候选模型。
-- 获取模型请求 `GET {Base URL}/v1/models`，默认使用 `Authorization: Bearer` 并附带 `anthropic-version: 2023-06-01`；Anthropic 官方接口缺少该头会返回 400，OpenAI 兼容上游忽略它。通用请求头或高级参数 `ReplaceHeaders` 可覆盖这两个头。
-- Base URL 填写上游根地址或 `/v1` 前缀，例如 `https://api.anthropic.com` 或 `https://api.anthropic.com/v1`；末尾误带 `/v1/messages`、`/v1/responses`、`/v1/models` 时自动忽略该接口段。
+- 获取模型请求 `GET {Base URL}/v1/models`，使用渠道选择的认证方式，新建渠道默认 `Authorization: Bearer`。请求同时附带 `anthropic-version: 2023-06-01`；Anthropic 官方接口缺少该头会返回 400，OpenAI 兼容上游忽略它。通用请求头或高级参数 `ReplaceHeaders` 可覆盖这些头。
+- Base URL 填写上游根地址或 `/v1` 前缀，例如 `https://api.anthropic.com` 或 `https://api.anthropic.com/v1`；末尾带 `/v1/messages`、`/v1/responses`、`/v1/chat/completions`、`/v1/models` 时自动识别接口段，保留前面的网关路径。
 - 为每个模型设置支持协议、首选协议和强制原生模式。
 
 ## 请求转发
 
-仅支持 OpenAI Responses `/v1/responses` 和 Anthropic Messages `/v1/messages`，以及普通响应和 SSE 流式响应。
-协议路由选择上游路径和认证方式；请求及响应内容按上游格式透传。
+支持以下三种原生协议的普通 JSON 和 SSE 流式响应：
+
+| 协议 | 接口 | 配置键 | 新建渠道默认认证 |
+| --- | --- | --- | --- |
+| OpenAI Responses | `/v1/responses` | `responses` | `Authorization: Bearer` |
+| Anthropic Messages | `/v1/messages` | `messages` | `Authorization: Bearer` |
+| Chat Completions | `/v1/chat/completions` | `chat` | `Authorization: Bearer` |
+
+协议路由选择上游路径，认证方式可在渠道基础设置中独立选择；请求及响应内容按上游格式透传，不在协议间转换消息体。新渠道默认允许三种端点，已有渠道保留已保存的端点选择；使用 Chat Completions 时在渠道基础设置中勾选该端点。旧渠道的认证规则保留，见下方「认证方式」。
+
+Chat Completions 保留 `messages`、工具调用与结果、图片等内容块、`reasoning_content`／`reasoning_details`、`max_tokens`／`max_completion_tokens` 及未知扩展字段。正常请求的思考历史原样发送；Responses 状态修复开关和 WebSocket 选择不作用于 Chat Completions。仅思考、工具或音频输出也算有效输出；SSE 收到 `[DONE]` 才结束读取，保留 `finish_reason` 后的用量事件。
 客户端使用 `/v1/models` 返回的完整 `platform/model` 模型 ID；渠道模型使用上游实际接受的 ID，保留上游要求的平台前缀。
 Codex 模板为 Responses 请求补齐协议字段和会话元数据，保留原始对话、指令和工具配置。
 Claude 模板为 Messages 请求补齐客户端身份、会话元数据和消息格式，保留自定义系统指令、工具和生成参数。
@@ -99,7 +108,7 @@ HTTP 200 表示上游已开始正常响应，宿主尝试详情中的 `Healthy` 
 
 ## Responses 上游 WebSocket
 
-渠道的「Responses 上游连接」可选择 HTTP / SSE 或 WebSocket，默认 HTTP。WebSocket 使用相同的渠道地址、Key、请求头和出站方式；仅作用于最终路由到 `/v1/responses` 的请求。Messages 和模型获取仍使用 HTTP。
+渠道的「Responses 上游连接」可选择 HTTP / SSE 或 WebSocket，默认 HTTP。WebSocket 使用相同的渠道地址、Key、请求头和出站方式；仅作用于最终路由到 `/v1/responses` 的请求。Chat Completions、Messages 和模型获取仍使用 HTTP。
 
 每次请求独立建立 WS 连接，发送 `response.create`，不发送 `stream` / `background` 字段。后台请求不受支持。客户端仍使用 HTTP / SSE，非流式请求汇总为 Responses JSON。不提供跨请求连接复用或连接内续接缓存；`previous_response_id` 是否可用取决于上游持久化能力。
 
@@ -109,29 +118,31 @@ HTTP 200 表示上游已开始正常响应，宿主尝试详情中的 `Healthy` 
 
 ## Responses 资源状态剥离
 
-在渠道基础设置中开启「剥离 Responses 资源状态」，可兼容跨资源、账号或中转续聊，避免回传其他来源的历史条目 ID 或加密推理状态。适用于 AnyRouter 等返回标准 `reasoning.encrypted_content` 的 Responses 上游，以及多个 Azure OpenAI 资源轮换的上游。新渠道和旧配置默认关闭，无需额外本地代理或修改客户端地址。
+在渠道基础设置中开启「异常时剥离 Responses 资源状态」，可在跨资源、账号或中转续聊遇到资源状态失效时修复请求。新渠道和旧配置默认关闭，已有的 `stripResponsesResourceState` 开关继续有效。
 
-规则作用于当前接收请求的目标渠道，不按密文来源或域名判断。例如 DeepSeek → AnyRouter 时，在 AnyRouter 渠道开启；AnyRouter → 其他中转时，在切换后的目标渠道开启。需要双向切换时，两边都开启。响应中的加密字段仍原样返回，后续发送历史时才剥离。
+**开启后首次请求仍保留完整历史**，包括 `reasoning`、`encrypted_content`、条目 ID 和 `previous_response_id`。正常续聊和普通重试不会提前删除思考历史；下一次独立请求也从客户端原始历史开始，不记忆上次是否剥离。
 
-开启后，仅对最终路由到 `/v1/responses` 的请求，在模板补全和思考映射之后、发送之前删除：
+只有最终路由到 `/v1/responses`，且上游错误明确指向密文校验／解密失败、历史响应或直接条目找不到时，才尝试兼容修复。识别 `invalid_encrypted_content`、`previous_response_not_found`、`response_not_found`、`item_not_found` 等明确错误码，以及对应的错误消息和直接条目字段。普通 `400`、`bad response status code 400`、思考等级参数错误、缺少 reasoning 条目、限流、网络失败和模型不存在不会触发剥离。只检查错误结构，不从正常回答或工具内容中匹配关键词。
+
+修复时才删除：
 
 - 顶层 `previous_response_id`。
-- `input` 数组中的全部直接 `reasoning` 条目，包括密文、摘要和推理正文；避免留下严格 Responses 上游不接受的无密文推理条目。
+- `input` 数组中的全部直接 `reasoning` 条目，包括密文、摘要和推理正文，避免留下无密文的 reasoning 空壳。
 - 其他直接对象条目的 `id`，以及名称以 `encrypted` 开头的字段，例如 `encrypted_content`，区分大小写。
 
-不递归删除嵌套字段；消息正文、assistant `phase`、工具调用的 `call_id`、参数、工具结果和 `include` 保留。响应原样返回，历史推理条目仅在下一次发送时移除。HTTP、WebSocket、流式、非流式及连接测试共用处理，重试复用已剥离的请求体；Messages 和模型获取不受影响。
+不递归删除嵌套字段；消息正文、assistant `phase`、工具调用的 `call_id`、参数、工具结果和 `include` 保留。客户端原始请求和上游响应均不改写。规则只作用于当前目标渠道，不根据密文来源、域名或模型名称提前剥离。
 
-客户端需要携带完整对话历史；仅靠 `previous_response_id` 恢复的历史无法由插件补回。模型每轮重新推理，不再跨轮接续隐藏推理状态或历史推理摘要。若直接历史包含 `compaction` 加密检查点或 `item_reference` 引用，插件会在发送前返回 400，提示恢复完整历史；这些条目无法在删除密文或 ID 后恢复原内容，不能静默丢弃。
+每次插件调用最多额外修复重试一次，独立于普通重试和限流／空回重试次数，共用原有总时限。修复复用已经完成模板、思考映射和系统提示词处理的请求对象；后续普通重试复用修复后的请求体。已有正文、思考、密文或工具输出，响应读取中断或请求取消时不进行兼容重试。再次遇到相同状态错误时保留上游错误，不循环剥离。HTTP、SSE、WebSocket 及连接测试共用这一路径，HTTP 200 中的明确错误事件也可触发；Messages 和模型获取不受影响。
 
-渠道查询和 `accounts/save` 使用可选布尔字段 `stripResponsesResourceState`。传 `true` 开启，传 `false` 关闭，省略或传 `null` 保留已有设置；仍保存在渠道 settings JSON 中，无需宿主升级或数据库迁移。诊断事件 `request.responses.state.stripped` 分别记录 `strippedFields`（其他字段删除数）和 `removedReasoningItems`（推理条目移除数），请求日志保留剥离结果元数据。
+正常请求中的 `compaction` 加密检查点和 `item_reference` 引用原样发送。若上游报告状态失效，插件保留原始错误，不删除这些无法在本地还原的条目。客户端需恢复完整消息和工具历史；插件也无法补回仅由 `previous_response_id` 引用的历史。
 
-剥离规则参考 [codex-strip-proxy](https://github.com/AnnaofArendelle/codex-strip-proxy)。
+渠道查询和 `accounts/save` 使用可选布尔字段 `stripResponsesResourceState`。传 `true` 开启，传 `false` 关闭，省略或传 `null` 保留已有设置；仍保存在渠道 settings JSON 中，无需宿主升级或数据库迁移。仅实际修复时记录 `request.responses.state.stripped`，包括触发原因、`strippedFields` 和 `removedReasoningItems`；无法修复时记录 `request.responses.state.skipped`，不把请求正文或密文写入这些事件。
 
-0.3.2 增补的推理条目移除参考 [AnyRouter 无密文 reasoning 报错记录](https://github.com/yetone/magpie/issues/1044)。仅删除密文会留下这种条目；开启资源状态剥离后同时移除，避免跨中转续聊继续被拒。
+字段剥离参考 [codex-strip-proxy](https://github.com/AnnaofArendelle/codex-strip-proxy)，无密文 reasoning 空壳问题参考 [AnyRouter 报错记录](https://github.com/yetone/magpie/issues/1044)。旧版在每次请求发送前剥离的行为已改为上述按错误触发的修复。
 
 ## 思考等级映射
 
-在渠道编辑的「思考映射」页签中，选择渠道默认或具体模型，并分别配置 Responses、Messages：
+在渠道编辑的「思考映射」页签中，选择渠道默认或具体模型，并分别配置 Responses、Messages、Chat Completions：
 
 处理方式使用三组选项卡。等级输入使用统一的搜索下拉控件，常用值带中文提示与选中标记，可输入自定义值；支持方向键、Enter 选择，Escape 仅收起选项。映射行、固定等级与预览使用相同控件，等级文字为 14px。
 
@@ -142,13 +153,13 @@ HTTP 200 表示上游已开始正常响应，宿主尝试详情中的 `Healthy` 
 
 模型按接口继承渠道规则；取消继承后整条覆盖，不合并映射表。模型选择「不改写」可独立关闭该接口的渠道映射。等级支持自定义，实际可用值由上游模型决定；空来源、空目标和重复来源禁止保存。预览不会发送请求。
 
-Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`。以原始请求中的对应字段为准，不把宿主扩展参数或模板默认值当成客户端输入；规则在模板补全后执行，保留对象内其他参数、思考开关、Token 预算和聊天历史中的动态等级控制。
+Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`，Chat Completions 改写顶层 `reasoning_effort`。以原始请求中的对应字段为准，不把宿主扩展参数或模板默认值当成客户端输入；规则在模板补全后执行，保留对象内其他参数、思考开关、Token 预算和聊天历史中的动态等级控制。
 
 例如，只有 `low → max` 时，Codex 模板给未传等级请求补入的 `low` 不会触发映射；另设缺省 `high` 后，这类请求最终发送 `high`。现有连接测试生成的请求也按「客户端未提供」处理。HTTP、WebSocket、流式、非流式和重试使用同一规则，重试期间映射结果不变。
 
 日志显示客户端等级、实际发送等级和命中规则来源，上游报告独立显示，不推断内部思考量。
 
-渠道查询与 `accounts/save` 使用可选的 `reasoningPolicy` 字段；省略或传 `null` 保留原配置，传空 `defaults` / `models` 可清空规则。模型键使用渠道允许模型中的 ID，接口键为 `responses` / `messages`。以下为该字段的示例值：
+渠道查询与 `accounts/save` 使用可选的 `reasoningPolicy` 字段；省略或传 `null` 保留原配置，传空 `defaults` / `models` 可清空规则。模型键使用渠道允许模型中的 ID，接口键为 `responses` / `messages` / `chat`。以下为该字段的示例值：
 
 ```json
 {
@@ -172,6 +183,8 @@ Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`。�
 
 ## 系统提示词
 
+Chat Completions 的追加模式在 `messages` 末尾加入独立 `system` 消息，保留原有角色；替换模式先移除普通的 `system`／`developer` 提示消息，保留动态工具声明，再加入渠道系统指令。两种模式都保留助手思考历史、工具调用与工具结果。
+
 渠道编辑增加「系统提示词」页签，作用于该渠道的所有模型，保存后生效。提供「不改写」「追加」「替换」，默认不改写；关闭时保留已填写文本。多行文本最多 32000 个 UTF-16 单元，空格和换行原样保存，追加／替换时不能仅填空白。
 
 - 追加：保留原文，插件文本作为最后一条独立系统指令。Responses 原 `instructions` 转为首条 developer 消息，普通旧 system 消息改为 developer，插件文本写入 `input` 末尾的 system 消息；顶层 `instructions` 保留为空字符串，兼容 Codex。Messages 使用 `system` 块数组，原字符串转为文本块，原数组及缓存属性保留，插件文本作为最后一个块。
@@ -183,6 +196,21 @@ Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`。�
 
 `accounts/save` 接收 `systemPromptPolicy: { "mode": "append", "text": "请使用中文回答。" }`，`mode` 为 off／append／replace；省略或传 null 保留旧值。配置保存在现有渠道 settings JSON 中。日志元数据记录 `systemPromptRewrite`，改写结果通过这些元数据核对。
 
+## 认证方式
+
+在渠道「基础设置 → 认证方式」选择上游需要的认证头。新建渠道默认选择 `Authorization: Bearer`：
+
+| 选项 | 发送的认证头 |
+| --- | --- |
+| `Authorization: Bearer` | `Authorization: Bearer <当前 Key>` |
+| `x-api-key` | `x-api-key: <当前 Key>` |
+
+所选方式应用于 Responses、Messages、Chat Completions、模型获取、连接测试和 Responses WebSocket。发生 Key 切换时，认证头使用新选中的 Key；切换到 `x-api-key` 会同时清除 Bearer 前缀。模型候选获取使用当前草稿，刷新已保存模型和连接测试使用已保存设置。
+
+编辑旧渠道时会自动识别已有的标准认证；没有显式配置认证，或使用其他头名称、前缀时，显示「保留原认证配置」。保留该选项或复制渠道会沿用原值，主动选择其他方式后才统一认证。未显式配置认证的旧渠道仍按原规则发送：Messages 使用 `x-api-key`，Responses、Chat Completions 和模型获取使用 Bearer。直接通过 API 创建且未指定认证字段的渠道也保留该缺省规则。
+
+选择结果保存在现有 `extraParams.apiKeyHeader` 和 `extraParams.apiKeyPrefix` 中：Bearer 对应 `Authorization` 和 `Bearer `（末尾含空格），API Key 对应 `x-api-key` 和空字符串，其他高级参数保留。「请求头」和高级参数 `ReplaceHeaders` 的显式覆盖仍优先。
+
 ## 请求头配置
 
 默认透传客户端的业务请求头，包括 User-Agent、Accept-Language、会话标识及自定义字段；无需逐项配置或添加 `*`。请求头覆盖只修改同名字段，删除覆盖项并保存后恢复客户端原值，HTTP 和 WebSocket 使用同一规则。
@@ -190,7 +218,7 @@ Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`。�
 认证使用渠道 Key。Host、Content-Length、连接专用头及重新编码请求体后失效的压缩/摘要头不沿用；本地认证、Cookie 和 CSRF 头不向上游透传。连接测试和模型发现没有原始业务客户端，不借用管理页面的请求头。旧宿主若不提供完整头快照，只能透传其交给插件的字段。
 
 通过 JSON 配置固定请求头和变量替换；兼容原有 `*`、正则规则及 `PassThroughHeaders`，无需再靠它们开启默认透传。旧 `ReplaceHeaders` 仍作为显式覆盖参与优先级。
-支持所有接口共用配置，或按实际上游 Responses、Messages 接口独立配置；接口可继承通用配置，模板不限接口。模型发现使用通用配置。
+支持所有接口共用配置，或按实际上游 Responses、Messages、Chat Completions 接口独立配置；接口可继承通用配置，模板不限接口。模型发现使用通用配置。
 
 | 配置 | 功能 |
 | --- | --- |
@@ -209,7 +237,7 @@ Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`。�
 Codex 覆盖预设保留固定 User-Agent 和协议头，不重复填写会话、线程、请求、窗口 ID 及回合元数据；后端继续自动补全这些字段。
 更新插件后，已有渠道需重新应用 Codex 模板并保存，才能采用新的覆盖预设。
 
-自动补全优先使用显式覆盖（含旧 `ReplaceHeaders`），再使用客户端已有身份。缺少会话标识时，根据 Responses `input` 或 Messages `messages` 的规范化历史识别会话，不按客户端名称、User-Agent 或 IP 判断。含助手或工具历史的请求，只有唯一匹配某个会话最近历史的完整内容或延续前缀时才复用；首次聊天、回到旧历史的分叉、无法匹配或多个候选时新建会话。
+自动补全优先使用显式覆盖（含旧 `ReplaceHeaders`），再使用客户端已有身份。缺少会话标识时，根据 Responses `input` 或 Messages／Chat Completions `messages` 的规范化历史识别会话，不按客户端名称、User-Agent 或 IP 判断。含助手或工具历史的请求，只有唯一匹配某个会话最近历史的完整内容或延续前缀时才复用；首次聊天、回到旧历史的分叉、无法匹配或多个候选时新建会话。
 
 推断出的会话复用会话、线程、窗口及生成的安装、上下文标识；新请求的请求 ID 和回合 ID 独立生成，同一次请求的所有重试复用完整身份。HTTP、WebSocket、流式及非流式使用同一规则。自动补全的 `X-Client-Request-Id` 使用 `{request_id}`；客户端或配置已有值仍优先。旧配置若显式填写 `"X-Client-Request-Id": "{session_id}"`，需删除该项或改为 `{request_id}` 才会采用独立请求 ID。
 
@@ -225,7 +253,8 @@ Codex 覆盖预设保留固定 User-Agent 和协议头，不重复填写会话�
 - 支持端点选择、流式测试、进度查看和取消。
 - 本次测试可独立勾选自动禁用 Key，默认关闭；固定测试每行 Key，已禁用的后续组合标记为跳过。
 - Job 只报告小型进度，结果分页读取、响应原文按需分块加载，避免批量结果超过宿主 JSON 配额；模型汇总区分部分成功。
-- 自动选择优先使用已保存的模型首选协议；未配置时，Claude 优先使用 `/v1/messages`，其他模型优先使用 `/v1/responses`，仅选择渠道已启用的端点。手动选择仍受模型支持协议限制。
+- 自动选择优先使用已保存的模型首选协议；未配置时，Claude 优先使用 `/v1/messages`，其他模型优先使用 `/v1/responses`，否则选择渠道第一个已启用端点。仅启用 Chat Completions 时自动使用该接口。手动选择仍受模型支持协议限制。
+- Chat Completions 测试生成原生 `messages` 请求，使用 `max_completion_tokens` 指定输出上限。成功需要有效输出和正常的 `finish_reason`，SSE 还须收到 `[DONE]`；只有结束标记、角色、用量，或 `length`／`content_filter` 中断均不算成功。正式请求中的 Token 上限字段仍按客户端原值透传。
 - Codex Responses 和 Claude Messages 测试复用普通请求的协议补全。
 - 展示模型、Key、测试端点、状态码、耗时、重试次数和错误详情。
 

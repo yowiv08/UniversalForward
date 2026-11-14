@@ -10,7 +10,7 @@ using Router.Contracts.Plugins;
 namespace UniversalForward.Tests;
 
 [TestClass]
-public sealed class ConnectionTestsTests
+public sealed partial class ConnectionTestsTests
 {
     private static readonly string[] UnknownModels = ["unknown"];
     private static readonly string[] DuplicateModels = ["a", "a"];

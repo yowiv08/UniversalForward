@@ -125,7 +125,7 @@ public sealed class ReasoningPolicyTests
     [DataRow("{\"defaults\":null}")]
     [DataRow("{\"models\":null}")]
     [DataRow("{\"models\":{\"foreign\":{}}}")]
-    [DataRow("{\"defaults\":{\"chat\":{}}}")]
+    [DataRow("{\"defaults\":{\"completions\":{}}}")]
     [DataRow("{\"defaults\":{\"responses\":null}}")]
     [DataRow("{\"defaults\":{\"responses\":{\"mode\":\"invalid\"}}}")]
     [DataRow("{\"defaults\":{\"responses\":{\"mode\":\"fixed\",\"fixedEffort\":\" \"}}}")]

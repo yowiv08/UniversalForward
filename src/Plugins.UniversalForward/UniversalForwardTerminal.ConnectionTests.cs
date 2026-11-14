@@ -188,6 +188,7 @@ public sealed partial class UniversalForwardTerminal
                         var terminal = false;
                         var protocolError = false;
                         var recognized = false;
+                        var chatFinished = false;
                         await foreach (var bytes in stream.WithCancellation(job.CancellationToken))
                         {
                             var chars = new char[Encoding.UTF8.GetMaxCharCount(bytes.Length)];
@@ -204,6 +205,7 @@ public sealed partial class UniversalForwardTerminal
                                 if (data.Length == 0) continue;
                                 if (data == "[DONE]")
                                 {
+                                    terminal |= endpoint == "/v1/chat/completions";
                                     continue;
                                 }
                                 using var doc = JsonDocument.Parse(data);
@@ -214,20 +216,29 @@ public sealed partial class UniversalForwardTerminal
                                 {
                                     "/v1/messages" => type is "message_start" or "content_block_start" or "content_block_delta",
                                     "/v1/responses" => type is "response.created" or "response.output_item.added" or "response.output_text.delta",
+                                    "/v1/chat/completions" => ChatChoices(root).Any(choice =>
+                                        choice.TryGetProperty("delta", out var delta) && HasChatTestOutput(delta)),
                                     _ => false
                                 };
                                 recognized |= validEvent;
                                 if (validEvent) firstEventMs ??= watch.ElapsedMilliseconds;
                                 terminal |= endpoint == "/v1/messages" && type == "message_stop"
                                     || endpoint == "/v1/responses" && type == "response.completed";
+                                // Read through finish_reason to retain the final usage chunk and [DONE].
+                                if (endpoint == "/v1/chat/completions")
+                                    chatFinished |= ChatChoices(root).Any(IsSuccessfulChatFinish);
                                 protocolError |= root.TryGetProperty("error", out var upstreamError) && upstreamError.ValueKind != JsonValueKind.Null
                                     || type is "error" or "response.failed" or "response.incomplete";
-                                error ??= ReadStreamError(root);
+                                var streamError = ReadStreamError(root);
+                                protocolError |= endpoint == "/v1/chat/completions" && streamError is not null;
+                                error ??= streamError;
                             }
                             pending.Clear().Append(text);
                         }
                         decoder.GetChars([], new char[2], true);
-                        valid = terminal && recognized && !protocolError && string.IsNullOrWhiteSpace(pending.ToString());
+                        valid = terminal && recognized && !protocolError
+                            && (endpoint != "/v1/chat/completions" || chatFinished)
+                            && string.IsNullOrWhiteSpace(pending.ToString());
                         if (!valid) error ??= "流缺少完成事件或上游报告错误";
                     }
                     else
@@ -299,7 +310,8 @@ public sealed partial class UniversalForwardTerminal
         {
             "/v1/responses" => (object)new { model, stream, input = string.IsNullOrWhiteSpace(content) ? "Reply with OK." : content, max_output_tokens = maxOutputTokens },
             "/v1/messages" => new { model, stream, messages = new[] { new { role = "user", content = string.IsNullOrWhiteSpace(content) ? "Reply with OK." : content } }, max_tokens = maxOutputTokens },
-            _ => throw new FormatException("仅支持 Responses 和 Anthropic Messages。")
+            "/v1/chat/completions" => new { model, stream, messages = new[] { new { role = "user", content = string.IsNullOrWhiteSpace(content) ? "Reply with OK." : content } }, max_completion_tokens = maxOutputTokens },
+            _ => throw new FormatException("仅支持 Responses、Anthropic Messages 和 Chat Completions。")
         });
 
     internal static bool IsTestCompletion(byte[]? bytes, string endpoint)
@@ -312,6 +324,9 @@ public sealed partial class UniversalForwardTerminal
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object
                 || root.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null) return false;
+            if (endpoint == "/v1/chat/completions")
+                return ReadStreamError(root) is null && ChatChoices(root).Any(choice => IsSuccessfulChatFinish(choice)
+                    && choice.TryGetProperty("message", out var message) && HasChatTestOutput(message));
             if (endpoint == "/v1/responses"
                 && (!root.TryGetProperty("status", out var status) || status.GetString() != "completed"))
                 return false;
@@ -326,6 +341,34 @@ public sealed partial class UniversalForwardTerminal
             }));
         }
         catch (Exception error) when (error is JsonException or InvalidOperationException) { return false; }
+    }
+
+    private static IEnumerable<JsonElement> ChatChoices(JsonElement root)
+    {
+        if (root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array)
+            foreach (var choice in choices.EnumerateArray())
+                if (choice.ValueKind == JsonValueKind.Object) yield return choice;
+    }
+
+    private static bool IsSuccessfulChatFinish(JsonElement choice)
+        => choice.TryGetProperty("finish_reason", out var reason) && reason.ValueKind == JsonValueKind.String
+            && reason.GetString() is "stop" or "tool_calls" or "function_call";
+
+    private static bool HasChatTestOutput(JsonElement message)
+    {
+        if (message.ValueKind != JsonValueKind.Object) return false;
+        foreach (var name in new[] { "content", "refusal", "reasoning_content", "reasoning" })
+            if (message.TryGetProperty(name, out var text) && text.ValueKind == JsonValueKind.String
+                && !string.IsNullOrEmpty(text.GetString())) return true;
+        if (message.TryGetProperty("reasoning_details", out var details) && details.ValueKind == JsonValueKind.Array
+            && details.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.Object && item.EnumerateObject().Any())) return true;
+        if (message.TryGetProperty("audio", out var audio) && audio.ValueKind == JsonValueKind.Object
+            && (audio.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(data.GetString())
+                || audio.TryGetProperty("transcript", out var transcript) && transcript.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(transcript.GetString()))) return true;
+        if (message.TryGetProperty("function_call", out var call) && call.ValueKind == JsonValueKind.Object
+            && call.EnumerateObject().Any()) return true;
+        return message.TryGetProperty("tool_calls", out var calls) && calls.ValueKind == JsonValueKind.Array
+            && calls.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.Object && item.EnumerateObject().Any());
     }
 
     internal static string? ReadStreamError(JsonElement root)
@@ -344,6 +387,9 @@ public sealed partial class UniversalForwardTerminal
         if (root.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String
             && type.GetString() == "error")
             return ErrorText(root);
+        foreach (var choice in ChatChoices(root))
+            if (choice.TryGetProperty("finish_reason", out var reason) && reason.ValueKind != JsonValueKind.Null
+                && !IsSuccessfulChatFinish(choice)) return "上游响应未完成：" + ErrorText(reason);
         return null;
     }
 

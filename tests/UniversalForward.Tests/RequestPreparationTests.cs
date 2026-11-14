@@ -15,7 +15,7 @@ public sealed class RequestPreparationTests
     private const string Completed = """{"type":"response.completed","response":{"id":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":2,"output_tokens":1}}}""";
 
     [TestMethod]
-    public async Task CombinedPreparationAppliesEachRuleOnceAndReusesFinalPayloadForRetries()
+    public async Task RecoveryPreservesPreparationAndReusesRepairedPayloadForOrdinaryRetries()
     {
         var account = Account(retries: 1);
         var original = Object("""
@@ -33,9 +33,13 @@ public sealed class RequestPreparationTests
         var client = Client(async (request, ct) =>
         {
             bodies.Add(await request.Content!.ReadAsStringAsync(ct));
-            return bodies.Count == 1
-                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("retry") }
-                : Reply();
+            return bodies.Count switch
+            {
+                1 => new HttpResponseMessage(HttpStatusCode.BadRequest)
+                { Content = new StringContent("""{"error":{"code":"invalid_encrypted_content"}}""") },
+                2 => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("retry") },
+                _ => Reply()
+            };
         });
         using var store = new RequestLogStore();
         using var terminal = new UniversalForwardTerminal(ChannelKeysTests.Host(account)) { RequestLogs = store };
@@ -46,9 +50,14 @@ public sealed class RequestPreparationTests
 
         Assert.AreEqual(200, result.Response.StatusCode);
         Assert.IsFalse(result.Response.IsStreaming);
-        Assert.AreEqual(2, bodies.Count);
-        Assert.AreEqual(bodies[0], bodies[1]);
-        var sent = Object(bodies[0]);
+        Assert.AreEqual(3, bodies.Count);
+        var initial = Object(bodies[0]);
+        Assert.AreEqual("previous", initial["previous_response_id"]!.ToString());
+        Assert.IsTrue(initial["input"]!.AsArray().Any(item => item?["type"]?.ToString() == "reasoning"));
+        Assert.AreEqual("max", initial["reasoning"]!["effort"]!.ToString());
+        Assert.AreEqual(bodies[1], bodies[2]);
+        var sent = Object(bodies[1]);
+        Assert.AreEqual(initial["client_metadata"]!["session_id"]!.ToString(), sent["client_metadata"]!["session_id"]!.ToString());
         Assert.AreEqual("model", sent["model"]!.GetValue<string>());
         Assert.IsTrue(sent["stream"]!.GetValue<bool>());
         Assert.AreEqual("max", sent["reasoning"]!["effort"]!.GetValue<string>());
@@ -79,9 +88,12 @@ public sealed class RequestPreparationTests
         var captured = new List<(string Session, JsonObject Body)>();
         var client = Client(async (request, ct) =>
         {
-            captured.Add((request.Headers.GetValues("Session-Id").Single(),
-                Object(await request.Content!.ReadAsStringAsync(ct))));
-            return Reply();
+            var sent = Object(await request.Content!.ReadAsStringAsync(ct));
+            captured.Add((request.Headers.GetValues("Session-Id").Single(), sent));
+            return sent["input"]!.AsArray().Any(item => item?["type"]?.ToString() == "reasoning")
+                ? new HttpResponseMessage(HttpStatusCode.BadRequest)
+                { Content = new StringContent("""{"error":{"code":"invalid_encrypted_content"}}""") }
+                : Reply();
         });
         using var terminal = new UniversalForwardTerminal(ChannelKeysTests.Host(account));
         var first = Object("""
@@ -104,11 +116,14 @@ public sealed class RequestPreparationTests
             Assert.AreEqual(originalText, context.Request.OriginalBody!.Value.GetRawText());
         }
 
-        Assert.AreEqual(3, captured.Count);
-        Assert.IsTrue(JsonNode.DeepEquals(captured[0].Body["input"], captured[1].Body["input"]));
-        Assert.AreNotEqual(captured[0].Session, captured[1].Session);
-        Assert.AreEqual(captured[0].Session, captured[2].Session);
-        foreach (var (session, body) in captured)
+        Assert.AreEqual(6, captured.Count);
+        Assert.IsFalse(JsonNode.DeepEquals(captured[0].Body["input"], captured[2].Body["input"]));
+        Assert.IsTrue(JsonNode.DeepEquals(captured[1].Body["input"], captured[3].Body["input"]));
+        Assert.AreNotEqual(captured[1].Session, captured[3].Session);
+        Assert.AreEqual(captured[1].Session, captured[5].Session);
+        for (var index = 0; index < captured.Count; index += 2)
+            Assert.AreEqual(captured[index].Session, captured[index + 1].Session);
+        foreach (var (session, body) in captured.Where((_, index) => index % 2 == 1))
         {
             Assert.AreEqual(session, body["client_metadata"]!["session_id"]!.GetValue<string>());
             Assert.IsFalse(body["input"]!.AsArray().Any(item => item?["type"]?.ToString() == "reasoning"));

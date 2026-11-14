@@ -10,10 +10,11 @@ using Router.Contracts.Host;
 namespace UniversalForward.Tests;
 
 [TestClass]
-public sealed class ResponsesResourceStateForwardingTests
+public sealed partial class ResponsesResourceStateForwardingTests
 {
     private const string ResponseBody = """ { "id":"resp_upstream", "status":"completed", "encrypted_content":"keep response state", "output":[{"id":"msg_upstream","type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}] } """;
     private const string Completed = """{"type":"response.completed","response":{"id":"resp_upstream","status":"completed","encrypted_content":"keep response state","output":[{"id":"msg_upstream","type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}]}}""";
+    private const string InvalidState = """{"error":{"code":"invalid_encrypted_content","type":"invalid_request_error","message":"The encrypted content could not be verified."}}""";
 
     [TestMethod]
     [DataRow(false, "/v1/responses", false)]
@@ -22,7 +23,7 @@ public sealed class ResponsesResourceStateForwardingTests
     [DataRow(true, "/v1/responses", true)]
     [DataRow(true, "/v1/messages", false)]
     [DataRow(true, "/v1/messages", true)]
-    public async Task HttpStrippingUsesChannelSettingAndPinsRetriesWithoutChangingResponse(bool enabled, string endpoint, bool codex)
+    public async Task HttpPreservesResourceStateAcrossOrdinaryRetries(bool enabled, string endpoint, bool codex)
     {
         var original = History();
         var originalJson = original.ToJsonString();
@@ -48,7 +49,7 @@ public sealed class ResponsesResourceStateForwardingTests
         Assert.AreEqual(2, payloads.Count);
         Assert.AreEqual(payloads[0], payloads[1]);
         var sent = JsonNode.Parse(payloads[0])!.AsObject();
-        AssertHistory(sent, enabled && endpoint == "/v1/responses");
+        AssertHistory(sent, stripped: false);
         Assert.AreEqual("model", sent["model"]!.ToString());
         Assert.IsTrue(JsonNode.DeepEquals(original["tools"], sent["tools"]));
         Assert.AreEqual("Keep my instructions", sent["instructions"]!.ToString());
@@ -67,16 +68,16 @@ public sealed class ResponsesResourceStateForwardingTests
     [TestMethod]
     [DataRow("/v1/messages", "responses", "/v1/responses", true)]
     [DataRow("/v1/responses", "messages", "/v1/messages", false)]
-    public async Task StrippingFollowsSelectedUpstreamProtocol(string incoming, string protocol, string target, bool stripped)
+    public async Task RecoveryFollowsSelectedUpstreamProtocol(string incoming, string protocol, string target, bool stripped)
     {
-        JsonObject? sent = null;
+        var sent = new List<JsonObject>();
         var client = Client(async (request, ct) =>
         {
             Assert.AreEqual(target, request.RequestUri!.AbsolutePath);
-            sent = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject();
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            sent.Add(JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject());
+            return new HttpResponseMessage(sent.Count == 1 ? HttpStatusCode.BadRequest : HttpStatusCode.OK)
             {
-                Content = new StringContent(ResponseBody, Encoding.UTF8, "application/json")
+                Content = new StringContent(sent.Count == 1 ? InvalidState : ResponseBody, Encoding.UTF8, "application/json")
             };
         });
         var account = Account(new Uri("https://upstream.example"), enabled: true);
@@ -89,9 +90,10 @@ public sealed class ResponsesResourceStateForwardingTests
 
         var result = await terminal.InvokeAsync(Context(account, client.Object, History(), incoming));
 
-        Assert.AreEqual(200, result.Response.StatusCode);
-        AssertHistory(sent!, stripped);
-        Assert.AreEqual(1, client.Invocations.Count);
+        Assert.AreEqual(stripped ? 200 : 400, result.Response.StatusCode);
+        AssertHistory(sent[0], stripped: false);
+        AssertHistory(sent[^1], stripped);
+        Assert.AreEqual(stripped ? 2 : 1, client.Invocations.Count);
     }
 
     [TestMethod]
@@ -100,7 +102,7 @@ public sealed class ResponsesResourceStateForwardingTests
         var frame = Frame(Completed);
         var client = Client(async (request, ct) =>
         {
-            AssertHistory(JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject(), stripped: true);
+            AssertHistory(JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject(), stripped: false);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(frame, Encoding.UTF8, "text/event-stream")
@@ -120,19 +122,20 @@ public sealed class ResponsesResourceStateForwardingTests
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
-    public async Task StrictRelayRejectsReasoningShellsButAcceptsSanitizedConversation(bool enabled)
+    public async Task ExplicitStateErrorRecoversOnceOnlyWhenEnabled(bool enabled)
     {
-        const string rejected = """{"error":{"message":"bad response status code 400","type":"invalid_request_error","param":"input","code":null}}""";
         const string accepted = """{"id":"resp_reply","status":"completed","output":[{"id":"rs_reply","type":"reasoning","encrypted_content":"reply-state","summary":[]},{"id":"msg_reply","type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}]}""";
+        var sends = 0;
         var client = Client(async (request, ct) =>
         {
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject();
+            AssertHistory(body, stripped: sends++ > 0);
             Assert.AreEqual("call_1", body["input"]!.AsArray().Single(item => item?["type"]?.ToString() == "function_call")!["call_id"]!.ToString());
             Assert.AreEqual("call_1", body["input"]!.AsArray().Single(item => item?["type"]?.ToString() == "function_call_output")!["call_id"]!.ToString());
             var hasReasoning = body["input"]!.AsArray().Any(item => item?["type"]?.ToString() == "reasoning");
             return new HttpResponseMessage(hasReasoning ? HttpStatusCode.BadRequest : HttpStatusCode.OK)
             {
-                Content = new StringContent(hasReasoning ? rejected : accepted, Encoding.UTF8, "application/json")
+                Content = new StringContent(hasReasoning ? InvalidState : accepted, Encoding.UTF8, "application/json")
             };
         });
         var original = History();
@@ -143,8 +146,8 @@ public sealed class ResponsesResourceStateForwardingTests
         var result = await terminal.InvokeAsync(Context(account, client.Object, original));
 
         Assert.AreEqual(enabled ? 200 : 400, result.Response.StatusCode);
-        Assert.AreEqual(enabled ? accepted : rejected, Encoding.UTF8.GetString(result.Response.RawContent!));
-        Assert.AreEqual(1, client.Invocations.Count);
+        Assert.AreEqual(enabled ? accepted : InvalidState, Encoding.UTF8.GetString(result.Response.RawContent!));
+        Assert.AreEqual(enabled ? 2 : 1, client.Invocations.Count);
         Assert.AreEqual(before, original.ToJsonString());
     }
 
@@ -153,7 +156,7 @@ public sealed class ResponsesResourceStateForwardingTests
     [DataRow(true, false, false)]
     [DataRow(false, true, true)]
     [DataRow(true, true, true)]
-    public async Task WebSocketPayloadUsesSameStrippingAfterCodexPreparation(bool enabled, bool codex, bool stream)
+    public async Task WebSocketPreservesHistoryAfterCodexPreparation(bool enabled, bool codex, bool stream)
     {
         JsonObject? sent = null;
         await using var server = new WebSocketLoopback(async (peer, _, ct) =>
@@ -186,7 +189,7 @@ public sealed class ResponsesResourceStateForwardingTests
         await server.Completion;
         Assert.AreEqual("response.create", sent!["type"]!.ToString());
         Assert.IsNull(sent["stream"]);
-        AssertHistory(sent, enabled);
+        AssertHistory(sent, stripped: false);
         Assert.AreEqual("message.output_text.logprobs", sent["include"]![0]!.ToString());
         if (codex)
         {
@@ -207,12 +210,11 @@ public sealed class ResponsesResourceStateForwardingTests
     [DataRow("item_reference", false, true)]
     [DataRow("item_reference", true, false)]
     [DataRow("item_reference", true, true)]
-    public async Task OpaqueHistoryIsRejectedBeforeHttpOrWebSocketSendOnlyWhenEnabled(string type, bool enabled, bool websocket)
+    public async Task OpaqueHistoryIsSentIntactWithEitherSettingOrTransport(string type, bool enabled, bool websocket)
     {
         JsonObject? sent = null;
         await using var server = new WebSocketLoopback(async (peer, _, ct) =>
         {
-            Assert.IsFalse(enabled);
             using var socket = await peer.AcceptAsync(ct);
             sent = JsonNode.Parse(await WebSocketLoopback.ReceiveAsync(socket, ct))!.AsObject();
             await WebSocketLoopback.SendAsync(socket, Completed, ct);
@@ -225,7 +227,6 @@ public sealed class ResponsesResourceStateForwardingTests
         var client = Client(async (request, ct) =>
         {
             calls++;
-            Assert.IsFalse(enabled);
             sent = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!.AsObject();
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ResponseBody, Encoding.UTF8, "application/json") };
         });
@@ -239,24 +240,12 @@ public sealed class ResponsesResourceStateForwardingTests
 
         Assert.AreEqual(before, original.ToJsonString());
         Assert.AreEqual(before, context.Request.OriginalBody!.Value.GetRawText());
-        Assert.AreEqual(enabled ? 400 : 200, result.Response.StatusCode);
-        Assert.AreEqual(!enabled && !websocket ? 1 : 0, calls);
-        if (enabled)
-        {
-            Assert.IsNull(sent);
-            Assert.AreEqual(0, server.Requests);
-            var error = result.Response.Error!;
-            StringAssert.Contains(error, "完整历史");
-            Assert.IsFalse(error.Contains("opaque-id", StringComparison.Ordinal));
-            Assert.IsFalse(error.Contains("opaque-state", StringComparison.Ordinal));
-        }
-        else
-        {
-            if (websocket) await server.Completion;
-            Assert.IsNotNull(sent);
-            AssertHistory(sent, stripped: false, opaque: true);
-            Assert.IsTrue(JsonNode.DeepEquals(original["input"]!.AsArray().Last(), sent["input"]!.AsArray().Last()));
-        }
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.AreEqual(websocket ? 0 : 1, calls);
+        if (websocket) await server.Completion;
+        Assert.IsNotNull(sent);
+        AssertHistory(sent, stripped: false, opaque: true);
+        Assert.IsTrue(JsonNode.DeepEquals(original["input"]!.AsArray().Last(), sent["input"]!.AsArray().Last()));
     }
 
     private static JsonObject History(bool stream = false)

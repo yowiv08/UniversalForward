@@ -143,7 +143,7 @@ internal sealed class ForwardResponseAnalysis
         var type = Text(e, "type");
         if (type == "tool_use" || type.EndsWith("_call", StringComparison.Ordinal))
             HasOutput = true;
-        foreach (var key in new[] { "tool_calls", "function_call" })
+        foreach (var key in new[] { "tool_calls", "function_call", "reasoning_details", "audio" })
             if (e.TryGetProperty(key, out var value) && value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)
                 && (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() > 0)) HasOutput = true;
     }

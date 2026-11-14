@@ -13,7 +13,16 @@ public sealed partial class ModelProtocolOptions
     {
         "responses" => "/v1/responses",
         "messages" => "/v1/messages",
-        _ => throw new FormatException("协议必须是 responses 或 messages。")
+        "chat" => "/v1/chat/completions",
+        _ => throw new FormatException("协议必须是 responses、messages 或 chat。")
+    };
+
+    internal static string Protocol(string endpoint) => endpoint switch
+    {
+        "/v1/responses" => "responses",
+        "/v1/messages" => "messages",
+        "/v1/chat/completions" => "chat",
+        _ => throw new FormatException("仅支持 Responses、Anthropic Messages 和 Chat Completions。")
     };
 
     // Defaults are suggestions for generated tests; forwarding keeps the incoming protocol.
@@ -27,8 +36,8 @@ public sealed partial class ModelProtocolOptions
 
     internal void Validate()
     {
-        if (Protocols is null || Protocols.Length is < 1 or > 2)
-            throw new FormatException("每个模型必须选择1–2种协议。");
+        if (Protocols is null || Protocols.Length is < 1 or > 3)
+            throw new FormatException("每个模型必须选择1–3种协议。");
         foreach (var protocol in Protocols) _ = Endpoint(protocol);
         if (!Protocols.Contains(PreferredProtocol, StringComparer.Ordinal))
             throw new FormatException("首选协议必须包含在支持协议中。");
@@ -37,9 +46,8 @@ public sealed partial class ModelProtocolOptions
     internal string Select(string incoming)
     {
         Validate();
-        if (incoming is not ("/v1/responses" or "/v1/messages"))
-            throw new FormatException("仅支持 Responses 和 Anthropic Messages。");
-        if (Protocols.Any(p => Endpoint(p) == incoming)) return incoming;
+        var protocol = Protocol(incoming);
+        if (Protocols.Contains(protocol, StringComparer.Ordinal)) return incoming;
         if (NativeOnly) throw new FormatException("该模型启用强制原生模式，不允许切换客户端请求接口。");
         var target = Endpoint(PreferredProtocol);
         return target;

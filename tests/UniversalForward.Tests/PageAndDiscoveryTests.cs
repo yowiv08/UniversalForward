@@ -119,6 +119,8 @@ public sealed class PageAndDiscoveryTests
     [DataRow("https://upstream.example/V1/Responses", "https://upstream.example/V1/models")]
     [DataRow("https://upstream.example/gateway/v1/models", "https://upstream.example/gateway/v1/models")]
     [DataRow("https://upstream.example/gateway/v1", "https://upstream.example/gateway/v1/models")]
+    [DataRow("https://upstream.example/gateway/v1/chat/completions", "https://upstream.example/gateway/v1/models")]
+    [DataRow("https://upstream.example/gateway/v1/chat/completions/", "https://upstream.example/gateway/v1/models")]
     [DataRow("https://upstream.example/gateway", "https://upstream.example/gateway/v1/models")]
     public async Task DiscoveryIgnoresEndpointPathAtEndOfBaseUrl(string baseUrl, string expectedUrl)
     {

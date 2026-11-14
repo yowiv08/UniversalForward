@@ -69,8 +69,10 @@
     $('responseRetrySettings').hidden = !$('rateLimitRetryEnabled').checked && !$('emptyResponseRetryEnabled').checked;
   }
   for (const name of ['rateLimitRetryEnabled', 'emptyResponseRetryEnabled']) $(name).addEventListener('change', updateResponseRetry);
-  const protocolLabels = { responses: 'OpenAI Responses', messages: 'Anthropic Messages' };
-  const paths = ['/v1/responses', '/v1/messages'];
+  const protocolLabels = { responses: 'OpenAI Responses', messages: 'Anthropic Messages', chat: 'Chat Completions' };
+  const protocolPaths = { responses: '/v1/responses', messages: '/v1/messages', chat: '/v1/chat/completions' };
+  const endpointProtocols = Object.fromEntries(Object.entries(protocolPaths).map(([key, path]) => [path, key]));
+  const paths = Object.values(protocolPaths);
   const defaults = { maxRetries: 0, headerTimeoutSeconds: 60, totalTimeoutSeconds: 180, streamIdleTimeoutSeconds: 60,
     responseMaxRetries: 3, responseRetryIntervalSeconds: 5,
     retryStatusCodes: '100-199,300-399,401-407,409-499,500-503,505-523,525-599' };
@@ -90,6 +92,7 @@
   };
   let accounts = [], candidates = [], keyDraft = [], deletedKeyIds = [], keyRevision = 0, keySequence = 0;
   let modelProtocolDraft = {}, extraParams = {}, savedAccount = null, editorEpoch = 0;
+  let originalAuthentication = {};
   let headerMode = 'visual', mappingMode = 'visual', headerRows = [], mappingRows = [];
   let headerPolicyMode = 'shared', headerScope = 'common', commonHeaderDraft = {};
   let endpointHeaderDraft = Object.create(null);
@@ -506,6 +509,37 @@
   }
   for (const input of form.querySelectorAll('input[name=systemPromptMode]')) input.addEventListener('change', renderSystemPrompt);
   $('systemPromptText').addEventListener('input', renderSystemPrompt);
+  function renderAuthenticationHint() {
+    $('authenticationModeHint').textContent = $('authenticationMode').value === 'existing'
+      ? '沿用原认证配置；选择上方一种方式后，可统一本渠道的认证。显式请求头覆盖优先。'
+      : '用于本渠道的转发、模型获取和连接测试；显式请求头覆盖优先。';
+  }
+  function applyAuthenticationMode() {
+    const mode = $('authenticationMode').value;
+    if (mode === 'existing') {
+      delete extraParams.apiKeyHeader; delete extraParams.apiKeyPrefix;
+      Object.assign(extraParams, structuredClone(originalAuthentication));
+    } else {
+      extraParams.apiKeyHeader = mode === 'x-api-key' ? 'x-api-key' : 'Authorization';
+      extraParams.apiKeyPrefix = mode === 'x-api-key' ? '' : 'Bearer ';
+    }
+    renderAuthenticationHint();
+  }
+  function loadAuthentication(account) {
+    originalAuthentication = Object.fromEntries(['apiKeyHeader', 'apiKeyPrefix']
+      .filter(name => Object.hasOwn(extraParams, name)).map(name => [name, structuredClone(extraParams[name])]));
+    const header = typeof extraParams.apiKeyHeader === 'string' ? extraParams.apiKeyHeader.toLowerCase() : '';
+    const prefix = extraParams.apiKeyPrefix;
+    const mode = !account || header === 'authorization' && (prefix === undefined || prefix === 'Bearer ') ? 'bearer'
+      : header === 'x-api-key' && (prefix === undefined || prefix === '') ? 'x-api-key' : 'existing';
+    const select = $('authenticationMode');
+    select.replaceChildren(option('bearer', 'Authorization: Bearer'), option('x-api-key', 'x-api-key'));
+    if (mode === 'existing') select.append(option('existing', '保留原认证配置'));
+    select.value = mode;
+    // Existing custom/default-by-protocol settings remain intact until a mode is selected.
+    if (!account) applyAuthenticationMode(); else renderAuthenticationHint();
+  }
+  $('authenticationMode').onchange = applyAuthenticationMode;
   function open(account, { duplicate = false } = {}) {
     const sourceLabel = account?.label || '';
     if (duplicate) {
@@ -535,7 +569,8 @@
     form.elements.weight.value = account?.weight ?? 100;
     form.elements.enabled.checked = account?.enabled ?? true;
     form.elements.models.value = (account?.models || []).join('\n');
-    extraParams = typeof account?.extraParams === 'string' ? objectJson(account.extraParams, '高级参数') : account?.extraParams || {};
+    extraParams = structuredClone(typeof account?.extraParams === 'string' ? objectJson(account.extraParams, '高级参数') : account?.extraParams || {});
+    loadAuthentication(account);
     keyDraft = (account?.keys || []).map(k => {
       const secret = k.secret || '', autoName = automaticKeyName(k.name) || k.name === defaultKeyName(secret);
       return { ...k, secret, originalSecret: secret, autoName,
@@ -561,8 +596,8 @@
     mappingRows = Object.entries(account?.requestPolicy?.statusCodeMapping || {}).map(([from, to]) => ({ from, to: String(to) }));
     mappingMode = 'visual'; $('statusCodeMapping').value = JSON.stringify(account?.requestPolicy?.statusCodeMapping || {}, null, 2);
     const selected = new Set(account?.endpoints || paths), root = $('endpoints'); root.replaceChildren();
-    paths.forEach((path, index) => {
-      const label = el('label', undefined, 'endpoint-option'), input = el('input'), text = el('span', Object.values(protocolLabels)[index]);
+    paths.forEach(path => {
+      const label = el('label', undefined, 'endpoint-option'), input = el('input'), text = el('span', protocolLabels[endpointProtocols[path]]);
       input.type = 'checkbox'; input.name = 'endpoints'; input.value = path; input.checked = selected.has(path);
       input.onchange = renderProtocols;
       text.append(el('code', path)); label.append(input, text); root.append(label);
@@ -699,7 +734,7 @@
           ? objectJson(savedAccount.extraParams, '高级参数') : savedAccount.extraParams || {};
         if (canonical(commonHeaderDraft) !== canonical(savedAccount.headerOverride || {}) ||
             canonical(extraParams) !== canonical(savedExtra))
-          throw Error('通用请求头或高级参数尚未保存，请使用获取候选模型或先保存渠道');
+          throw Error('认证方式、通用请求头或高级参数尚未保存，请使用获取候选模型或先保存渠道');
         route = 'models/refresh'; body = { id: savedAccount.id, keyId: key.id };
       } else {
         route = 'models/discover';
@@ -746,7 +781,7 @@
     for (const model of modelIds()) {
       const configured = modelProtocolDraft[model];
       const preferred = /(?:^|[/.])claude(?:$|[-_.:\[])/i.test(model) && endpoints.includes('/v1/messages') ? 'messages'
-        : endpoints.includes('/v1/responses') ? 'responses' : 'messages';
+        : endpoints.includes('/v1/responses') ? 'responses' : endpointProtocols[endpoints[0]] || 'responses';
       const value = configured || { protocols: [preferred], preferredProtocol: preferred, nativeOnly: false };
       const row = el('div', undefined, 'protocol-row'), header = el('div', undefined, 'protocol-summary'); header.append(el('strong', model));
       const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = !!configured;
@@ -801,7 +836,7 @@
     $('headerInheritance').hidden = headerScope === 'common';
     $('headerUseCommon').checked = inherited;
     $('headerScopeTitle').textContent = headerScope === 'common' ? '通用配置'
-      : protocolLabels[headerScope === '/v1/responses' ? 'responses' : 'messages'];
+      : protocolLabels[endpointProtocols[headerScope]];
     $('headerScopeHint').textContent = headerScope === 'common'
       ? headerPolicyMode === 'shared' ? '应用于所有接口及模型发现' : '应用于继承通用配置的接口及模型发现'
       : `${headerScope} · ${inherited ? '使用通用配置，只读' : '独立配置，不叠加通用请求头'} · 按实际上游接口匹配`;

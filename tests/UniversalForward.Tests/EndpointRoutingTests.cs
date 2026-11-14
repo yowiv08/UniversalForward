@@ -41,6 +41,7 @@ public sealed class EndpointRoutingTests
     [DataRow("https://upstream.example/gateway/v1/messages", "codex", "/gateway/v1/responses")]
     [DataRow("https://upstream.example/gateway/v1/responses/", "claude", "/gateway/v1/messages")]
     [DataRow("https://upstream.example/v1/models", "codex", "/v1/responses")]
+    [DataRow("https://upstream.example/gateway/v1/chat/completions/", "codex", "/gateway/v1/responses")]
     public async Task BaseUrlEndingWithEndpointPathStillTargetsRoutedEndpoint(string baseUrl, string profile, string expectedPath)
     {
         var client = new Mock<IPluginHttpClient>(MockBehavior.Strict);
@@ -68,7 +69,6 @@ public sealed class EndpointRoutingTests
     }
 
     [TestMethod]
-    [DataRow("/v1/chat/completions")]
     [DataRow("/v1/completions")]
     public async Task LegacyEndpointsNeverReachUpstream(string endpoint)
     {
@@ -85,6 +85,10 @@ public sealed class EndpointRoutingTests
     [DataRow("/v1/responses", "messages", "/v1/messages", true)]
     [DataRow("/v1/messages", "responses", "/v1/responses", false)]
     [DataRow("/v1/messages", "responses", "/v1/responses", true)]
+    [DataRow("/v1/responses", "chat", "/v1/chat/completions", false)]
+    [DataRow("/v1/messages", "chat", "/v1/chat/completions", true)]
+    [DataRow("/v1/chat/completions", "messages", "/v1/messages", false)]
+    [DataRow("/v1/chat/completions", "responses", "/v1/responses", true)]
     public async Task SwitchesOnlyEndpointAuthenticationAndModel(string incoming, string protocol, string target, bool stream)
     {
         var original = JsonNode.Parse("""

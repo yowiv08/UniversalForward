@@ -234,6 +234,8 @@ public sealed class SystemPromptPolicyTests
     [DataRow("/v1/responses", "instructions", "{}")]
     [DataRow("/v1/messages", "system", "false")]
     [DataRow("/v1/messages", "system", "{}")]
+    [DataRow("/v1/chat/completions", "messages", "{}")]
+    [DataRow("/v1/chat/completions", "messages", "42")]
     public void AppendRejectsMalformedFieldsBeforeChangingBody(string endpoint, string field, string value)
     {
         var body = new JsonObject { [field] = JsonNode.Parse(value), ["model"] = "model" };

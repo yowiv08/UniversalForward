@@ -8,9 +8,10 @@ public sealed class ModelProtocolTests
     [TestMethod]
     public void MatchingProtocolWinsOverPreference()
     {
-        var options = new ModelProtocolOptions { Protocols = ["responses", "messages"], PreferredProtocol = "messages" };
+        var options = new ModelProtocolOptions { Protocols = ["responses", "messages", "chat"], PreferredProtocol = "messages" };
         Assert.AreEqual("/v1/responses", options.Select("/v1/responses"));
         Assert.AreEqual("/v1/messages", options.Select("/v1/messages"));
+        Assert.AreEqual("/v1/chat/completions", options.Select("/v1/chat/completions"));
     }
 
     [TestMethod]
@@ -24,7 +25,7 @@ public sealed class ModelProtocolTests
     [TestMethod]
     [DataRow("unknown")]
     [DataRow("")]
-    [DataRow("chat")]
+    [DataRow("chat-completions")]
     [DataRow("completions")]
     public void UnknownProtocolsAreRejected(string name)
         => Assert.Throws<FormatException>(() => new ModelProtocolOptions { Protocols = [name], PreferredProtocol = name }.Validate());
@@ -32,6 +33,18 @@ public sealed class ModelProtocolTests
     [TestMethod]
     public void PreferenceMustBeSupported()
         => Assert.Throws<FormatException>(() => new ModelProtocolOptions { PreferredProtocol = "messages" }.Validate());
+
+    [TestMethod]
+    [DataRow("/v1/responses")]
+    [DataRow("/v1/messages")]
+    public void ChatPreferenceSelectsEndpointAndNativeOnlyRejectsOtherProtocols(string incoming)
+    {
+        var options = new ModelProtocolOptions { Protocols = ["chat"], PreferredProtocol = "chat" };
+        Assert.AreEqual("/v1/chat/completions", options.Select(incoming));
+        options.NativeOnly = true;
+        Assert.Throws<FormatException>(() => options.Select(incoming));
+        Assert.AreEqual("/v1/chat/completions", options.Select("/v1/chat/completions"));
+    }
 
     [TestMethod]
     public void LegacyCompletionsCannotConvert()

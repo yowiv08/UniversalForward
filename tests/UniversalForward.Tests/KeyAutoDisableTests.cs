@@ -37,6 +37,7 @@ public sealed class KeyAutoDisableTests
     }
     private static HttpResponseMessage Response(int status, string endpoint = "/v1/responses") => new((HttpStatusCode)status)
     { Content = new StringContent(status == 200 ? endpoint == "/v1/messages" ? "{\"content\":[{\"type\":\"text\",\"text\":\"OK\"}]}"
+        : endpoint == "/v1/chat/completions" ? "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}"
         : "{\"status\":\"completed\",\"output\":[{\"type\":\"message\"}]}" : "{\"error\":{\"message\":\"denied\"}}") };
     private static PluginAttemptContext Attempt(Account account, IPluginHttpClient client, string trace = "request", string endpoint = "/v1/responses") => new()
     {
@@ -69,21 +70,26 @@ public sealed class KeyAutoDisableTests
     }
 
     [TestMethod]
-    [DataRow("roundRobin", "/v1/responses")]
-    [DataRow("random", "/v1/responses")]
-    [DataRow("priority", "/v1/messages")]
-    public async Task SwitchRebuildsKeyHeadersAndPreservesBody(string mode, string endpoint)
+    [DataRow("roundRobin", "/v1/responses", null)]
+    [DataRow("random", "/v1/responses", null)]
+    [DataRow("priority", "/v1/messages", null)]
+    [DataRow("roundRobin", "/v1/chat/completions", null)]
+    [DataRow("roundRobin", "/v1/chat/completions", "x-api-key")]
+    [DataRow("priority", "/v1/messages", "Authorization")]
+    public async Task SwitchRebuildsKeyHeadersAndPreservesBody(string mode, string endpoint, string? authenticationHeader)
     {
         var account = Account(threshold: 1);
         Edit(account, s => { s["keySelectionMode"] = mode; s["requestPolicy"]!["statusCodeMapping"] = new JsonObject { ["403"] = 200 }; });
+        if (authenticationHeader is not null)
+            Edit(account, s => s["extraParams"] = AuthenticationSelectionTests.Authentication(authenticationHeader).ToJsonString());
         var host = ChannelKeysTests.Host(account);
         var auth = new List<string>(); var bodies = new List<string>();
         var client = Client(async request =>
         {
             var secret = request.Headers.GetValues("X-Selected").Single();
             auth.Add(secret); bodies.Add(await request.Content!.ReadAsStringAsync());
-            if (endpoint == "/v1/messages") Assert.AreEqual(secret, request.Headers.GetValues("x-api-key").Single());
-            else Assert.AreEqual("Bearer " + secret, request.Headers.Authorization!.ToString());
+            AuthenticationSelectionTests.AssertAuthentication(request,
+                authenticationHeader ?? (endpoint == "/v1/messages" ? "x-api-key" : "Authorization"), secret);
             return Response(auth.Count == 1 ? 403 : 200, endpoint);
         });
         using var terminal = new UniversalForwardTerminal(host);

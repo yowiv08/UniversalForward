@@ -56,6 +56,24 @@ public sealed class SystemPromptPolicy
             if (!ReferenceEquals(body["system"], blocks)) body["system"] = blocks;
             return new(Mode, "system", Text.Length, 0);
         }
+        if (endpoint == "/v1/chat/completions")
+        {
+            var messages = body["messages"] switch
+            {
+                null => new JsonArray(),
+                JsonArray array => array,
+                _ => throw new FormatException("改写系统提示词时，Chat Completions messages 必须为数组或 null。")
+            };
+            var removed = 0;
+            if (Mode == "replace")
+                for (var index = messages.Count - 1; index >= 0; index--)
+                    if (messages[index] is JsonObject item && IsSystemMessage(item))
+                    { messages.RemoveAt(index); removed++; }
+            // Chat 兼容上游未必支持 developer 角色，追加时保持已有角色，不引入角色转换。
+            messages.Add(new JsonObject { ["role"] = "system", ["content"] = Text });
+            if (!ReferenceEquals(body["messages"], messages)) body["messages"] = messages;
+            return new(Mode, "messages", Text.Length, removed);
+        }
         return null;
     }
 

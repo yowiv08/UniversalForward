@@ -53,7 +53,7 @@
     <section class="journal-panel" aria-label="请求记录">
       <form id="journalFilters" class="journal-filters compact-search">
         <div class="search-main"><label><span class="sr-only">模型</span><input name="model" aria-label="日志模型" placeholder="搜索模型名称…"></label><label><span class="sr-only">请求类型</span><select name="kind" aria-label="日志类型"><option value="">全部类型</option><option value="forward">转发</option><option value="connection-test">连接测试</option><option value="models-discover">获取模型</option><option value="models-refresh">刷新模型</option></select></label><label><span class="sr-only">执行状态</span><select name="state" aria-label="日志执行状态"><option value="">全部状态</option><option value="running">执行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="interrupted">中断</option></select></label><div class="actions"><button id="journalReset" type="button" class="text-button">重置</button><button id="journalExpand" type="button" aria-expanded="false" aria-controls="journalAdvanced">更多筛选</button><button class="primary" type="submit"><span data-icon="search"></span>查询</button></div></div>
-        <div id="journalAdvanced" class="search-advanced" hidden><label>开始时间<input name="from" type="datetime-local" aria-label="开始时间"></label><label>结束时间<input name="to" type="datetime-local" aria-label="结束时间"></label><label>渠道 ID<input name="channel" aria-label="日志渠道 ID" placeholder="全部渠道"></label><label>Trace ID<input name="trace" aria-label="Trace ID" placeholder="输入 Trace ID"></label><label>状态码<input name="status" type="number" aria-label="日志状态码" placeholder="例如 200"></label><label>接口<select name="endpoint" aria-label="日志接口"><option value="">全部接口</option><option>/v1/responses</option><option>/v1/messages</option><option>/v1/models</option></select></label><label>出站方式<select name="network" aria-label="日志出站方式"><option value="">全部出站方式</option><option value="direct">直连</option><option value="proxyPool">代理池</option></select></label></div>
+        <div id="journalAdvanced" class="search-advanced" hidden><label>开始时间<input name="from" type="datetime-local" aria-label="开始时间"></label><label>结束时间<input name="to" type="datetime-local" aria-label="结束时间"></label><label>渠道 ID<input name="channel" aria-label="日志渠道 ID" placeholder="全部渠道"></label><label>Trace ID<input name="trace" aria-label="Trace ID" placeholder="输入 Trace ID"></label><label>状态码<input name="status" type="number" aria-label="日志状态码" placeholder="例如 200"></label><label>接口<select name="endpoint" aria-label="日志接口"><option value="">全部接口</option><option>/v1/responses</option><option>/v1/messages</option><option>/v1/chat/completions</option><option>/v1/models</option></select></label><label>出站方式<select name="network" aria-label="日志出站方式"><option value="">全部出站方式</option><option value="direct">直连</option><option value="proxyPool">代理池</option></select></label></div>
         <div id="journalScope" class="filter-scope" hidden><span data-icon="filter"></span><span id="journalScopeLabel"></span><button id="journalScopeClear" type="button" class="icon-button" aria-label="移除渠道筛选"><span data-icon="x"></span></button></div>
       </form>
       <div class="journal-table"><table><thead><tr><th>时间／渠道</th><th>模型／接口</th><th>结果</th><th>思考参数</th><th>操作</th></tr></thead><tbody id="journalRows"></tbody></table><div id="journalEmpty" class="empty" hidden><span data-icon="journal"></span><h3>暂无请求日志</h3><p>本次运行尚未记录请求，或没有符合筛选条件的结果。</p></div></div>
@@ -117,10 +117,11 @@
             <section class="settings-section" aria-labelledby="channelIdentityTitle"><h4 id="channelIdentityTitle">渠道信息</h4>
             <div class="field-row"><div class="field"><label for="label">渠道名称</label><input id="label" name="label" placeholder="例如：主力推理渠道" required maxlength="120"></div><div class="field"><label for="weight">渠道权重</label><input id="weight" name="weight" type="number" min="0" max="1000" value="100" required><small>0–1000</small></div></div>
             <div class="field"><label for="baseUrl">Base URL</label><input id="baseUrl" name="baseUrl" type="url" placeholder="https://api.example.com/v1" required></div>
+            <div class="field"><label for="authenticationMode">认证方式</label><select id="authenticationMode" name="authenticationMode" aria-describedby="authenticationModeHint"><option value="bearer">Authorization: Bearer</option><option value="x-api-key">x-api-key</option></select><small id="authenticationModeHint">用于本渠道的转发、模型获取和连接测试；显式请求头覆盖优先。</small></div>
             <label class="setting-toggle"><span><strong>启用渠道</strong><small>允许此渠道参与请求转发</small></span><input name="enabled" type="checkbox" role="switch" checked></label>
             </section>
             <section class="settings-section" aria-labelledby="channelConnectionTitle"><h4 id="channelConnectionTitle">上游连接</h4>
-            <div class="field-row"><div class="field"><label for="responsesTransport">Responses 连接</label><select id="responsesTransport" name="responsesTransport"><option value="http">HTTP / SSE</option><option value="websocket">WebSocket</option></select><small>Messages 和模型获取使用 HTTP。</small><details class="inline-details"><summary>WebSocket 连接说明</summary><p>每次请求独立连接，失败不回退 HTTP。</p></details></div>
+            <div class="field-row"><div class="field"><label for="responsesTransport">Responses 连接</label><select id="responsesTransport" name="responsesTransport"><option value="http">HTTP / SSE</option><option value="websocket">WebSocket</option></select><small>Chat Completions、Messages 和模型获取使用 HTTP。</small><details class="inline-details"><summary>WebSocket 连接说明</summary><p>每次请求独立连接，失败不回退 HTTP。</p></details></div>
             <div class="field"><label for="networkMode">出站方式</label><select id="networkMode" name="networkMode"><option value="direct">直连</option><option value="proxyPool">代理池</option></select><small>适用于转发、WebSocket、模型获取和连接测试。代理不可用时明确报错，不回退直连。</small></div>
             </div>
             <div id="proxySettings" class="proxy-settings" hidden>
@@ -134,7 +135,7 @@
             <div class="field"><label>允许端点</label><div id="endpoints" class="endpoint-grid"></div></div>
             </section>
             <section class="settings-section" aria-labelledby="channelCompatibilityTitle"><h4 id="channelCompatibilityTitle">兼容设置</h4>
-            <div class="field"><label class="setting-toggle"><span><strong>剥离 Responses 资源状态</strong><small id="stripResponsesResourceStateHint">用于跨资源、账号或中转续聊；开启后需携带完整对话历史。</small></span><input id="stripResponsesResourceState" name="stripResponsesResourceState" type="checkbox" role="switch" aria-describedby="stripResponsesResourceStateHint"></label><details class="inline-details"><summary>查看兼容规则</summary><p>移除历史推理条目、资源 ID、加密状态和 previous_response_id，保留消息和工具调用。加密压缩或条目引用需先恢复原历史。切换渠道后也需在目标渠道开启。</p></details></div>
+            <div class="field"><label class="setting-toggle"><span><strong>异常时剥离 Responses 资源状态</strong><small id="stripResponsesResourceStateHint">首次请求保留思考历史；仅资源状态失效时剥离并重试一次。</small></span><input id="stripResponsesResourceState" name="stripResponsesResourceState" type="checkbox" role="switch" aria-describedby="stripResponsesResourceStateHint"></label><details class="inline-details"><summary>查看兼容规则</summary><p>上游明确返回加密状态校验失败、历史响应或条目不存在时，移除历史推理条目、资源 ID、加密状态和 previous_response_id，保留消息和工具调用后重试。普通参数错误、限流和网络失败不会触发剥离；已有思考、正文或工具输出时不重试。每次请求最多额外修复一次，共用总时限；下一次请求仍保留完整历史。加密压缩或条目引用失效时，需由客户端恢复完整历史。</p></details></div>
             </section>
           </section>
           <section id="panel-keys" role="tabpanel" aria-labelledby="tab-keys" hidden>
@@ -162,7 +163,7 @@
             <div class="section-heading"><h3>思考等级映射</h3><p>将客户端等级映射为上游发送等级，或为模型固定等级</p></div>
             <div class="field-row">
               <div class="field"><label for="reasoningScope">配置范围</label><select id="reasoningScope"></select></div>
-              <div class="field"><label for="reasoningProtocol">上游接口</label><select id="reasoningProtocol"><option value="responses">OpenAI Responses</option><option value="messages">Anthropic Messages</option></select></div>
+              <div class="field"><label for="reasoningProtocol">上游接口</label><select id="reasoningProtocol"><option value="responses">OpenAI Responses</option><option value="messages">Anthropic Messages</option><option value="chat">Chat Completions</option></select></div>
             </div>
             <label id="reasoningInheritance" class="inline-check" hidden><input id="reasoningUseDefault" type="checkbox">继承渠道规则</label>
             <p id="reasoningSource" class="muted"></p>
@@ -213,8 +214,9 @@
               <summary>处理说明</summary>
               <div>
                 <p><strong>追加：</strong>保留原文，插件文本作为最后一条独立系统指令。Responses 的原 instructions 转为 developer 消息，普通旧 system 消息也改为 developer；工具声明和对话历史保留。</p>
-                <p><strong>替换：</strong>使用上面的内容覆盖原系统提示词。Responses 请求中普通的 system／developer 提示消息会移除，再添加插件系统指令。</p>
+                <p><strong>替换：</strong>使用上面的内容覆盖原系统提示词。Responses 和 Chat Completions 请求中普通的 system／developer 提示消息会移除，再添加插件系统指令。</p>
                 <p>OpenAI Responses 在 <code>input</code> 末尾写入 system 消息，<code>instructions</code> 保留为空字符串；Claude 在顶层 <code>system</code> 数组末尾写入独立文本块，追加时保留原缓存块。Claude Code 模板保留必要的客户端身份声明。</p>
+                <p>Chat Completions 在 <code>messages</code> 末尾写入独立的 system 消息；追加时保留原有角色，工具调用、工具结果和思考历史保持原样。</p>
                 <p>插件只调整本次请求的角色和顺序，不自动增加提示词文字，也不能控制上游后续追加规则或保证模型完全遵循。连接测试和重试共用规则，可在日志元数据中核对指令角色、位置及处理数量。</p>
               </div>
             </details>
@@ -222,7 +224,7 @@
           <section id="panel-headers" role="tabpanel" aria-labelledby="tab-headers" hidden>
             <div class="section-heading"><h3>请求头覆盖</h3><p>选择客户端模板，或编辑自定义请求头</p></div>
             <div class="segmented header-routing-mode" role="group" aria-label="请求头应用方式"><button id="headerShared" type="button" aria-pressed="true">所有接口共用</button><button id="headerPerEndpoint" type="button" aria-pressed="false">按接口分别设置</button></div>
-            <div id="headerScopes" class="segmented header-scopes" role="group" aria-label="请求头配置范围" hidden><button type="button" data-header-scope="common" aria-pressed="true">通用配置</button><button type="button" data-header-scope="/v1/responses" aria-pressed="false">OpenAI Responses</button><button type="button" data-header-scope="/v1/messages" aria-pressed="false">Anthropic Messages</button></div>
+            <div id="headerScopes" class="segmented header-scopes" role="group" aria-label="请求头配置范围" hidden><button type="button" data-header-scope="common" aria-pressed="true">通用配置</button><button type="button" data-header-scope="/v1/responses" aria-pressed="false">OpenAI Responses</button><button type="button" data-header-scope="/v1/messages" aria-pressed="false">Anthropic Messages</button><button type="button" data-header-scope="/v1/chat/completions" aria-pressed="false">Chat Completions</button></div>
             <div class="header-scope-heading"><h4 id="headerScopeTitle">通用配置</h4><label id="headerInheritance" class="inline-check" hidden><input id="headerUseCommon" type="checkbox" checked>使用通用配置</label></div>
             <p id="headerScopeHint" class="header-scope-hint">应用于所有接口及模型发现</p>
             <div class="template-grid"><button id="templateCodex" type="button" class="template-card"><span class="template-mark">↗</span><strong>Codex</strong><small>请求头模板</small></button><button id="templateClaude" type="button" class="template-card"><span class="template-mark claude">✳</span><strong>Claude Code</strong><small>请求头模板</small></button></div>
@@ -294,7 +296,7 @@
     <div class="test-content">
       <details id="testConfiguration" class="test-configuration" open><summary>测试配置<span id="testConfigSummary">自动选择 · 非流式 · 32 Token</span></summary><div class="test-configuration-body">
       <div class="test-setup"><div><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div><label for="testMaxTokens">输出上限 · Token</label><input id="testMaxTokens" type="number" min="1" max="32768" value="32"></div><div><label for="testStream">流式模式</label><label class="stream-control"><input id="testStream" type="checkbox" role="switch"><span id="testStreamLabel">已禁用</span></label></div></div>
-      <p class="test-endpoint-hint muted">自动选择优先使用模型的首选协议；未配置时，Claude 优先使用 Messages，其他模型优先使用 Responses，仅选择渠道已启用的端点。</p>
+      <p class="test-endpoint-hint muted">自动选择优先使用模型的首选协议；未配置时，Claude 优先使用 Messages，其他模型优先使用 Responses，否则使用渠道第一个已启用的端点。仅启用 Chat Completions 时自动使用该接口。</p>
       <div class="test-prompt"><label for="testContent">测试内容</label><textarea id="testContent" rows="2" maxlength="16000" placeholder="留空使用默认内容：Reply with OK."></textarea><p class="muted">提高输出上限可能增加费用。</p></div>
       <label class="inline-check"><input id="testAutoDisableKeys" type="checkbox">本次测试允许自动禁用 Key</label><p id="testAutoDisableHint" class="muted"></p>
       </div></details>

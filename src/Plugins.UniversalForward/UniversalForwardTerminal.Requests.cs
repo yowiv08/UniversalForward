@@ -104,6 +104,8 @@ public sealed partial class UniversalForwardTerminal
         HttpClient? networkClient = null;
         AdapterResponse? lastRateLimit = null;
         var anomalyRetries = 0;
+        var resourceStateRecovery = settings.StripResponsesResourceState && upstreamEndpoint == "/v1/responses";
+        var resourceStateRetried = false;
         var inspectResponses = policy.RateLimitRetryEnabled || policy.EmptyResponseRetryEnabled;
         var watch = Stopwatch.StartNew();
         try
@@ -185,13 +187,6 @@ public sealed partial class UniversalForwardTerminal
                         traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
                         details: rewrite);
                 }
-            }
-            if (settings.StripResponsesResourceState && upstreamEndpoint == "/v1/responses")
-            {
-                var strippedFields = ResponsesResourceState.Strip(body, out var removedReasoningItems);
-                await TryLogAsync("request.responses.state.stripped", "已剥离 Responses 资源状态",
-                    traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
-                    details: new { strippedFields, removedReasoningItems });
             }
             var payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
             if (websocket) payload = UpstreamWebSocket.CreatePayload(payload);
@@ -287,8 +282,9 @@ public sealed partial class UniversalForwardTerminal
                     }
                 }
                 var skipOrdinaryRetry = keyRuleMatched;
+                var inspectFailure = inspectResponses || resourceStateRecovery;
                 byte[]? streamPrefix = null;
-                if (!keyRuleMatched && (inspectResponses || response.IsSuccessStatusCode))
+                if (!keyRuleMatched && (inspectFailure || response.IsSuccessStatusCode))
                 {
                     var originalContentType = response.Content.Headers.ContentType?.ToString();
                     var type = originalContentType ?? "application/json";
@@ -305,10 +301,46 @@ public sealed partial class UniversalForwardTerminal
                     {
                         var blank = bytesRead.All(x => x is 9 or 10 or 13 or 32);
                         var looksJson = Encoding.UTF8.GetString(bytesRead).TrimStart().StartsWith('{');
-                        var analysis = sse || looksJson || response.IsSuccessStatusCode
-                            ? ForwardResponseAnalysis.Read(bytesRead, sse, buffered.Interrupted)
-                            : new ForwardResponseAnalysis();
+                        var analysis = new ForwardResponseAnalysis();
+                        try
+                        {
+                            if (sse || looksJson || response.IsSuccessStatusCode)
+                                analysis = ForwardResponseAnalysis.Read(bytesRead, sse, buffered.Interrupted);
+                        }
+                        catch (Exception error) when (!inspectResponses && !response.IsSuccessStatusCode
+                            && error is IOException or DecoderFallbackException)
+                        { hostRetry.StopReason = "unclassified_response"; }
                         hostRetry.Observe(analysis);
+                        var stateError = resourceStateRecovery ? ResponsesResourceState.RecoveryReason(analysis) : null;
+                        if (stateError is not null)
+                        {
+                            hostRetry.StopReason = "responses_resource_state";
+                            if (!resourceStateRetried && !buffered.Interrupted)
+                            {
+                                total.Token.ThrowIfCancellationRequested();
+                                // 每次调用最多一次兼容修复，不缓存到渠道；普通重试不重复改写模板或思考参数。
+                                resourceStateRetried = true;
+                                var strippedFields = 0;
+                                var removedReasoningItems = 0;
+                                var skipReason = "no_resource_state";
+                                try { strippedFields = ResponsesResourceState.Strip(body, out removedReasoningItems); }
+                                catch (FormatException) { skipReason = "opaque_history"; }
+                                if (strippedFields > 0 || removedReasoningItems > 0)
+                                {
+                                    payload = JsonSerializer.SerializeToUtf8Bytes(body, JsonOptions);
+                                    if (websocket) payload = UpstreamWebSocket.CreatePayload(payload);
+                                    await TryLogAsync("request.responses.state.stripped", "上游拒绝资源状态，剥离后重试一次",
+                                        traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
+                                        statusCode: originalCode, details: new { reason = stateError, strippedFields, removedReasoningItems });
+                                    capture?.Retry("responses_resource_state");
+                                    response.Dispose(); response = null;
+                                    continue;
+                                }
+                                await TryLogAsync("request.responses.state.skipped", "无法安全剥离资源状态，保留上游错误",
+                                    traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,
+                                    statusCode: originalCode, details: new { reason = skipReason, errorKind = stateError });
+                            }
+                        }
                         var limited = !analysis.PermanentError && (originalCode == 429 || analysis.RateLimited);
                         var completedEmpty = policy.EmptyResponseRetryEnabled && upstreamEndpoint == "/v1/responses"
                             && analysis.CompletedResponses && !analysis.HasOutput;
@@ -316,7 +348,7 @@ public sealed partial class UniversalForwardTerminal
                             && (blank || completedEmpty || sse && !analysis.Terminal || buffered.Interrupted);
                         var retryKind = limited && !analysis.HasOutput && policy.RateLimitRetryEnabled ? "rate_limit"
                             : empty && !analysis.HasOutput && policy.EmptyResponseRetryEnabled ? "empty_response" : null;
-                        skipOrdinaryRetry = analysis.HasOutput || analysis.PermanentError || retryKind != null;
+                        skipOrdinaryRetry = analysis.HasOutput || analysis.PermanentError || retryKind != null || stateError is not null;
                         if (limited && !analysis.HasOutput && policy.RateLimitRetryEnabled && !buffered.Interrupted)
                             lastRateLimit = RawResponse(originalCode, bytesRead, originalContentType);
                         total.Token.ThrowIfCancellationRequested();
@@ -433,7 +465,7 @@ public sealed partial class UniversalForwardTerminal
                 }
                 var bytes = await response.Content.ReadAsByteArrayAsync(total.Token);
                 // 未启用异常重试时也检查最终错误证据，但不改变原响应和既有内部重试。
-                if (!response.IsSuccessStatusCode && !inspectResponses)
+                if (!response.IsSuccessStatusCode && !inspectFailure)
                 {
                     try
                     {
@@ -801,7 +833,7 @@ public sealed partial class UniversalForwardTerminal
             .ToArray();
     }
     private const string AnthropicVersion = "2023-06-01";
-    private static readonly string[] EndpointPathSuffixes = ["/v1/messages", "/v1/responses", "/v1/models"];
+    private static readonly string[] EndpointPathSuffixes = ["/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/models"];
     private static Uri BuildUri(string baseUrl, string path)
     {
         var baseUri = new Uri(baseUrl.TrimEnd('/') + "/", UriKind.Absolute);
@@ -810,8 +842,8 @@ public sealed partial class UniversalForwardTerminal
         var endpointSuffix = EndpointPathSuffixes.FirstOrDefault(suffix => basePath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
         if (endpointSuffix is not null)
         {
-            baseUri = new Uri(baseUri, "../");
-            basePath = basePath[..^endpointSuffix.Length] + "/v1";
+            basePath = basePath[..^(endpointSuffix.Length - "/v1".Length)];
+            baseUri = new UriBuilder(baseUri) { Path = basePath + "/" }.Uri;
         }
         var route = path.Trim().TrimStart('/');
         if (basePath.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)

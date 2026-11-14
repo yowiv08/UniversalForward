@@ -150,7 +150,8 @@ internal sealed class RequestLogCapture
             var node = Parse(body);
             var path = request.RequestUri?.AbsolutePath;
             var anthropic = path?.EndsWith("/messages", StringComparison.OrdinalIgnoreCase) == true ? true
-                : path?.EndsWith("/responses", StringComparison.OrdinalIgnoreCase) == true ? false : _anthropic;
+                : path?.EndsWith("/responses", StringComparison.OrdinalIgnoreCase) == true
+                    || path?.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase) == true ? false : _anthropic;
             var tokens = new RequestTokenUsage(anthropic);
             var info = new JsonObject
             {

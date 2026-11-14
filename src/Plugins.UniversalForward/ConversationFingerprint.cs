@@ -11,7 +11,8 @@ internal sealed record ConversationFingerprint(IReadOnlyList<string> Prefixes, b
     internal static ConversationFingerprint Read(JsonNode? body, string endpoint)
     {
         if (body is not JsonObject root) return new([], false);
-        var input = endpoint == "/v1/messages" ? root["messages"] ?? root["input"] : root["input"] ?? root["messages"];
+        var input = endpoint is "/v1/messages" or "/v1/chat/completions"
+            ? root["messages"] ?? root["input"] : root["input"] ?? root["messages"];
         IEnumerable<JsonNode?> items = input switch
         {
             JsonArray array => array,
@@ -62,7 +63,7 @@ internal sealed record ConversationFingerprint(IReadOnlyList<string> Prefixes, b
         writer.WriteStringValue(role);
         WriteContent(writer, content);
         // Retain tool linkage and named speakers; discard transport message IDs/status.
-        foreach (var name in new[] { "name", "tool_call_id", "tool_calls", "function_call", "refusal" })
+        foreach (var name in new[] { "name", "tool_call_id", "tool_calls", "function_call", "refusal", "reasoning_content", "reasoning", "reasoning_details" })
             if (message?[name] is { } value)
             {
                 writer.WriteStringValue(name);

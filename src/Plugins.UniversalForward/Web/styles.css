@@ -329,7 +329,7 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(2px); }
 .setting-toggle input:checked, .stream-control input:checked { background: var(--primary); }
 .setting-toggle input:checked::before, .stream-control input:checked::before { background: var(--on-primary); transform: translateX(13px); }
 .inline-check { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 400; }
-.endpoint-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.endpoint-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(210px,1fr)); gap: 10px; }
 .endpoint-option { display: flex; align-items: center; gap: 10px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; min-width: 0; }
 .endpoint-option:has(input:checked) { border-color: var(--focus); background: var(--subtle); }
 .endpoint-option code { display: block; background: transparent; padding: 0; margin-top: 3px; font-size: 11px; }
@@ -382,7 +382,9 @@ dialog::backdrop { background: var(--overlay); backdrop-filter: blur(2px); }
 .template-card strong { font-size: 14px; }
 .template-card small { margin: 0; font-size: 12px; }
 .header-routing-mode, .header-scopes { margin-bottom: 16px; }
+.header-scopes { flex-wrap: wrap; }
 .header-routing-mode button, .header-scopes button { flex: 1; white-space: normal; }
+.header-scopes button { flex-basis: 120px; }
 .header-scope-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .header-scope-hint { margin: 6px 0 18px; font-size: 12px; color: var(--muted); }
 .editor-toolbar { margin: 22px 0 14px; }

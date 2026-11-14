@@ -25,8 +25,8 @@ public sealed class ReasoningPolicy
         if (rules is null) throw new FormatException("思考映射接口配置必须为对象");
         foreach (var (protocol, rule) in rules)
         {
-            if (protocol is not ("responses" or "messages") || rule is null)
-                throw new FormatException("思考映射接口必须是 responses 或 messages，规则不能为空");
+            if (protocol is not ("responses" or "messages" or "chat") || rule is null)
+                throw new FormatException("思考映射接口必须是 responses、messages 或 chat，规则不能为空");
             rule.Validate();
         }
     }
@@ -34,16 +34,16 @@ public sealed class ReasoningPolicy
     // Resolve against the original body, before profiles add defaults or alter the payload.
     internal ReasoningMappingDecision? Resolve(JsonObject original, string model, string endpoint)
     {
-        var protocol = endpoint == "/v1/messages" ? "messages" : "responses";
+        var protocol = ModelProtocolOptions.Protocol(endpoint);
         var source = "channel";
         if (!Models.TryGetValue(model, out var overrides) || !overrides.TryGetValue(protocol, out var rule))
             Defaults.TryGetValue(protocol, out rule);
         else source = "model";
         if (rule is null || rule.Mode == "off") return null;
 
-        var parent = original[protocol == "responses" ? "reasoning" : "output_config"];
-        var value = (parent as JsonObject)?["effort"];
-        var missing = parent is null || parent is JsonObject && value is null;
+        var parent = protocol switch { "responses" => original["reasoning"], "messages" => original["output_config"], _ => null };
+        var value = protocol == "chat" ? original["reasoning_effort"] : (parent as JsonObject)?["effort"];
+        var missing = protocol == "chat" ? value is null : parent is null || parent is JsonObject && value is null;
         var input = value is JsonValue node && node.TryGetValue<string>(out var text) ? text : null;
         var target = rule.Mode == "fixed" ? rule.FixedEffort
             : missing ? rule.DefaultEffort
@@ -56,6 +56,11 @@ public sealed class ReasoningPolicy
 
     internal static void Apply(JsonObject prepared, ReasoningMappingDecision decision)
     {
+        if (decision.Protocol == "chat")
+        {
+            prepared["reasoning_effort"] = decision.Sent;
+            return;
+        }
         var name = decision.Protocol == "responses" ? "reasoning" : "output_config";
         if (prepared[name] is not null and not JsonObject)
             throw new FormatException($"应用思考映射时 {name} 必须为对象");

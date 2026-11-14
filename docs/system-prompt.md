@@ -38,10 +38,14 @@ LiteLLM 核查提交 `c7c895db456eda349a7be9661b4b21f578f9b589`：
 | Claude system 字符串 | 原文转为第一个 text 块；渠道文本作为最后一个独立 text 块 | 只包含渠道文本的 system 数组 |
 | Claude system 块数组 | 末尾新增 text 块；原块及缓存属性保留 | 只包含渠道文本的 system 数组 |
 | Claude system 缺失、null 或空串 | 只包含渠道文本的 system 数组 | 只包含渠道文本的 system 数组 |
+| Chat Completions messages 数组 | 保留原有角色，在末尾追加独立 system 消息 | 移除普通 system／developer 提示消息，再在末尾追加独立 system 消息 |
+| Chat Completions messages 缺失或 null | 建立只含渠道 system 消息的数组 | 建立只含渠道 system 消息的数组 |
 
 Responses 对旧指令的删除或角色降级只检查 input 数组的直接对象，类型须缺失或为 message，role 须为 system 或 developer。显式工具项、无法识别的类型、带非空动态 tools 声明的消息和嵌套字段保留。字符串 input 转为原文不变的 user 消息；追加遇到非字符串 instructions，或改写遇到非字符串／数组的 input 时，在修改前返回明确错误。顶层 instructions 保留为空字符串以兼容 Codex，渠道文本只出现一次。用户与助手消息、工具调用、工具结果、顶层工具定义、思考参数及其他协议字段沿用原流程。
 
 Claude Code 请求头模板仍要求客户端身份段。替换后使用既有模板身份补全，身份段在前，插件文本仍在最后；管理员界面明确说明这一例外。追加保留原块，方便上游继续利用原有缓存前缀。
+
+Chat Completions 追加时保留已有 system／developer 角色，不引入角色转换；替换只移除直接的普通提示消息，动态工具声明与未知条目保留。工具调用、tool_call_id、工具结果、reasoning_content 和 reasoning_details 保持原样。messages 非数组且非 null 时，改写前返回错误；关闭规则时保持原请求。日志的 field 为 messages。
 
 追加遇到错误类型的 instructions／system 时返回明确的请求错误，不把对象或数字转为文本。替换直接写入合法文本。不改写沿用全部已有处理，不因为本功能验证或改写客户端指令。
 
@@ -68,7 +72,7 @@ Claude Code 请求头模板仍要求客户端身份段。替换后使用既有�
 
 mode 支持 off、append、replace；text 最多 32000 个 UTF-16 单元，保留空格和换行。追加／替换拒绝空白文本；关闭后可保留文本。省略或传 null 保留旧设置，新旧渠道缺省为 off。复制使用独立草稿并带入这项配置。
 
-执行顺序为：选择实际上游协议 → 客户端模板补全／生成测试请求 → 思考等级映射 → 系统提示词处理 → Responses 资源状态剥离 → HTTP 或 WebSocket 发送。内部重试复用处理后的请求体，宿主下一次尝试基于原始请求重新处理，避免累积追加。模型获取不经过该处理。
+执行顺序为：选择实际上游协议 → 客户端模板补全／生成测试请求 → 思考等级映射 → 系统提示词处理 → HTTP 或 WebSocket 发送。首次发送保留 Responses 资源状态；只有开启兼容开关并收到明确的资源状态错误、尚无有效输出时，才剥离并额外重试一次。该重试使用已经处理过的请求对象，不重复应用思考映射或系统提示词。后续普通重试复用最终请求体，宿主下一次尝试基于原始请求重新处理，避免累积追加。模型获取不经过该处理。
 
 日志元数据 systemPromptRewrite 记录 mode、field、textLength、removedMessages、demotedMessages、priorityRole（system）、placement（last）、templateIdentityPreserved，不重复放入提示词全文。Responses 的 field 为 input，Messages 的 field 为 system。从 v0.3.10 起，收到与实际发送的请求正文均停止采集，改写结果通过这些元数据核对。
 

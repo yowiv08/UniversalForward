@@ -17,7 +17,7 @@ internal static class HeaderOverrides
         foreach (var (endpoint, config) in endpoints)
         {
             if (!UniversalForwardTerminal.SupportedEndpoints.Contains(endpoint, StringComparer.Ordinal))
-                throw new FormatException("请求头接口必须是 /v1/responses 或 /v1/messages。");
+                throw new FormatException("请求头接口必须是 /v1/responses、/v1/messages 或 /v1/chat/completions。");
             if (config?.Headers is null) throw new FormatException("接口请求头配置不能为 null。");
             Validate(config.Headers);
         }

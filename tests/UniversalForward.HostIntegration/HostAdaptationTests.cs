@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -192,11 +193,63 @@ public sealed class HostAdaptationTests
         if (result.Response.Lifetime is { } lifetime) await lifetime.DisposeAsync();
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task NativeChatPassesHostRoutingFailoverAndUsage(bool stream)
+    {
+        const string completed = """{"choices":[{"index":0,"message":{"role":"assistant","content":"OK","reasoning_content":"Thinking"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":4,"total_tokens":13,"prompt_tokens_details":{"cached_tokens":3}}}""";
+        const string events = "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Thinking\",\"content\":\"OK\"},\"finish_reason\":null}]}\n\n"
+            + "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+            + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4,\"total_tokens\":13}}\n\n"
+            + "data: [DONE]\n\n";
+        using var session = new Session(call => call.Model == "primary" ? Json(503, Failure)
+            : new(HttpStatusCode.OK) { Content = new StringContent(stream ? events : completed, Encoding.UTF8,
+                stream ? "text/event-stream" : "application/json") }, internalRetries: 1,
+            systemPromptPolicy: new() { Mode = "append", Text = "Channel instructions" });
+        var original = JsonNode.Parse("""
+            {"model":"test-route","messages":[{"role":"system","content":"Client instructions"},
+              {"role":"user","content":"Question"},{"role":"assistant","content":null,"reasoning_content":"Previous thinking",
+              "tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},
+              {"role":"tool","tool_call_id":"call_1","content":"Result"}],
+             "reasoning_effort":"high","max_completion_tokens":256,"stream_options":{"include_usage":true}}
+            """)!.AsObject();
+        original["stream"] = stream;
+        var result = await session.ExecuteAsync(stream: stream, endpoint: "/v1/chat/completions",
+            originalBody: JsonSerializer.SerializeToElement(original));
+        Assert.AreEqual(200, result.Response!.StatusCode);
+        Assert.AreEqual(3, session.Calls.Count);
+        Assert.AreEqual("backup", session.Calls[^1].Model);
+        foreach (var call in session.Calls)
+        {
+            Assert.AreEqual("/v1/chat/completions", call.Endpoint);
+            Assert.AreEqual("test-key", call.Key);
+            var expected = original.DeepClone();
+            expected["model"] = call.Model;
+            expected["messages"]!.AsArray().Add(new JsonObject { ["role"] = "system", ["content"] = "Channel instructions" });
+            Assert.IsTrue(JsonNode.DeepEquals(expected, JsonNode.Parse(call.Body)));
+        }
+        if (stream)
+        {
+            using var output = new MemoryStream();
+            await foreach (var bytes in result.Response.RawStream!) await output.WriteAsync(bytes);
+            Assert.AreEqual(events, Encoding.UTF8.GetString(output.ToArray()));
+        }
+        else
+        {
+            Assert.AreEqual(completed, Encoding.UTF8.GetString(result.Response.RawContent!));
+            Assert.AreEqual(new Usage(9, 4, 13), result.Response.Usage);
+            Assert.AreEqual(new Usage(9, 4, 13), session.Logs.Single().Usage);
+        }
+        if (result.Response.Lifetime is { } lifetime) await lifetime.DisposeAsync();
+        Assert.AreEqual(0, session.Account.Status.InFlight);
+    }
+
     private const string Failure = "{\"error\":{\"type\":\"overloaded_error\",\"message\":\"test upstream unavailable\"}}";
     private const string Success = "{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Local response long enough to estimate output tokens.\"}],\"stop_reason\":\"end_turn\"}";
     private static string WithUsage(string usage) => Success[..^1] + ",\"usage\":" + usage + "}";
     private static HttpResponseMessage Json(int status, string body) => new((HttpStatusCode)status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
-    private sealed record Call(string Model, string Key, string Body);
+    private sealed record Call(string Model, string Key, string Body, string Endpoint);
     private sealed class Handler(Func<Call, CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -204,7 +257,8 @@ public sealed class HostAdaptationTests
             var body = await request.Content!.ReadAsStringAsync(cancellationToken);
             using var json = JsonDocument.Parse(body);
             return await respond(new(json.RootElement.GetProperty("model").GetString()!,
-                request.Headers.TryGetValues("x-api-key", out var keys) ? keys.Single() : request.Headers.Authorization?.Parameter ?? "", body), cancellationToken);
+                request.Headers.TryGetValues("x-api-key", out var keys) ? keys.Single() : request.Headers.Authorization?.Parameter ?? "", body,
+                request.RequestUri!.AbsolutePath), cancellationToken);
         }
     }
 
@@ -285,12 +339,13 @@ public sealed class HostAdaptationTests
                 Mock.Of<IUsageBucketStore>(), NullLogger<RouterPipeline>.Instance, health, mappings, executor, options);
         }
 
-        public async Task<RequestContext> ExecuteAsync(bool stream = false, string? systemPrompt = null)
+        public async Task<RequestContext> ExecuteAsync(bool stream = false, string? systemPrompt = null,
+            string endpoint = "/v1/messages", JsonElement? originalBody = null)
         {
             var context = new RequestContext
             {
-                Request = new AdapterRequest { Model = "test-route", Endpoint = "/v1/messages", Stream = stream,
-                    OriginalBody = JsonSerializer.SerializeToElement(new { model = "test-route", max_tokens = 32, stream, system = systemPrompt,
+                Request = new AdapterRequest { Model = "test-route", Endpoint = endpoint, Stream = stream,
+                    OriginalBody = originalBody ?? JsonSerializer.SerializeToElement(new { model = "test-route", max_tokens = 32, stream, system = systemPrompt,
                         messages = new[] { new { role = "user", content = "Please answer this local test message." } } }) },
                 TestOverrides = new() { AccountId = Account.Id, SkipCooldown = true }
             };

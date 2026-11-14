@@ -20,7 +20,8 @@ public sealed partial class UniversalForwardTerminal(IPluginHost host)
     internal static readonly string[] SupportedEndpoints =
     [
         "/v1/responses",
-        "/v1/messages"
+        "/v1/messages",
+        "/v1/chat/completions"
     ];
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)

@@ -85,6 +85,8 @@ public sealed class EndpointHeaderOverrideTests
     [TestMethod]
     [DataRow("/v1/responses", "/v1/messages")]
     [DataRow("/v1/messages", "/v1/responses")]
+    [DataRow("/v1/responses", "/v1/chat/completions")]
+    [DataRow("/v1/chat/completions", "/v1/messages")]
     public async Task ProtocolRoutingSelectsUpstreamHeadersNotIncomingHeaders(string incoming, string target)
     {
         var account = Account();
@@ -93,12 +95,13 @@ public sealed class EndpointHeaderOverrideTests
             settings["headerOverrideMode"] = "perEndpoint";
             settings["modelProtocols"] = JsonSerializer.SerializeToNode(new Dictionary<string, ModelProtocolOptions>
             {
-                ["model"] = new() { Protocols = [target[4..]], PreferredProtocol = target[4..] }
+                ["model"] = new() { Protocols = [ModelProtocolOptions.Protocol(target)], PreferredProtocol = ModelProtocolOptions.Protocol(target) }
             }, Json);
             settings["endpointHeaderOverrides"] = new JsonObject
             {
                 ["/v1/responses"] = Entry(new() { ["X-Scope"] = "/v1/responses" }),
-                ["/v1/messages"] = Entry(new() { ["X-Scope"] = "/v1/messages" })
+                ["/v1/messages"] = Entry(new() { ["X-Scope"] = "/v1/messages" }),
+                ["/v1/chat/completions"] = Entry(new() { ["X-Scope"] = "/v1/chat/completions" })
             };
         });
         var client = Client(request =>
