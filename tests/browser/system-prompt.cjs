@@ -91,7 +91,7 @@ function promptHost() {
     await open();
     assert.equal(await selectedMode(), 'append');
     assert.match(await field('systemPromptModeHint').innerText(), /最后一条系统指令/);
-    assert.match(await field('systemPromptTextHint').innerText(), /原样发送/);
+    assert.match(await field('systemPromptTextHint').innerText(), /按原文发送/);
     assert.equal(await field('systemPromptText').inputValue(), original.systemPromptPolicy.text);
     assert.equal(await field('systemPromptText').getAttribute('maxlength'), '32000');
     assert.equal(await field('systemPromptText').evaluate(node => getComputedStyle(node).fontSize), '15px');

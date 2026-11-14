@@ -92,7 +92,6 @@
   };
   let accounts = [], candidates = [], keyDraft = [], deletedKeyIds = [], keyRevision = 0, keySequence = 0;
   let modelProtocolDraft = {}, extraParams = {}, savedAccount = null, editorEpoch = 0;
-  let originalAuthentication = {};
   let headerMode = 'visual', mappingMode = 'visual', headerRows = [], mappingRows = [];
   let headerPolicyMode = 'shared', headerScope = 'common', commonHeaderDraft = {};
   let endpointHeaderDraft = Object.create(null);
@@ -487,9 +486,9 @@
   function renderSystemPrompt() {
     const mode = form.elements.systemPromptMode.value;
     const hints = {
-      off: '当前不改写系统提示词，下面的文字会保留；选择追加或替换后可编辑。',
-      append: '保留原提示词，将下方内容作为最后一条系统指令；Responses 中普通旧 system 消息改为 developer。',
-      replace: '使用下方内容覆盖原提示词，并作为最后一条系统指令；Claude Code 模板会保留必要的客户端身份声明。'
+      off: '使用客户端系统指令；下方文本保留，选择追加或替换后可编辑。',
+      append: '保留客户端指令，将下方内容作为最后一条系统指令。',
+      replace: '以下方内容覆盖普通系统指令，保留动态工具声明与对话历史。'
     };
     $('systemPromptText').readOnly = mode === 'off';
     $('systemPromptModeHint').textContent = hints[mode];
@@ -509,35 +508,20 @@
   }
   for (const input of form.querySelectorAll('input[name=systemPromptMode]')) input.addEventListener('change', renderSystemPrompt);
   $('systemPromptText').addEventListener('input', renderSystemPrompt);
-  function renderAuthenticationHint() {
-    $('authenticationModeHint').textContent = $('authenticationMode').value === 'existing'
-      ? '沿用原认证配置；选择上方一种方式后，可统一本渠道的认证。显式请求头覆盖优先。'
-      : '用于本渠道的转发、模型获取和连接测试；显式请求头覆盖优先。';
-  }
   function applyAuthenticationMode() {
     const mode = $('authenticationMode').value;
-    if (mode === 'existing') {
-      delete extraParams.apiKeyHeader; delete extraParams.apiKeyPrefix;
-      Object.assign(extraParams, structuredClone(originalAuthentication));
-    } else {
-      extraParams.apiKeyHeader = mode === 'x-api-key' ? 'x-api-key' : 'Authorization';
-      extraParams.apiKeyPrefix = mode === 'x-api-key' ? '' : 'Bearer ';
-    }
-    renderAuthenticationHint();
+    extraParams.apiKeyHeader = mode === 'x-api-key' ? 'x-api-key' : 'Authorization';
+    extraParams.apiKeyPrefix = mode === 'x-api-key' ? '' : 'Bearer ';
   }
-  function loadAuthentication(account) {
-    originalAuthentication = Object.fromEntries(['apiKeyHeader', 'apiKeyPrefix']
-      .filter(name => Object.hasOwn(extraParams, name)).map(name => [name, structuredClone(extraParams[name])]));
+  function loadAuthentication() {
     const header = typeof extraParams.apiKeyHeader === 'string' ? extraParams.apiKeyHeader.toLowerCase() : '';
     const prefix = extraParams.apiKeyPrefix;
-    const mode = !account || header === 'authorization' && (prefix === undefined || prefix === 'Bearer ') ? 'bearer'
-      : header === 'x-api-key' && (prefix === undefined || prefix === '') ? 'x-api-key' : 'existing';
+    const apiKey = header === 'x-api-key' && (prefix === undefined || prefix === '');
+    const bearer = header === 'authorization' && (prefix === undefined || prefix === 'Bearer ');
     const select = $('authenticationMode');
     select.replaceChildren(option('bearer', 'Authorization: Bearer'), option('x-api-key', 'x-api-key'));
-    if (mode === 'existing') select.append(option('existing', '保留原认证配置'));
-    select.value = mode;
-    // Existing custom/default-by-protocol settings remain intact until a mode is selected.
-    if (!account) applyAuthenticationMode(); else renderAuthenticationHint();
+    select.value = apiKey ? 'x-api-key' : 'bearer';
+    if (!apiKey && !bearer) applyAuthenticationMode();
   }
   $('authenticationMode').onchange = applyAuthenticationMode;
   function open(account, { duplicate = false } = {}) {
@@ -570,7 +554,7 @@
     form.elements.enabled.checked = account?.enabled ?? true;
     form.elements.models.value = (account?.models || []).join('\n');
     extraParams = structuredClone(typeof account?.extraParams === 'string' ? objectJson(account.extraParams, '高级参数') : account?.extraParams || {});
-    loadAuthentication(account);
+    loadAuthentication();
     keyDraft = (account?.keys || []).map(k => {
       const secret = k.secret || '', autoName = automaticKeyName(k.name) || k.name === defaultKeyName(secret);
       return { ...k, secret, originalSecret: secret, autoName,
@@ -838,7 +822,7 @@
     $('headerScopeTitle').textContent = headerScope === 'common' ? '通用配置'
       : protocolLabels[endpointProtocols[headerScope]];
     $('headerScopeHint').textContent = headerScope === 'common'
-      ? headerPolicyMode === 'shared' ? '应用于所有接口及模型发现' : '应用于继承通用配置的接口及模型发现'
+      ? headerPolicyMode === 'shared' ? '应用于所有接口及模型获取' : '应用于继承通用配置的接口及模型获取'
       : `${headerScope} · ${inherited ? '使用通用配置，只读' : '独立配置，不叠加通用请求头'} · 按实际上游接口匹配`;
     for (const id of ['templateCodex', 'templateClaude', 'headerClear', 'headerAdd', 'headerFormat'])
       $(id).disabled = inherited;

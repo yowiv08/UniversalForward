@@ -97,7 +97,7 @@ const output = path.resolve(__dirname, '../../artifacts/v0.3.6/ui');
     assert.match(await field('timeoutDuration').innerText(), /11 分钟/);
     assert.match(await field('timeoutCalculation').innerText(), /基础等待 660 秒.*响应头 20 秒.*空闲 40 秒/);
     assert.match(await field('timeoutBudgetWarning').innerText(), /预估 220 秒.*宿主 180 秒/);
-    assert.match(await field('hostAttemptsHint').textContent(), /尝试 3 次.*不乘宿主次数/);
+    assert.match(await field('hostAttemptsHint').textContent(), /尝试 3 次.*不乘外层次数/);
     assert.match(await field('timeoutCurrent').innerText(), /当前 200 秒.*少 460 秒/);
     await field('timeoutDetails').evaluate(node => { node.open = true; });
     assert.match(await field('timeoutSendDetail').innerText(), /最多 11 次内部发送/);

@@ -124,7 +124,7 @@
     if (!available) {
       $('timeoutCalculation').textContent = suggestion?.error || (executionError
         ? '宿主执行限制读取失败，暂时无法给出建议。' : '正在读取宿主执行限制…');
-      $('timeoutCurrent').textContent = '仍可手动填写总时限（1–3600 秒），原有设置保持不变。';
+      $('timeoutCurrent').textContent = '可手动填写总时限（1–3600 秒），保存渠道后生效。';
       return;
     }
     const { seconds, sends, retries, anomalyRetries, header, idle: idleSeconds, headerBudget, idleBudget, waits, backoff,
@@ -159,7 +159,7 @@
       ? `不含首次；一次宿主尝试最多普通发送 ${retries + 1} 次。` : '0–10 次，不含首次发送。';
     const currentSettings = !executionLoading && !executionError ? executionSettings : null;
     $('hostAttemptsHint').textContent = currentSettings
-      ? `宿主默认最多尝试 ${currentSettings.defaultHostAttempts} 次（含首次），映射填写的次数优先。建议总时限只计算一次插件调用，不乘宿主次数；内部重试继续使用同一渠道、Key 和代理。`
+      ? `宿主默认最多尝试 ${currentSettings.defaultHostAttempts} 次（含首次），映射填写的次数优先。建议总时限只计算一次插件调用，不乘外层次数。一次调用使用同一渠道和代理，Key 切换遵循自动禁用规则。`
       : executionError ? '宿主默认尝试次数读取失败，可在「插件设置」中重试。' : '正在读取宿主默认尝试次数…';
     const execution = currentSettings?.execution;
     $('hostTimeoutHint').textContent = execution
@@ -218,7 +218,7 @@
     try {
       executionSettings = await api('POST', 'execution/settings', { defaultHostAttempts });
       executionError = '';
-      feedback('executionStatus', '已保存。新请求使用新次数，执行中的请求继续使用原有次数。');
+      feedback('executionStatus', '已保存，对后续请求生效。');
       renderExecutionHints();
     } catch (error) { feedback('executionStatus', '保存失败：' + error.message, true); }
     finally {

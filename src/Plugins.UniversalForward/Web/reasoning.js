@@ -237,7 +237,7 @@
       const rule = normalizeReasoningRule(selected.rule);
       const target = rule.mode === 'fixed' ? rule.fixedEffort : rule.mode === 'map'
         ? missing ? rule.defaultEffort : rule.mappings.find(pair => pair.from.toLowerCase() === input.trim().toLowerCase())?.to : null;
-      feedback('reasoningPreview', `客户端 ${missing ? '未提供' : JSON.stringify(input)} → ${target == null ? '不改写（沿用现有处理）' : '发送 ' + JSON.stringify(target)}\n${source} · ${protocolLabels[reasoningProtocol]}`);
+      feedback('reasoningPreview', `客户端 ${missing ? '未提供' : JSON.stringify(input)} → ${target == null ? '不改写（保留客户端请求）' : '发送 ' + JSON.stringify(target)}\n${source} · ${protocolLabels[reasoningProtocol]}`);
     } catch (error) { feedback('reasoningPreview', source + ' · ' + error.message, true); }
   }
   function readReasoningPolicy() {

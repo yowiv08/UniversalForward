@@ -1,297 +1,173 @@
 # UniversalForward
 
-Router2API 上游转发插件，提供渠道管理、多 Key 分配、模型配置和连接测试。
+UniversalForward 是 Router2API 的上游转发插件，支持 Responses、Chat Completions 和 Anthropic Messages。通过渠道管理上游地址、认证、模型与多 Key，配置思考等级、系统提示词、请求头、重试和连接测试。
 
-**4.3.0 适配官方 Router2API 2.1.2（Router.Contracts 2.0.0）。** 本版新增原生 Chat Completions、渠道认证方式选择和 Key 自动禁用，修复连接测试结果超过宿主 JSON 配额的问题，并将 Responses 资源状态剥离改为仅在明确状态错误后触发。新建渠道默认 Bearer 认证，旧渠道保留原认证；正常请求保留思考历史。沿用已有渠道配置，无需数据库结构迁移。
+## 支持的协议
 
-管理界面参考 shadcn/ui Dashboard 与 Ant Design 数据展示规范重构，使用黑白灰控件和侧栏导航。渠道管理与请求日志分别展示，渠道默认以卡片展示，可切换为列表；禁用渠道使用灰色背景与「已禁用」标识，文字保持清晰。点击名称或模型数量进入相应设置，启用／禁用按钮直接可用，更多菜单依次提供「日志」「复制」和「删除」。
+| 协议 | 接口 | 上游连接 |
+| --- | --- | --- |
+| OpenAI Responses | `/v1/responses` | HTTP / SSE 或 WebSocket |
+| Chat Completions | `/v1/chat/completions` | HTTP / SSE |
+| Anthropic Messages | `/v1/messages` | HTTP / SSE |
 
-「复制」带入完整 Key 及全部可编辑配置，打开默认禁用的独立副本草稿；名称追加「 - 副本」，重名自动编号。保存后才创建新的渠道及 Key ID，取消不创建，保存失败保留草稿。日志、测试记录、运行状态和候选模型缓存不复制；模型获取使用副本当前填写的地址和 Key。
+请求与响应使用目标接口的原生格式。协议设置决定上游路径，客户端需要发送与该接口匹配的消息体。
 
-设置按七个页签分组，Key 按行编辑，模型协议逐条展开。连接测试提交后收起参数并保留配置摘要。设置保存栏与日志、测试分页栏保持可见；手机端支持遮罩导航、滚动标签和详情抽屉。
+## 开始使用
 
-日志主要文字使用 15px，日期、Trace、耗时和思考参数使用 13–14px。页头可选「跟随宿主／白天／黑夜」，默认跟随宿主明暗，仅使用插件自己的配色。切换保留当前页面、筛选和未保存表单，白天与黑夜的正文、说明文字保持至少 4.5:1 对比度。
+1. 从 [GitHub Release](https://github.com/yowiv08/UniversalForward/releases/latest) 下载 `universalforward.zip`，在插件管理中安装；也可订阅 `yowiv08/UniversalForward` 仓库。
+2. 添加渠道，填写 Base URL，选择认证方式，并在「Key 管理」添加上游密钥。
+3. 在「模型与协议」填写模型，或获取候选模型后选择需要使用的项目，保存渠道。
+4. 打开渠道的连接测试，选择模型与 Key，检查响应状态和内容。
+5. 客户端使用 `/v1/models` 返回的完整 `platform/model` 标识发起请求。
 
-## 插件设置
-
-渠道页「插件设置」中的宿主默认尝试次数为 1–35，默认 1，包含首次。宿主模型映射留空时继承，填写具体次数时覆盖。保存后更新本插件及平台策略，新请求立即使用，执行中请求保留原快照。渠道普通重试不含首次；宿主 3 次、渠道重试 2 次最多普通发送 9 次，另保留原有异常重试额度，仍受时限限制。
-
-渠道内部重试使用同一渠道和代理；开启 Key 自动禁用规则后，命中状态码会在普通重试额度内切换 Key；耗尽后的可重放失败交回宿主 `NextAttempt`，由宿主重新选择或切换目标。参数错误、已识别永久错误、取消、总时限耗尽、已有输出或已交付流时停止重放，不额外禁用账号或惩罚代理。状态码映射保留，失败映射到 2xx 可能被宿主按成功处理，界面会提示。连接测试只测试所选渠道。
-
-管理员 `GET/POST execution/settings` 使用 `defaultHostAttempts`；`GET/POST appearance/settings` 使用 `mode: host | light | dark`。宿主请求桥为路由添加 `/api/plugins/universalforward/` 前缀并沿用管理员会话与 CSRF 校验。设置分别原子保存至运行目录的 `data/universalforward/execution-settings.json`、`appearance-settings.json`，同一宿主管理员共用，刷新、重启、升级后保留。读取失败有提示，外观回退白天；保存失败恢复上次已保存外观。
-
-跟随宿主使用 2.1.2 的明暗通知，不复制宿主的蓝色或其他主题配色；尚未收到通知时暂用白天。手动选择白天或黑夜后固定该模式。2.1.2 的通用样式覆盖由插件内部衔接，避免破坏按钮和禁用渠道配色，不改变宿主设置。
-
-## 用量统计
-
-Claude 输入用量计入缓存读取和写入，普通 JSON、SSE／WebSocket 汇总结果共用规则。合法零值和上游明确总量保留，OpenAI 用量明细不重复相加；缺失或无效用量不补零，由宿主解析原文或估算。用量解析异常不影响转发。
-
-宿主 2.1.2 支持在模型映射目标中隐藏 `/v1/models` 的原始模型，映射名及直接调用不受影响，插件无需删除模型配置。宿主持久化总览直接使用其请求日志；下述插件原文日志仍为内存日志。
+安装包包含 UniversalForward 插件及其依赖。运行环境需提供 Router2API 和 Router.Contracts。
 
 ## 渠道管理
 
-- 添加、编辑、删除和启停渠道。
-- 在渠道列表或卡片上直接启用或禁用，保留渠道配置。
-- 配置渠道地址、权重、API Key 和允许端点。
-- 出站方式可选择直连、全部代理、指定订阅或指定节点；订阅中包含「手动节点」。`networkMode` 仍为 `direct`（默认）或 `proxyPool`，代理范围通过可选的 `proxySubscriptionIds` 和 `proxyId` 保存。
-- 空来源数组表示全部启用订阅及手动节点；`["manual"]` 表示仅手动节点。`proxyId` 为空或 `null` 表示不固定节点。保存接口省略代理字段时保留旧值，传空数组或空字符串可清除相应限制。
-- 指定节点必须同时满足来源范围与可用性；节点已删除、禁用、冷却或订阅停用时返回 `503 proxy_pool_unavailable`，不换其他节点，也不回退直连。目录刷新保留已失效的选择，待管理员主动调整。
-- 请求日志及连接测试详情记录实际使用的节点 ID、来源和无认证地址。代理目录不返回密码或订阅 URL。
-- 代理目录由插件通过现有 `IProxyStore`、`IProxySubscriptionService` 生成白名单投影；代理 HTTP 请求通过 `IProxyHttpClientFactory` 复用宿主已有连接池，沿用宿主的节点状态与订阅管理。
-- 出站方式统一用于转发、模型获取和连接测试；单次请求及其重试固定使用同一代理。获取模型使用表单草稿，刷新和连接测试使用已保存配置。
-- 按渠道名称、地址或模型筛选。
-- 分页签管理基础设置、Key、模型与协议、请求头、重试与映射。
+渠道保存上游地址、权重、允许端点、认证、Key、模型和转发规则。支持搜索、筛选、启停、复制和删除，可使用卡片或列表查看。
 
-## 多 Key 管理
+Base URL 可填写根地址、`/v1` 前缀或完整接口地址。末尾的 `/v1/responses`、`/v1/messages`、`/v1/chat/completions`、`/v1/models` 会按接口段识别，前面的网关路径和大小写保留。
 
-- 每个渠道最多100个 Key。
-- 支持批量添加、命名、替换、启停、排序和删除。
-- 密钥名称默认取 Key 末尾 4 位，可自定义；旧的 Key1、Key2 等默认名称改用末尾 4 位。
-- Key 管理中完整显示访问密钥，名称与密钥输入框同高对齐；已有密钥留空时保留原值。
-- 默认每次请求及其重试使用同一个 Key；可在 Key 管理中开启自动禁用与失败切换，默认规则为 `401,403`、连续 3 个独立请求，状态码和阈值均可修改。禁用后需手动恢复。
-
-| 分配策略 | 功能 |
-| --- | --- |
-| 轮询 | 按启用 Key 的顺序依次分配 |
-| 随机 | 随机选择一个启用 Key |
-| 主备顺序 | 使用排序最前的启用 Key |
-
-## 模型配置
-
-- 手动填写模型，或从上游获取、刷新候选模型。
-- 选择渠道允许使用的模型。
-- 指定模型发现使用的 Key。
-- 使用当前表单的地址和 Key 获取候选模型。
-- 获取模型请求 `GET {Base URL}/v1/models`，使用渠道选择的认证方式，新建渠道默认 `Authorization: Bearer`。请求同时附带 `anthropic-version: 2023-06-01`；Anthropic 官方接口缺少该头会返回 400，OpenAI 兼容上游忽略它。通用请求头或高级参数 `ReplaceHeaders` 可覆盖这些头。
-- Base URL 填写上游根地址或 `/v1` 前缀，例如 `https://api.anthropic.com` 或 `https://api.anthropic.com/v1`；末尾带 `/v1/messages`、`/v1/responses`、`/v1/chat/completions`、`/v1/models` 时自动识别接口段，保留前面的网关路径。
-- 为每个模型设置支持协议、首选协议和强制原生模式。
-
-## 请求转发
-
-支持以下三种原生协议的普通 JSON 和 SSE 流式响应：
-
-| 协议 | 接口 | 配置键 | 新建渠道默认认证 |
-| --- | --- | --- | --- |
-| OpenAI Responses | `/v1/responses` | `responses` | `Authorization: Bearer` |
-| Anthropic Messages | `/v1/messages` | `messages` | `Authorization: Bearer` |
-| Chat Completions | `/v1/chat/completions` | `chat` | `Authorization: Bearer` |
-
-协议路由选择上游路径，认证方式可在渠道基础设置中独立选择；请求及响应内容按上游格式透传，不在协议间转换消息体。新渠道默认允许三种端点，已有渠道保留已保存的端点选择；使用 Chat Completions 时在渠道基础设置中勾选该端点。旧渠道的认证规则保留，见下方「认证方式」。
-
-Chat Completions 保留 `messages`、工具调用与结果、图片等内容块、`reasoning_content`／`reasoning_details`、`max_tokens`／`max_completion_tokens` 及未知扩展字段。正常请求的思考历史原样发送；Responses 状态修复开关和 WebSocket 选择不作用于 Chat Completions。仅思考、工具或音频输出也算有效输出；SSE 收到 `[DONE]` 才结束读取，保留 `finish_reason` 后的用量事件。
-客户端使用 `/v1/models` 返回的完整 `platform/model` 模型 ID；渠道模型使用上游实际接受的 ID，保留上游要求的平台前缀。
-Codex 模板为 Responses 请求补齐协议字段和会话元数据，保留原始对话、指令和工具配置。
-Claude 模板为 Messages 请求补齐客户端身份、会话元数据和消息格式，保留自定义系统指令、工具和生成参数。
-Claude 请求头模板包含 1m 上下文标识；模型名使用 `[1m]` 后缀时自动转换为对应请求头。
-模型名称取自当前请求与渠道配置，不依赖固定模型列表。
-Codex Responses 和 Claude Messages 模板使用上游流式传输；客户端使用非流式请求时，汇总为原生 JSON，保留工具调用和用量。
-非流式汇总上限为 32 MiB；流中断或缺少结束事件返回明确错误。空错误响应附带原始状态码和请求追踪标识。
-
-- 重试次数：0–10次。
-- 渠道响应头、总请求和流空闲超时可设 1–3600 秒，同时受宿主执行预算限制；页面展示实际预算。
-- 成功 SSE 响应头或 WebSocket 握手后，通过 Contracts 2.0.0 已有执行接口通知宿主切换到响应体预算，再进行首个有效片段探测、流式转发或非流式汇总。
-- 建立响应尝试策略最多 300 秒、建立响应总策略最多 180 秒，且不能超过宿主配置。响应体预算默认 10 分钟，与渠道总时限中先到的截止时间生效。连接测试另受宿主 Job 时限约束。
-- 自定义重试状态码和响应状态码映射。
-- 响应异常重试：首次有效输出前支持限流与空回重试，SSE 实时透传。
-- 开启空回重试后，完整结束但没有任何输出的 Responses 也会按现有预算重试，耗尽返回 `502 empty_response`；关闭时保留原始完整响应。`usage.output_tokens_details.reasoning_tokens` 缺失、为 0 或为 10 都不决定是否重试。
-- 已输出的推理摘要、密文或工具调用同样阻止重放；只有推理而没有正文的响应仍会透传。`incomplete`、失败事件及单独的 `[DONE]` 保留原有处理。
-- 输出前检测到上游错误时保留原始状态码、Content-Type 和响应体，不转换为 429/502 JSON；关闭重试不关闭错误识别。
-- 已输出的 SSE 字节不改写；缺失结束事件、流错误或超时按失败结束并记录原因，不伪造完成事件、不重放请求。
-- 收到完整的 `response.completed`、`response.done`、`message_stop` 或 `[DONE]` 后结束读取，不再等待上游关闭连接；内容块结束或 `finish_reason` 不会提前截掉后续输出与用量。
-- 总时限包含等待、重试和完整流式输出，到期会中断已开始的流；流空闲超时只限制连续无数据的时间。
-- 「建议总时限」默认收起为一行入口，点击后展示建议与操作，展开／收起保留草稿。基础预算为内部发送次数乘以「响应头超时 + 一个流空闲周期」，加异常重试间隔与适用的 520 退避；向上取整，超过渠道 3600 秒或宿主两阶段合计上限时才下调，宿主读取上限不加入建议。一键填入后保存渠道生效，原有手动填写保留；共享异常次数不重复计算，不乘宿主尝试次数。
-- 普通重试 1 次，响应头和流空闲各 1 秒，限流／空回共享重试 1 次、间隔 2 秒，且包含 520 退避时，基础预算为 `3 × (1 + 1) + 2 + 0.25 = 8.25` 秒，建议 9 秒。这里只预留每次发送的一个空闲周期，不代表完整输出时长；持续输出的长回答需要额外增加总时限。普通 JSON、上游更长的 Retry-After、错误响应读取、映射剩余预算和测试任务时限仍受各自限制，建议不保证完整输出或执行全部重试。读取宿主限制失败时可重试读取或手动填写。
-- 流超时日志区分 `total_timeout`（总时限）和 `stream_idle_timeout`（持续无数据），外部取消记录 `request_cancelled`，并注明取消信号来源、是否已有输出及是否收到结束事件。
-- 状态码映射提供可视化和 JSON 两种编辑方式，默认可视化。
-
-HTTP 200 表示上游已开始正常响应，宿主尝试详情中的 `Healthy` 也不代表整条流已完整转发。后续超时、取消或断流仍会使最终请求失败；完整结束后不会再因等待连接关闭而误报失败或“日志不完整”。
-
-## Responses 上游 WebSocket
-
-渠道的「Responses 上游连接」可选择 HTTP / SSE 或 WebSocket，默认 HTTP。WebSocket 使用相同的渠道地址、Key、请求头和出站方式；仅作用于最终路由到 `/v1/responses` 的请求。Chat Completions、Messages 和模型获取仍使用 HTTP。
-
-每次请求独立建立 WS 连接，发送 `response.create`，不发送 `stream` / `background` 字段。后台请求不受支持。客户端仍使用 HTTP / SSE，非流式请求汇总为 Responses JSON。不提供跨请求连接复用或连接内续接缓存；`previous_response_id` 是否可用取决于上游持久化能力。
-
-连接失败不回退 HTTP；首次有效输出前沿用渠道重试设置，输出后不重放。HTTP 4xx/5xx 握手拒绝保留上游响应；普通 HTTP 2xx 不算握手成功，按连接失败处理。WS 事件按顺序转换为 SSE。连接测试详情显示上游连接方式，日志保留真实握手状态、响应头及从 WS 事件提取的响应元数据。
-
-配置地址继续填写 `http://` 或 `https://`，连接时自动使用对应的 `ws://` 或 `wss://`。协议参考：[OpenAI WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)。
-
-## Responses 资源状态剥离
-
-在渠道基础设置中开启「异常时剥离 Responses 资源状态」，可在跨资源、账号或中转续聊遇到资源状态失效时修复请求。新渠道和旧配置默认关闭，已有的 `stripResponsesResourceState` 开关继续有效。
-
-**开启后首次请求仍保留完整历史**，包括 `reasoning`、`encrypted_content`、条目 ID 和 `previous_response_id`。正常续聊和普通重试不会提前删除思考历史；下一次独立请求也从客户端原始历史开始，不记忆上次是否剥离。
-
-只有最终路由到 `/v1/responses`，且上游错误明确指向密文校验／解密失败、历史响应或直接条目找不到时，才尝试兼容修复。识别 `invalid_encrypted_content`、`previous_response_not_found`、`response_not_found`、`item_not_found` 等明确错误码，以及对应的错误消息和直接条目字段。普通 `400`、`bad response status code 400`、思考等级参数错误、缺少 reasoning 条目、限流、网络失败和模型不存在不会触发剥离。只检查错误结构，不从正常回答或工具内容中匹配关键词。
-
-修复时才删除：
-
-- 顶层 `previous_response_id`。
-- `input` 数组中的全部直接 `reasoning` 条目，包括密文、摘要和推理正文，避免留下无密文的 reasoning 空壳。
-- 其他直接对象条目的 `id`，以及名称以 `encrypted` 开头的字段，例如 `encrypted_content`，区分大小写。
-
-不递归删除嵌套字段；消息正文、assistant `phase`、工具调用的 `call_id`、参数、工具结果和 `include` 保留。客户端原始请求和上游响应均不改写。规则只作用于当前目标渠道，不根据密文来源、域名或模型名称提前剥离。
-
-每次插件调用最多额外修复重试一次，独立于普通重试和限流／空回重试次数，共用原有总时限。修复复用已经完成模板、思考映射和系统提示词处理的请求对象；后续普通重试复用修复后的请求体。已有正文、思考、密文或工具输出，响应读取中断或请求取消时不进行兼容重试。再次遇到相同状态错误时保留上游错误，不循环剥离。HTTP、SSE、WebSocket 及连接测试共用这一路径，HTTP 200 中的明确错误事件也可触发；Messages 和模型获取不受影响。
-
-正常请求中的 `compaction` 加密检查点和 `item_reference` 引用原样发送。若上游报告状态失效，插件保留原始错误，不删除这些无法在本地还原的条目。客户端需恢复完整消息和工具历史；插件也无法补回仅由 `previous_response_id` 引用的历史。
-
-渠道查询和 `accounts/save` 使用可选布尔字段 `stripResponsesResourceState`。传 `true` 开启，传 `false` 关闭，省略或传 `null` 保留已有设置；仍保存在渠道 settings JSON 中，无需宿主升级或数据库迁移。仅实际修复时记录 `request.responses.state.stripped`，包括触发原因、`strippedFields` 和 `removedReasoningItems`；无法修复时记录 `request.responses.state.skipped`，不把请求正文或密文写入这些事件。
-
-字段剥离参考 [codex-strip-proxy](https://github.com/AnnaofArendelle/codex-strip-proxy)，无密文 reasoning 空壳问题参考 [AnyRouter 报错记录](https://github.com/yetone/magpie/issues/1044)。旧版在每次请求发送前剥离的行为已改为上述按错误触发的修复。
-
-## 思考等级映射
-
-在渠道编辑的「思考映射」页签中，选择渠道默认或具体模型，并分别配置 Responses、Messages、Chat Completions：
-
-处理方式使用三组选项卡。等级输入使用统一的搜索下拉控件，常用值带中文提示与选中标记，可输入自定义值；支持方向键、Enter 选择，Escape 仅收起选项。映射行、固定等级与预览使用相同控件，等级文字为 14px。
-
-- **不改写**：沿用现有处理，新渠道及旧配置默认使用此行为。
-- **按值映射**：例如 `low → max`。来源去除首尾空格并忽略大小写；未命中保持原处理。只映射一次，`low → high` 不会继续触发 `high → max`。
-- **固定等级**：包含未传等级的请求，统一发送指定等级。
-- **客户端未提供时**：映射模式可设置缺省等级，只用于原始字段缺失或为 `null` 的请求，留空则不改写。
-
-模型按接口继承渠道规则；取消继承后整条覆盖，不合并映射表。模型选择「不改写」可独立关闭该接口的渠道映射。等级支持自定义，实际可用值由上游模型决定；空来源、空目标和重复来源禁止保存。预览不会发送请求。
-
-Responses 改写 `reasoning.effort`，Messages 改写 `output_config.effort`，Chat Completions 改写顶层 `reasoning_effort`。以原始请求中的对应字段为准，不把宿主扩展参数或模板默认值当成客户端输入；规则在模板补全后执行，保留对象内其他参数、思考开关、Token 预算和聊天历史中的动态等级控制。
-
-例如，只有 `low → max` 时，Codex 模板给未传等级请求补入的 `low` 不会触发映射；另设缺省 `high` 后，这类请求最终发送 `high`。现有连接测试生成的请求也按「客户端未提供」处理。HTTP、WebSocket、流式、非流式和重试使用同一规则，重试期间映射结果不变。
-
-日志显示客户端等级、实际发送等级和命中规则来源，上游报告独立显示，不推断内部思考量。
-
-渠道查询与 `accounts/save` 使用可选的 `reasoningPolicy` 字段；省略或传 `null` 保留原配置，传空 `defaults` / `models` 可清空规则。模型键使用渠道允许模型中的 ID，接口键为 `responses` / `messages` / `chat`。以下为该字段的示例值：
-
-```json
-{
-  "defaults": {
-    "responses": {
-      "mode": "map",
-      "mappings": [{ "from": "low", "to": "max" }],
-      "defaultEffort": "high"
-    }
-  },
-  "models": {
-    "your-model-id": {
-      "responses": { "mode": "fixed", "fixedEffort": "max" },
-      "messages": { "mode": "off" }
-    }
-  }
-}
-```
-
-模型或接口条目缺失表示继承；`mode` 为 `off`、`map` 或 `fixed`。配置仍保存在现有渠道 settings JSON 中；思考映射规则本身无需额外 Contracts 变更或数据库迁移。
-
-## 系统提示词
-
-Chat Completions 的追加模式在 `messages` 末尾加入独立 `system` 消息，保留原有角色；替换模式先移除普通的 `system`／`developer` 提示消息，保留动态工具声明，再加入渠道系统指令。两种模式都保留助手思考历史、工具调用与工具结果。
-
-渠道编辑增加「系统提示词」页签，作用于该渠道的所有模型，保存后生效。提供「不改写」「追加」「替换」，默认不改写；关闭时保留已填写文本。多行文本最多 32000 个 UTF-16 单元，空格和换行原样保存，追加／替换时不能仅填空白。
-
-- 追加：保留原文，插件文本作为最后一条独立系统指令。Responses 原 `instructions` 转为首条 developer 消息，普通旧 system 消息改为 developer，插件文本写入 `input` 末尾的 system 消息；顶层 `instructions` 保留为空字符串，兼容 Codex。Messages 使用 `system` 块数组，原字符串转为文本块，原数组及缓存属性保留，插件文本作为最后一个块。
-- 替换：Responses 移除原 `instructions` 和当前 `input` 中普通的 system／developer 指令消息，再添加插件 system 消息；显式工具条目、动态工具声明及嵌套字段保留。Messages 使用只包含插件文本的 `system` 数组。Claude Code 模板要求的客户端身份段继续保留。
-- 填写的文字原样发送，不自动添加前缀、后缀或冲突说明。插件只调整本次请求中的角色和位置；Claude 系统块之间没有额外优先级字段，不能控制上游后续追加规则或保证模型完全遵循。
-- 默认不改写，沿用原有请求和模板。模式、配色和页签切换保留草稿；保存失败保留文本；复制渠道带入独立配置。
-
-规则在模板补全后、发送前处理，HTTP、SSE、WebSocket、连接测试共用；内部重试复用处理后的请求，宿主再次尝试从原始请求生成，避免重复追加。连接测试使用已保存设置，模型获取不应用。替换处理本次请求中的指令，上游保存的历史上下文仍由上游管理。
-
-`accounts/save` 接收 `systemPromptPolicy: { "mode": "append", "text": "请使用中文回答。" }`，`mode` 为 off／append／replace；省略或传 null 保留旧值。配置保存在现有渠道 settings JSON 中。日志元数据记录 `systemPromptRewrite`，改写结果通过这些元数据核对。
+「复制」带入全部可编辑配置和完整 Key，打开独立草稿。副本默认禁用，名称自动避开重名；保存后创建独立渠道和 Key。日志、测试记录、运行状态和候选模型缓存属于各自渠道。
 
 ## 认证方式
 
-在渠道「基础设置 → 认证方式」选择上游需要的认证头。新建渠道默认选择 `Authorization: Bearer`：
+在「基础设置 → 认证方式」选择 `Authorization: Bearer` 或 `x-api-key`，默认 Bearer。
 
-| 选项 | 发送的认证头 |
+| 方式 | 发送内容 |
 | --- | --- |
 | `Authorization: Bearer` | `Authorization: Bearer <当前 Key>` |
 | `x-api-key` | `x-api-key: <当前 Key>` |
 
-所选方式应用于 Responses、Messages、Chat Completions、模型获取、连接测试和 Responses WebSocket。发生 Key 切换时，认证头使用新选中的 Key；切换到 `x-api-key` 会同时清除 Bearer 前缀。模型候选获取使用当前草稿，刷新已保存模型和连接测试使用已保存设置。
+认证设置用于转发、模型获取、连接测试和 Responses WebSocket。Key 切换时，认证头使用选中的 Key。显式请求头覆盖优先。
 
-编辑旧渠道时会自动识别已有的标准认证；没有显式配置认证，或使用其他头名称、前缀时，显示「保留原认证配置」。保留该选项或复制渠道会沿用原值，主动选择其他方式后才统一认证。未显式配置认证的旧渠道仍按原规则发送：Messages 使用 `x-api-key`，Responses、Chat Completions 和模型获取使用 Bearer。直接通过 API 创建且未指定认证字段的渠道也保留该缺省规则。
+编辑器默认选择 Bearer；已配置标准 `x-api-key` 认证的渠道显示该选项。保存时使用所选认证方式。
 
-选择结果保存在现有 `extraParams.apiKeyHeader` 和 `extraParams.apiKeyPrefix` 中：Bearer 对应 `Authorization` 和 `Bearer `（末尾含空格），API Key 对应 `x-api-key` 和空字符串，其他高级参数保留。「请求头」和高级参数 `ReplaceHeaders` 的显式覆盖仍优先。
+配置存储在 `extraParams.apiKeyHeader` 和 `extraParams.apiKeyPrefix` 中。Bearer 的前缀为 `Bearer `，`x-api-key` 的前缀为空字符串。
+
+## 多 Key 管理
+
+每个渠道最多 100 个 Key，支持批量添加、命名、替换、启停、排序和删除。默认名称取密钥末尾 4 位，也可自定义。编辑已有 Key 时，密钥留空表示保留已保存值。
+
+| 分配策略 | 行为 |
+| --- | --- |
+| 轮询 | 按启用 Key 的顺序分配 |
+| 随机 | 从启用 Key 中随机选择 |
+| 主备顺序 | 优先使用排序靠前的启用 Key |
+
+「自动禁用 Key」按原始 HTTP 状态码和连续失败阈值判断，默认关闭，默认状态码为 `401,403`，默认阈值为 3。状态码支持 400–599 的单值与区间，阈值支持 1–100。
+
+匹配状态码后，该请求可在普通重试额度内切换 Key；达到连续失败阈值后，Key 保持禁用，需在列表中手动启用并保存。同一个客户端请求对同一 Key 最多计一次失败。非匹配 HTTP 响应清零，网络异常、超时和取消不增减计数。
+
+失败计数保存在运行内存，禁用状态持久化保存。详细规则见 [Key 自动禁用与连接测试](https://github.com/yowiv08/UniversalForward/blob/main/docs/key-auto-disable.md)。
+
+## 模型配置
+
+「模型与协议」支持手动填写模型、获取候选模型和刷新模型。模型 ID 使用上游实际接受的值，上游要求的平台前缀也应填写。
+
+- 获取候选模型使用表单中的地址、认证、Key 和请求头。
+- 刷新模型和连接测试使用已保存配置。
+- 模型获取调用 `/v1/models`，发送渠道认证和 `anthropic-version: 2023-06-01`；通用请求头可覆盖默认值。
+- 每个模型可配置支持协议、首选协议和「强制原生」要求。
+
+Chat Completions 的工具调用、思考历史、Token 参数和连接测试规则见 [Chat Completions](https://github.com/yowiv08/UniversalForward/blob/main/docs/chat-completions.md)。
+
+## 思考映射
+
+按渠道默认规则或具体模型配置「不改写」「按值映射」「固定等级」，分别作用于以下字段：
+
+| 协议 | 等级字段 |
+| --- | --- |
+| Responses | `reasoning.effort` |
+| Messages | `output_config.effort` |
+| Chat Completions | `reasoning_effort` |
+
+默认不改写。按值映射只替换命中的等级；客户端缺少等级或值为 null 时，可使用单独配置的缺省值。固定等级按填写值发送，常用等级列表也接受自定义值。
+
+规则只处理请求级的等级字段，保留思考开关、Token 预算和对话历史。预览显示输入等级与发送等级，实际请求和上游报告值可在日志中查看。
+
+## 系统提示词
+
+「系统提示词」对渠道中的所有模型生效，支持三种模式：
+
+| 模式 | 行为 |
+| --- | --- |
+| 不改写 | 使用客户端请求中的指令 |
+| 追加 | 保留客户端指令，将渠道文本作为最后一条独立系统指令 |
+| 替换 | 移除普通系统指令并写入渠道文本，保留动态工具声明和对话历史 |
+
+提示词保留空格、换行和字面内容，上限 32,000 个 UTF-16 单元。追加和替换需要非空文本。关闭改写时可保留文本以便再次使用。
+
+各协议的角色与系统块处理见 [系统提示词](https://github.com/yowiv08/UniversalForward/blob/main/docs/system-prompt.md)。
+
+## Responses 资源状态
+
+「异常时剥离 Responses 资源状态」默认关闭。开启后，正常请求发送完整思考历史、加密状态、条目 ID 和 `previous_response_id`。
+
+仅在上游明确报告密文校验或解密失败、历史响应或条目不存在，且尚无有效输出时，插件删除相关资源状态并额外重试一次。普通参数错误、限流和网络失败不触发剥离。
+
+剥离范围包括历史 reasoning 条目、资源 ID、加密字段和 `previous_response_id`；消息、工具调用和工具结果保留。包含无法还原的 compaction 或 item_reference 时，插件返回上游错误，需由客户端提供完整历史。
+
+每次调用最多额外重试一次，共用总时限。下一次调用从客户端原始请求开始处理。规则适用于 Responses 的 HTTP、SSE、WebSocket 和连接测试。
 
 ## 请求头配置
 
-默认透传客户端的业务请求头，包括 User-Agent、Accept-Language、会话标识及自定义字段；无需逐项配置或添加 `*`。请求头覆盖只修改同名字段，删除覆盖项并保存后恢复客户端原值，HTTP 和 WebSocket 使用同一规则。
+请求头支持通用配置和按接口配置，可使用可视化或 JSON 编辑器，以及 Codex、Claude Code 模板。配置值可引用当前 Key、客户端请求头和会话标识。
 
-认证使用渠道 Key。Host、Content-Length、连接专用头及重新编码请求体后失效的压缩/摘要头不沿用；本地认证、Cookie 和 CSRF 头不向上游透传。连接测试和模型发现没有原始业务客户端，不借用管理页面的请求头。旧宿主若不提供完整头快照，只能透传其交给插件的字段。
+默认透传可用的客户端业务请求头。上游认证使用渠道 Key，本地认证、Cookie 和 CSRF 不透传；显式覆盖优先。模型获取使用通用请求头。
 
-通过 JSON 配置固定请求头和变量替换；兼容原有 `*`、正则规则及 `PassThroughHeaders`，无需再靠它们开启默认透传。旧 `ReplaceHeaders` 仍作为显式覆盖参与优先级。
-支持所有接口共用配置，或按实际上游 Responses、Messages、Chat Completions 接口独立配置；接口可继承通用配置，模板不限接口。模型发现使用通用配置。
+占位符、模板和会话身份规则见 [请求头与会话标识](https://github.com/yowiv08/UniversalForward/blob/main/docs/request-headers.md)。
 
-| 配置 | 功能 |
-| --- | --- |
-| `{api_key}` | 使用当前请求选中的 Key |
-| `{session_id}` / `{thread_id}` | 会话与线程标识 |
-| `{request_id}` | 请求标识，默认每个新请求独立生成 |
-| `{turn_id}` | 回合标识，默认每个新请求独立生成 |
-| `{window_id}` | Codex 窗口标识 |
-| `{codex_turn_metadata}` | Codex 回合元数据 |
-| `{client_header:NAME}` | 读取指定客户端请求头 |
-| `*` | 匹配允许透传的请求头 |
-| `re:` / `regex:` | 按正则表达式匹配请求头名称 |
+## 出站连接
 
-提供 Codex、Claude Code 请求头模板，以及可视化和 JSON 两种编辑方式。
-编辑器支持格式化、复制和清空。显式配置的请求头优先。
-Codex 覆盖预设保留固定 User-Agent 和协议头，不重复填写会话、线程、请求、窗口 ID 及回合元数据；后端继续自动补全这些字段。
-更新插件后，已有渠道需重新应用 Codex 模板并保存，才能采用新的覆盖预设。
+渠道可选择直连或代理池，代理池支持全部可用代理、指定订阅、手动节点来源和固定节点。
 
-自动补全优先使用显式覆盖（含旧 `ReplaceHeaders`），再使用客户端已有身份。缺少会话标识时，根据 Responses `input` 或 Messages／Chat Completions `messages` 的规范化历史识别会话，不按客户端名称、User-Agent 或 IP 判断。含助手或工具历史的请求，只有唯一匹配某个会话最近历史的完整内容或延续前缀时才复用；首次聊天、回到旧历史的分叉、无法匹配或多个候选时新建会话。
+一次请求及其重试固定使用选中的代理。指定节点被删除、停用、冷却或所属订阅停用时，请求返回错误。转发、模型获取、连接测试和 Responses WebSocket 使用同一出站配置。
 
-推断出的会话复用会话、线程、窗口及生成的安装、上下文标识；新请求的请求 ID 和回合 ID 独立生成，同一次请求的所有重试复用完整身份。HTTP、WebSocket、流式及非流式使用同一规则。自动补全的 `X-Client-Request-Id` 使用 `{request_id}`；客户端或配置已有值仍优先。旧配置若显式填写 `"X-Client-Request-Id": "{session_id}"`，需删除该项或改为 `{request_id}` 才会采用独立请求 ID。
+Responses 可选择 WebSocket 上游连接，Base URL 使用 HTTP(S) 地址。每次请求独立连接，客户端使用 HTTP/SSE；非流式请求汇总为 Responses JSON。WebSocket 连接失败按渠道规则处理，不回退 HTTP。
 
-识别缓存只在本次插件运行内存中保存身份和历史摘要，不缓存对话正文；最多 10,000 个会话，24 小时未使用过期，满额淘汰最久未使用记录，卸载或重启清空。记录按渠道及下游认证摘要隔离，上游 Key 轮换不影响会话。已有 `prompt_cache_key` 原样保留，只辅助隔离候选，不单独作为同一聊天的依据。客户端只发最新一句、历史裁剪后无法匹配或多个聊天提供相同可观察信息时，优先新建，不保证识别为原会话。
+## 重试与时限
 
-诊断事件 `request.identity.resolved` 标记来源 `override`（显式覆盖）、`client`（客户端）、`history`（历史匹配）或 `new`（新建）及原因；该事件不记录认证原值或对话正文。
+普通重试支持 0–10 次，不含首次发送。限流与空回重试分别启用，共享每请求 0–10 次额度，默认额度 3 次、间隔 5 秒，并遵守上游更长的等待要求。
+
+响应头、总请求、流空闲时限均可设置为 1–3600 秒，并受运行环境的执行预算约束。总时限覆盖等待、重试和完整输出；空闲时限限制连续无数据的时间。
+
+重试只发生在首次有效输出前。正文、思考、密文、工具调用或音频均可构成有效输出；输出后的错误或断流直接结束该响应。空回重试可能重复上游执行与计费，缺少 Token 用量不构成空回。
+
+「建议总时限」估算等待与重试所需时间，可一键填入。长回答需要额外预留持续输出时间。自定义重试状态码和返回状态码映射均可通过编辑器配置。
+
+完整的次数、预算和流结束规则见 [重试与超时](https://github.com/yowiv08/UniversalForward/blob/main/docs/request-policy.md)。
 
 ## 连接测试
 
-- 测试单个、勾选或全部模型。
-- 按渠道策略、指定 Key 或全部启用 Key 测试。
-- 每批最多100个模型与 Key 组合，串行执行。
-- 支持端点选择、流式测试、进度查看和取消。
-- 本次测试可独立勾选自动禁用 Key，默认关闭；固定测试每行 Key，已禁用的后续组合标记为跳过。
-- Job 只报告小型进度，结果分页读取、响应原文按需分块加载，避免批量结果超过宿主 JSON 配额；模型汇总区分部分成功。
-- 自动选择优先使用已保存的模型首选协议；未配置时，Claude 优先使用 `/v1/messages`，其他模型优先使用 `/v1/responses`，否则选择渠道第一个已启用端点。仅启用 Chat Completions 时自动使用该接口。手动选择仍受模型支持协议限制。
-- Chat Completions 测试生成原生 `messages` 请求，使用 `max_completion_tokens` 指定输出上限。成功需要有效输出和正常的 `finish_reason`，SSE 还须收到 `[DONE]`；只有结束标记、角色、用量，或 `length`／`content_filter` 中断均不算成功。正式请求中的 Token 上限字段仍按客户端原值透传。
-- Codex Responses 和 Claude Messages 测试复用普通请求的协议补全。
-- 展示模型、Key、测试端点、状态码、耗时、重试次数和错误详情。
+使用保存后的渠道配置，测试单个、勾选或全部模型。Key 可按渠道策略分配、手动指定，或遍历全部启用 Key。每批最多 100 个模型与 Key 组合，串行执行。
 
-连接测试和重试会发送实际模型请求，可能产生费用。
+测试可选择协议、流式模式、输出上限和提示词，支持查看进度与取消。自动选择优先使用模型首选协议；未配置时，Claude 优先 Messages，其他模型优先 Responses，再按渠道允许端点选择。
 
-## 请求日志
+「本次测试允许自动禁用 Key」独立控制测试是否参与自动禁用，默认不勾选。测试结果显示模型、Key、协议、状态码、耗时和失败原因，响应原文按需加载。测试仅覆盖所选渠道。
 
-- 「请求日志」提供筛选、请求元信息、重试记录、Token 明细、一键复制和分段导出。插件收到的请求正文、实际发送正文、上游响应正文和 WebSocket 原始消息不再采集或导出；宿主扩展参数、请求／响应头和错误信息继续保留。
-- 列表默认每页 10 条，可切换为 25、50 或 100 条，并显示当前页和总页数；删除或清理日志后自动回到有效页。
-- 列表显示「本地请求模型」和「上游响应模型」，详情另显示「实际发送模型」。各次重试保留自己的发送与响应模型，摘要使用最后一次尝试。支持 JSON、Responses / Messages / Chat Completions SSE 和 Responses WebSocket，导出包含这些模型字段。
-- 上游响应模型取自响应正文中的有效 `model`；未返回时显示「未返回」，不使用请求模型补填。这是上游声明的名称，不能据此验证其内部实际运行的模型。
-- 思考参数分别显示插件收到的请求、宿主扩展参数、实际发送内容和上游明确报告的少量参数值；未返回的值不作推断，不保存请求全文。
-- 「Token 明细」显示输入 Token、输出 Token、缓存读取和缓存写入，各次重试独立记录，摘要使用最后一次尝试，不累加重试用量。数字使用千分位，合法零值显示 0，未报告或无效值显示「未返回」。Claude 输入总量包含缓存读取与写入，OpenAI 输入总量已含缓存，不重复相加。
-- 缓存写入读取上游明确报告的顶层 `cache_creation_input_tokens`，以及 OpenAI 输入明细中的 `cache_write_tokens`、`cached_creation_tokens` 和 `cache_creation_input_tokens`；总量同义字段取最大值。总量缺失时可使用明确报告的 TTL 分项，零值保留；不从输入差值或价格反推。
-- 响应模型、思考参数和用量仅增量解析，元数据未变化时不重复保存。解析缓冲限制为 1 MiB 字符；超大 JSON 或单个 SSE 事件可能无法提取这些字段，后续完整 SSE 事件继续解析。非流式响应用量可由契约补充输入与输出，缺失缓存计数显示「未返回」；原始网络响应继续完整转发。
-- 保留的请求／响应头和扩展参数可能含密钥、Cookie 等信息，不脱敏；仅通过管理员插件端点访问，导出文件应妥善保管。
-- 日志及日志设置仅保存在本次运行内存，不写入磁盘，重启或重新加载插件后清空。
-- 日志操作队列默认最多 256 项，普通请求入队时不等待容量；队列满时丢弃日志操作并标记不完整。
-- 默认最多保留 1000 条，正文容量 64 MiB，每份正文最多 4 MiB；超限优先清理最旧的已结束日志。活动日志占满容量时丢弃新采集内容并提示，不影响转发。
-- 截断、采集缺失和异常中断均标记为不完整。日志故障不触发模型请求重试。
+## 请求日志与 Token 用量
 
-## 本地构建与验证
+日志记录请求模型、实际上游模型、接口、状态、耗时、思考参数、重试、代理、请求／响应头和错误信息。请求与响应正文不采集；连接测试的响应详情独立保存。
 
-独立构建使用已发布的 NuGet 包 `Router.Contracts 2.0.0`。在插件仓库根目录运行：
+Token 明细包含输入、输出、缓存读取和缓存写入。显式零值显示为 0，缺失或无效值显示「未返回」。各次尝试分别记录，摘要使用最后一次尝试。
 
-```powershell
-dotnet test tests/UniversalForward.Tests/UniversalForward.Tests.csproj -c Release
-./buildall.ps1
-```
+请求日志和日志设置保存在运行内存，重启或重载插件后清空。队列满或元数据超过解析上限时，记录会标记不完整。请求头可能包含访问密钥，仅供管理员查看。
 
-使用官方 Router2API 2.1.2 源码联编和运行宿主集成测试，验证公开接口与实际转发行为，无需修改或发布宿主：
+字段来源与合并规则见 [Token 与缓存用量](https://github.com/yowiv08/UniversalForward/blob/main/docs/cache-usage.md)，资源限制见 [日志与流处理](https://github.com/yowiv08/UniversalForward/blob/main/docs/cpu-performance.md)。
 
-```powershell
-$contractsProject = 'D:\path\Router2API\src\Router.Contracts\Router.Contracts.csproj'
-dotnet test tests/UniversalForward.Tests/UniversalForward.Tests.csproj -c Release "-p:RouterContractsProject=$contractsProject"
-dotnet test tests/UniversalForward.HostIntegration/UniversalForward.HostIntegration.csproj -c Release '-p:RouterHostRoot=D:\path\Router2API' "-p:RouterContractsProject=$contractsProject"
-./buildall.ps1 -RouterContractsProject $contractsProject
-```
+## 管理界面与设置
 
-插件安装包不包含 `Router.Contracts.dll`，运行时由官方宿主提供。本次发布只包含 UniversalForward 插件；代理选择和响应体预算修复使用宿主现有公开接口。
+侧栏切换渠道管理和请求日志。渠道设置按基础设置、Key 管理、模型与协议、思考映射、系统提示词、请求头、重试与映射分组。手机端支持滚动页签与详情抽屉。
+
+页头提供「跟随宿主」「白天」「黑夜」。外观选择与「插件设置」中的默认尝试次数持久化保存，同一实例的管理员共用。
+
+| 数据 | 保存方式 |
+| --- | --- |
+| 渠道、Key 和模型配置 | 账号及渠道设置存储 |
+| 默认尝试次数 | `data/universalforward/execution-settings.json` |
+| 外观选择 | `data/universalforward/appearance-settings.json` |
+| 请求日志与日志设置 | 插件运行内存 |
+| 连接测试结果 | 插件运行内存，完成任务最多保留一小时 |
+
+设置文件位于运行目录。页面操作说明见 [管理界面](https://github.com/yowiv08/UniversalForward/blob/main/docs/web-design.md)。

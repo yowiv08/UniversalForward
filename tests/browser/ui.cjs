@@ -140,8 +140,8 @@ function hostMock() {
     await frame.locator('#rateLimitRetryEnabled').check();
     assert.equal(await frame.locator('#responseRetrySettings').isVisible(), true);
     assert.match(await frame.locator('#responseRetrySettings').innerText(), /开始输出后实时透传/);
-    assert.match(await frame.locator('#responseRetrySettings').innerText(), /不再重放请求/);
-    assert.match(await frame.locator('#responseRetrySettings').innerText(), /保留上游原始状态码/);
+    assert.match(await frame.locator('#responseRetrySettings').innerText(), /错误或断流会结束响应/);
+    assert.match(await frame.locator('#responseRetrySettings').innerText(), /异常重试使用同一 Key/);
     assert.match(await frame.locator('#panel-policy').innerText(), /到期会中断已开始的流/);
     assert.doesNotMatch(await frame.locator('#responseRetrySettings').innerText(), /启用后不实时输出/);
     assert.equal(await frame.locator('#responseMaxRetries').inputValue(), '3');

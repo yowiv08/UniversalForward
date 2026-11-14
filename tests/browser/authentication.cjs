@@ -81,14 +81,17 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(await savedExtra(), { apiKeyHeader: 'Authorization', apiKeyPrefix: 'Bearer ' });
     await open(); assert.equal(await select.inputValue(), 'bearer');
     await page.locator('#cancel').click();
-    // Custom header/prefix and other advanced fields survive a round trip and can be restored in the draft.
+    // Unsupported auth defaults to Bearer in the draft; cancelling preserves saved settings.
     const custom = { apiKeyHeader: 'X-Custom-Token', apiKeyPrefix: 'Token ', vendor: { nested: ['preserve'] } };
     await page.evaluate(extra => { authFixture.account.extraParams = extra; }, custom);
     await page.locator('#reload').click(); await open();
-    assert.equal(await select.inputValue(), 'existing');
-    await select.selectOption('x-api-key'); await select.selectOption('existing');
-    await discover(); assert.deepEqual((await lastDiscovery()).extraParams, custom);
-    await save(); assert.deepEqual(await savedExtra(), custom);
+    assert.equal(await select.inputValue(), 'bearer');
+    assert.deepEqual(await select.locator('option').allTextContents(), ['Authorization: Bearer', 'x-api-key']);
+    await discover(); assert.deepEqual((await lastDiscovery()).extraParams, { ...custom, apiKeyHeader: 'Authorization', apiKeyPrefix: 'Bearer ' });
+    assert.deepEqual(await savedExtra(), custom);
+    await page.locator('#cancel').click(); assert.deepEqual(await savedExtra(), custom);
+    await open(); await save();
+    assert.deepEqual(await savedExtra(), { ...custom, apiKeyHeader: 'Authorization', apiKeyPrefix: 'Bearer ' });
     await open(); await select.selectOption('x-api-key'); await save();
     assert.deepEqual(await savedExtra(), { ...custom, apiKeyHeader: 'x-api-key', apiKeyPrefix: '' });
     await open(); assert.equal(await select.inputValue(), 'x-api-key');
@@ -100,14 +103,16 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     }
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.locator('#cancel').click();
-    // Legacy protocol-based defaults are kept until the user explicitly chooses a channel-wide mode.
+    // Missing auth uses the displayed Bearer default for discovery and saving, including JSON settings.
     await page.evaluate(() => { authFixture.account.extraParams = '{"vendor":{"keep":true}}'; });
     await page.locator('#reload').click(); await open();
-    assert.equal(await select.inputValue(), 'existing');
-    await save(); assert.deepEqual(await savedExtra(), { vendor: { keep: true } });
-    await open(); await select.selectOption('bearer'); await save();
+    assert.equal(await select.inputValue(), 'bearer');
+    assert.deepEqual(await select.locator('option').allTextContents(), ['Authorization: Bearer', 'x-api-key']);
+    await discover();
+    assert.deepEqual((await lastDiscovery()).extraParams, { vendor: { keep: true }, apiKeyHeader: 'Authorization', apiKeyPrefix: 'Bearer ' });
+    await save();
     assert.deepEqual(await savedExtra(), { vendor: { keep: true }, apiKeyHeader: 'Authorization', apiKeyPrefix: 'Bearer ' });
     assert.deepEqual(errors, []);
-    console.log('Authentication UI passed: Bearer default, x-api-key selection, draft discovery, refresh guard, save/reopen, cancellation/failure isolation, legacy/custom preservation, desktop/mobile.');
+    console.log('Authentication UI passed: two auth choices, Bearer fallback, x-api-key selection, draft discovery, refresh guard, save/reopen, cancellation/failure isolation, advanced fields and desktop/mobile.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
