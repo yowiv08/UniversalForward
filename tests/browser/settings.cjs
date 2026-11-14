@@ -119,12 +119,8 @@ const { bridge, hostMock, assertContrast } = require('./settings-fixture.cjs');
     assert.equal(await page.evaluate(() => hostState.mode), 'dark');
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await frame.locator('#appSidebar').evaluate(async node => {
-      // Resizing starts the existing mobile navigation transition; verify its settled state.
-      await Promise.all(node.getAnimations().map(animation => animation.finished));
-    });
-    assert.ok(await frame.locator('#appSidebar').evaluate(node => node.getBoundingClientRect().right <= 1),
-      'The closed mobile sidebar must be completely outside the viewport');
+    assert.equal(await frame.locator('#appSidebar').count(), 0);
+    assert.equal(await frame.locator('#openJournal').isVisible(), true);
     assert.equal(await frame.locator('body').evaluate(node => node.scrollWidth <= innerWidth), true);
     await assertContrast(frame, '.app-main');
     await page.screenshot({ path: path.join(output, 'dark-mobile.png') });

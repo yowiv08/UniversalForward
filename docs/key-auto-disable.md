@@ -2,7 +2,7 @@
 
 ## 自动禁用规则
 
-在渠道「Key 管理」中配置自动禁用开关、HTTP 状态码和连续失败阈值。
+在渠道「Key 管理」中配置自动禁用开关、HTTP 状态码和连续失败阈值。规则只用于正式转发请求。
 
 | 设置 | 默认值 | 范围 |
 | --- | --- | --- |
@@ -26,9 +26,15 @@
 
 ## 连接测试
 
-「本次测试允许自动禁用 Key」独立控制测试行为，默认不勾选。勾选后使用渠道设置的状态码与阈值，与正式请求的自动禁用开关独立。
+连接测试只记录结果，不增加或清零正式请求的连续失败计数，也不自动禁用 Key。模型发现不参与计数。
 
-每个模型与 Key 的测试组合使用独立标识，固定测试该行 Key。命中规则时结束该行，后续组合跳过已禁用 Key。未勾选时，测试不修改失败计数或启用状态。模型发现不参与计数。
+每个模型与 Key 的测试组合固定使用该行 Key，重试遵循渠道配置。测试期间被其他操作禁用或删除的 Key 会跳过。
+
+测试结束后，点击「禁用 Key」查看各 Key 的成功次数、失败次数和 HTTP 状态码。可选择失败 Key、全选、清空选择，或逐个勾选。点击「禁用所选 Key」并确认后，只禁用选中的 Key。
+
+只有已完成且对应当前 Key 的测试结果可用于选择。已更换密钥或重新启用的 Key 需要重新测试；跳过、取消、未执行和不可用的结果不作为禁用依据。保存时校验 Key 配置版本，配置冲突返回 409，需刷新并重新核对。
+
+手动禁用不写入自动禁用原因，可在渠道「Key 管理」中重新启用。
 
 结果区分排队、运行、成功、失败、跳过、取消和未执行；模型汇总可显示部分成功。
 
@@ -38,13 +44,16 @@
 
 | 接口 | 用途 |
 | --- | --- |
-| `POST tests/start` | 启动测试；`autoDisableKeys` 默认为 false，序列化输入上限 64 KiB |
+| `POST tests/start` | 启动测试，序列化输入上限 64 KiB |
 | `GET tests/status?id=…` | 读取任务状态与进度 |
 | `GET tests/results?id=…&offset=0` | 分页读取摘要，每页最多 20 条；返回 `rows`、`total`、`nextOffset`、`resultVersion` |
 | `GET tests/detail?id=…&rowId=0&offset=0` | 按 UTF-8 字节位置读取响应，每次最多 64 KiB；返回 `text`、`nextOffset`、`done`、`truncated`、`evicted` |
 | `POST tests/cancel` | 请求取消测试，已完成记录可继续查看 |
+| `POST accounts/keys/disable` | 提交渠道 `id`、1–100 个 `keyIds` 和当前 `keyRevision`，禁用选中的 Key |
 
 任务进度包含 `completed`、`total`、`runningIndex`、`resultVersion`。摘要和响应详情分别读取。
+
+摘要中的 `keyHealthVersion` 标识实际使用的 Key 版本，渠道卡片的 `keys[].healthVersion` 标识当前版本。两者不同的结果不用于禁用选择。禁用接口返回更新后的 `account`、`disabledKeyIds` 和 `disabledCount`。
 
 ## 保存范围
 

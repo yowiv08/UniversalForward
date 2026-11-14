@@ -20,6 +20,11 @@ public sealed class PageAndDiscoveryTests
         StringAssert.Contains(html, "templateCodex");
         StringAssert.Contains(html, "templateClaude");
         StringAssert.Contains(html, "mappingVisualPane");
+        StringAssert.Contains(html, "function testedKeySummaries()");
+        StringAssert.Contains(html, "accounts/keys/disable");
+        StringAssert.Contains(html, "testDisableConfirm");
+        Assert.IsFalse(html.Contains("testAutoDisableKeys", StringComparison.Ordinal));
+        Assert.IsFalse(html.Contains("/*__", StringComparison.Ordinal));
         Assert.IsFalse(html.Contains("/*__STYLE__*/", StringComparison.Ordinal));
         Assert.IsFalse(html.Contains("/*__APPEARANCE__*/", StringComparison.Ordinal));
         Assert.IsFalse(html.Contains("/*__SCRIPT__*/", StringComparison.Ordinal));

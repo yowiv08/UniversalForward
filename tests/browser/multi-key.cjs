@@ -169,15 +169,15 @@ const html = require('./page-source.cjs')();
         const lastRow = dialog.querySelector('#testRows tr:last-child').getBoundingClientRect();
         const footer = dialog.querySelector('.test-pagination').getBoundingClientRect();
         return {
-          compactWidth: bounds.width <= 960,
-          backdropVisible: bounds.top >= 23 && bounds.bottom <= innerHeight - 23,
+          workspaceWidth: bounds.width <= Math.min(1240, innerWidth - 32),
+          backdropVisible: bounds.top >= 15 && bounds.bottom <= innerHeight - 15,
           resultsVisible: lastRow.bottom <= footer.top,
           footerVisible: footer.bottom <= bounds.bottom,
           noHorizontalOverflow: dialog.scrollWidth <= dialog.clientWidth
         };
       });
       assert.deepEqual(layout, {
-        compactWidth: true, backdropVisible: true, resultsVisible: true,
+        workspaceWidth: true, backdropVisible: true, resultsVisible: true,
         footerVisible: true, noHorizontalOverflow: true
       }, JSON.stringify(viewport));
     }
@@ -203,6 +203,9 @@ const html = require('./page-source.cjs')();
     assert.equal(await page.locator('#testDetailDialog').isVisible(), true);
     const detailBounds = await page.locator('#testDetailDialog').boundingBox();
     await page.mouse.click(detailBounds.x - 8, detailBounds.y + 50);
+    assert.equal(await page.locator('#testDetailDialog').isVisible(), true, 'The inline inspector remains open while using the list');
+    assert.equal(await page.locator('dialog[open]').count(), 1);
+    await page.locator('#testDetailClose').click();
     assert.equal(await page.locator('#testDetailDialog').isVisible(), false);
     assert.equal(await page.locator('#testDialog').isVisible(), true);
     await page.locator('#testKey').selectOption('key:b');

@@ -24,6 +24,7 @@ function demoBridge() {
       models: ['gpt-5.4', 'claude-sonnet-4-6'], endpoints: ['/v1/responses', '/v1/messages'],
       keys: [{ id: 'key-backup', name: 'g7h8', secret: 'sk-demo-backup-g7h8', enabled: false }] }
   ];
+  for (const account of accounts) for (const key of account.keys) key.healthVersion = 0;
   let settings = { enabled: true, maxRecords: 1000, capacityBytes: 67108864, bodyLimitBytes: 4194304 };
   let appearance = { mode: 'host' }, execution = { defaultHostAttempts: 1,
     execution: { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
@@ -45,7 +46,7 @@ function demoBridge() {
       ...(account.id === 'claude' ? { proxy: { id: 'proxy-manual', subscriptionId: 'manual', address: 'socks5://127.0.0.1:1080' } } : {}) };
   });
   const jobs = new Map();
-  const bodyFor = record => JSON.stringify({ id: record.id, model: record.sentModel, output: [{ type: 'message', content: [{ type: 'output_text', text: 'OK. This is a local UI preview.' }] }], usage: { input_tokens: 24, output_tokens: 32 } }, null, 2);
+  const bodyFor = record => JSON.stringify({ 'Content-Type': ['application/json'], 'X-Request-Id': [record.id] }, null, 2);
   window.Router2API = { request: async (method, route, body) => {
     await new Promise(resolve => setTimeout(resolve, 90));
     const [endpoint, queryString] = route.split('?');
@@ -63,8 +64,10 @@ function demoBridge() {
       const previous = accounts.find(account => account.id === body.id), id = body.id || 'demo-' + Date.now();
       const account = { ...previous, ...body, id, keyRevision: (previous?.keyRevision || 0) + 1,
         keys: body.keys.map((key, index) => {
-          const secret = key.secret.trim() || previous?.keys.find(item => item.id === key.id)?.secret || '';
-          return { id: key.id || id + '-key-' + index, name: key.name?.trim() || secret.slice(-4), enabled: key.enabled, secret };
+          const old = previous?.keys.find(item => item.id === key.id);
+          const secret = key.secret.trim() || old?.secret || '';
+          return { id: key.id || id + '-key-' + index, name: key.name?.trim() || secret.slice(-4), enabled: key.enabled, secret,
+            healthVersion: (old?.healthVersion || 0) + (old && (old.secret !== secret || old.enabled !== key.enabled) ? 1 : 0) };
         }) };
       delete account.deletedKeyIds;
       accounts = [...accounts.filter(item => item.id !== id), account]; return { account: structuredClone(account) };
@@ -72,6 +75,14 @@ function demoBridge() {
     if (endpoint === 'accounts/enabled') {
       const account = accounts.find(item => item.id === body.id); account.enabled = body.enabled;
       return { account: structuredClone(account) };
+    }
+    if (endpoint === 'accounts/keys/disable') {
+      const account = accounts.find(item => item.id === body.id);
+      if (!account || body.keyRevision !== account.keyRevision) throw Error('Key 配置已变化，请重新核对');
+      const selected = account.keys.filter(key => key.enabled && body.keyIds.includes(key.id));
+      for (const key of selected) { key.enabled = false; key.healthVersion++; }
+      if (selected.length) account.keyRevision++;
+      return { account: structuredClone(account), disabledKeyIds: selected.map(key => key.id), disabledCount: selected.length };
     }
     if (endpoint === 'accounts/delete') { accounts = accounts.filter(item => item.id !== body.id); return {}; }
     if (endpoint === 'network/proxies') return { subscriptions: [{ id: 'manual', name: '手动节点', enabled: true }, { id: 'subscription-a', name: '工作区订阅', enabled: true }],
@@ -93,7 +104,7 @@ function demoBridge() {
     if (endpoint === 'logs/detail') {
       const record = logs.find(item => item.id === query.get('id'));
       return { ...record, attempts: [{ number: 1, transport: 'http', url: 'https://upstream.example' + record.endpoint, status: record.status, sentModel: record.sentModel, reportedModel: record.reportedModel }],
-        parts: [{ name: 'attempt-1-response', savedBytes: bodyFor(record).length, observedBytes: bodyFor(record).length, truncated: false }] };
+        parts: [{ name: 'attempt-1-response-headers', savedBytes: bodyFor(record).length, observedBytes: bodyFor(record).length, truncated: false }] };
     }
     if (endpoint === 'logs/body') {
       const bytes = new TextEncoder().encode(bodyFor(logs.find(item => item.id === query.get('id'))));
@@ -105,11 +116,12 @@ function demoBridge() {
     if (endpoint === 'tests/start') {
       const account = accounts.find(item => item.id === body.accountId), keys = account.keys.filter(key => key.enabled);
       const endpointFor = model => body.endpoint || (account.modelProtocols?.[model]?.preferredProtocol
-        ? '/v1/' + account.modelProtocols[model].preferredProtocol
+        ? ({ responses: '/v1/responses', messages: '/v1/messages', chat: '/v1/chat/completions' })[account.modelProtocols[model].preferredProtocol]
         : /(?:^|[/.])claude(?:$|[-_.:\[])/i.test(model) && account.endpoints.includes('/v1/messages') ? '/v1/messages'
         : account.endpoints.includes('/v1/responses') ? '/v1/responses' : account.endpoints[0]);
       const targets = body.models.flatMap(model => (body.keyMode === 'all' ? keys : [keys.find(key => key.id === body.keyId) || keys[0]])
-        .map(key => ({ model, keyId: key?.id, keyName: key?.name || '按策略', success: true, originalStatus: 200, mappedStatus: 200,
+        .map(key => ({ model, keyId: key?.id, keyName: key?.name || '按策略', keyHealthVersion: key?.healthVersion,
+          state: 'succeeded', success: true, originalStatus: 200, mappedStatus: 200,
           endpoint: endpointFor(model), durationMs: 120 + Math.round(Math.random() * 400), retries: 0,
           response: endpointFor(model) === '/v1/messages' ? '{"content":[{"type":"text","text":"OK"}]}' : '{"status":"completed","output":[{"type":"message"}]}',
           networkMode: account.networkMode, transport: endpointFor(model) === '/v1/responses' ? account.responsesTransport || 'http' : 'http' })));

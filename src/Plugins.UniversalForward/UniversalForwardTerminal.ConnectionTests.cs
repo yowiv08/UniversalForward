@@ -76,8 +76,7 @@ public sealed partial class UniversalForwardTerminal
         var normalized = new ConnectionTestInput
         {
             AccountId = account.Id, Models = uniqueModels, KeyMode = input.KeyMode, KeyIds = keyIds,
-            Endpoint = endpoint, Stream = input.Stream, Content = input.Content, MaxOutputTokens = input.MaxOutputTokens,
-            AutoDisableKeys = input.AutoDisableKeys
+            Endpoint = endpoint, Stream = input.Stream, Content = input.Content, MaxOutputTokens = input.MaxOutputTokens
         };
         var payload = JsonSerializer.SerializeToElement(normalized, JsonOptions);
         if (Encoding.UTF8.GetByteCount(payload.GetRawText()) > 64 * 1024)
@@ -158,7 +157,7 @@ public sealed partial class UniversalForwardTerminal
                 using var http = await CreateNetworkClientAsync(settings, job.CancellationToken, proxy => selectedProxy = proxy);
                 http.Timeout = Timeout.InfiniteTimeSpan;
                 using var client = new ConnectionTestClient(http, () => sends++, keyId, selectedProxy)
-                { AutoDisableKeys = input.AutoDisableKeys, OperationId = job.Id + ":" + rowIndex };
+                { OperationId = job.Id + ":" + rowIndex };
                 captureClient = client;
                 var body = CreateTestBody(model, endpoint, input.Stream, input.Content, input.MaxOutputTokens);
                 var result = await InvokeAsync(new PluginAttemptContext
@@ -263,7 +262,8 @@ public sealed partial class UniversalForwardTerminal
                 var status = result.Attempt.StatusCode ?? result.Response.StatusCode;
                 AddRow(new
                 {
-                    model, keyId, keyName, endpoint, networkMode, proxy = selectedProxy, transport = client.Transport, success = status is >= 200 and < 300 && valid,
+                    model, keyId, keyName, keyHealthVersion = client.SelectedKey?.HealthVersion,
+                    endpoint, networkMode, proxy = selectedProxy, transport = client.Transport, success = status is >= 200 and < 300 && valid,
                     originalStatus = status, mappedStatus = result.Response.StatusCode,
                     durationMs = watch.ElapsedMilliseconds, firstEventMs, retries = Math.Max(0, sends - 1), error,
                     responseTruncated = client.Truncated
@@ -272,7 +272,9 @@ public sealed partial class UniversalForwardTerminal
             catch (OperationCanceledException) when (job.CancellationToken.IsCancellationRequested) { throw; }
             catch (Exception error)
             {
-                AddRow(new { model, keyId, keyName, endpoint, networkMode, proxy = selectedProxy, transport = captureClient?.Transport, success = false, durationMs = watch.ElapsedMilliseconds,
+                AddRow(new { model, keyId = captureClient?.SelectedKey?.Id ?? keyId,
+                    keyName = captureClient?.SelectedKey?.Name ?? keyName, keyHealthVersion = captureClient?.SelectedKey?.HealthVersion,
+                    endpoint, networkMode, proxy = selectedProxy, transport = captureClient?.Transport, success = false, durationMs = watch.ElapsedMilliseconds,
                     firstEventMs, retries = Math.Max(0, sends - 1),
                     mappedStatus = error is ProxyPoolUnavailableException or ProxyServicesUnavailableException ? 503 : (int?)null,
                     code = error is ProxyServicesUnavailableException ? "proxy_selection_not_supported"
@@ -411,14 +413,12 @@ public sealed partial class UniversalForwardTerminal
         public string KeyMode { get; init; } = "strategy";
         public string? KeyId { get; init; }
         public string?[]? KeyIds { get; init; }
-        public bool AutoDisableKeys { get; init; }
     }
 
     private sealed class ConnectionTestClient(HttpClient client, Action sent, string? keyId, ProxyPoolNode? proxy = null) : IPluginHttpClient, IDisposable
     {
         private readonly MemoryStream _capture = new();
         public byte[] RawBytes => _capture.ToArray();
-        public bool AutoDisableKeys { get; init; }
         public string OperationId { get; init; } = Guid.NewGuid().ToString("N");
         public bool Truncated { get; private set; }
         public string Transport { get; private set; } = "http";

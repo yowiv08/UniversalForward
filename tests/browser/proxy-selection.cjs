@@ -149,7 +149,7 @@ const html = `<html><head><style>html,body{margin:0}iframe{display:block;border:
     await frame.locator('#testProgress').filter({ hasText: '已完成' }).waitFor();
     await frame.locator('#testRows').getByRole('button', { name: '详情', exact: true }).click();
     assert.match(await frame.locator('#testDetailOverview').innerText(), /实际代理.*socks5:\/\/127\.0\.0\.1:1101.*代理 ID.*node-one/s);
-    assert.match(await frame.locator('#testDetails').textContent(), /实际代理：socks5:\/\/127\.0\.0\.1:1101 · node-one/);
+    assert.deepEqual(JSON.parse(await frame.locator('#testDetails').textContent()), { ok: true }, 'Proxy metadata stays in the overview; the raw response is preserved');
     assert.deepEqual(errors, []);
     console.log('Proxy selection UI passed: saved scopes, manual-only, draft discovery, unsaved refresh guard, missing nodes, catalog failures, stale responses, actual proxy details and mobile layout.');
   } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }

@@ -69,7 +69,7 @@ function workspaceMock() {
     assert.equal(await trigger.evaluate(element => element === document.activeElement), true);
     await trigger.click();
     const menuBounds = await frame.getByRole('menu').boundingBox(); assert.ok(menuBounds.x >= 8 && menuBounds.y >= 8 && menuBounds.x + menuBounds.width <= 1440);
-    await frame.locator('#channelsHeading').click(); assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
+    await frame.locator('#channelsTitle').click(); assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
     await trigger.click(); await frame.getByRole('menuitem', { name: '日志', exact: true }).click();
     await frame.locator('#journalEmpty').waitFor();
     assert.equal(await frame.locator('#channelsWorkspace').isVisible(), false);
@@ -88,27 +88,21 @@ function workspaceMock() {
     assert.equal(await frame.locator('#journal').isVisible(), false);
     await frame.locator('#openJournal').click(); await frame.locator('#journalStatus').waitFor({ state: 'hidden' });
     await frame.locator('#journalClose').click();
-    await frame.locator('#navToggle').click();
-    assert.equal(await scriptFrame.evaluate(() => document.body.classList.contains('sidebar-collapsed')), true);
-    assert.equal(await frame.locator('#navToggle').getAttribute('aria-expanded'), 'false');
+    assert.equal(await frame.locator('#appSidebar, #navToggle').count(), 0);
     await page.setViewportSize({ width: 390, height: 844 });
-    assert.equal(await frame.locator('#appSidebar').evaluate(element => element.inert), true);
-    await frame.locator('#navToggle').click();
-    assert.equal(await frame.locator('#appSidebar').evaluate(element => element.inert), false);
-    assert.equal(await frame.locator('.app-main').evaluate(element => element.inert), true);
-    assert.equal(await frame.locator('#sidebarOverlay').isVisible(), true);
-    const mobileSidebar = await frame.locator('#appSidebar').boundingBox(); assert.equal(mobileSidebar.width, 232);
-    await page.screenshot({ path: path.join(output, 'workspace-mobile-navigation.png') });
-    await page.keyboard.press('Shift+Tab');
-    assert.equal(await frame.locator('#showDisabled').evaluate(element => element === document.activeElement), true);
+    for (const id of ['showChannels', 'openJournal', 'openPluginSettings', 'reload', 'add']) {
+      const control = frame.locator('#' + id), bounds = await control.boundingBox();
+      assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390 && bounds.y >= 0, id + ' must remain in the viewport');
+    }
+    assert.equal(await scriptFrame.evaluate(() => document.body.scrollWidth <= innerWidth), true);
+    await frame.locator('#showChannels').focus();
     await page.keyboard.press('Tab');
-    assert.equal(await frame.locator('#showChannels').evaluate(element => element === document.activeElement), true);
-    await page.keyboard.press('Escape'); assert.equal(await frame.locator('.app-main').evaluate(element => element.inert), false);
-    await frame.locator('#navToggle').click(); await frame.locator('#openJournal').click();
-    await frame.locator('#journalEmpty').waitFor(); assert.equal(await frame.locator('#sidebarOverlay').isVisible(), false);
+    assert.equal(await frame.locator('#openJournal').evaluate(element => element === document.activeElement), true);
+    await page.keyboard.press('Enter');
+    await frame.locator('#journalEmpty').waitFor();
     await frame.locator('#journalClose').click();
+    await page.screenshot({ path: path.join(output, 'workspace-mobile-navigation.png') });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await frame.locator('#navToggle').click();
     await scriptFrame.evaluate(() => { window.accounts = []; window.failAccounts = true; });
     await frame.locator('#reload').click(); await frame.locator('#message').filter({ hasText: '读取失败' }).waitFor();
     assert.equal(await frame.locator('.channel-card').count(), 2, 'Refresh failure must retain existing channels');
@@ -119,6 +113,6 @@ function workspaceMock() {
     await frame.locator('#cards').getByRole('button', { name: '添加渠道' }).click(); assert.equal(await frame.locator('#editor').isVisible(), true);
     await frame.locator('#close').click();
     assert.deepEqual(errors, []);
-    console.log('Workspace UI passed: page navigation, status shortcuts, contextual logs, menu keyboard/focus, stale request guard, mobile sidebar/focus trap, refresh failure and empty channels.');
+    console.log('Workspace UI passed: page navigation, status shortcuts, contextual logs, menu keyboard/focus, stale request guard, compact mobile navigation and keyboard focus, refresh failure and empty channels.');
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

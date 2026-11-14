@@ -6,7 +6,7 @@ const http = require('node:http');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const { bridge, hostMock, assertContrast } = require('./settings-fixture.cjs');
 const hostRoot = process.env.ROUTER_HOST_ROOT;
-if (!hostRoot) throw Error('Set ROUTER_HOST_ROOT to the official Router2API 2.1.2 source directory.');
+if (!hostRoot) throw Error('Set ROUTER_HOST_ROOT to the Router2API source directory.');
 const ts = require(path.join(hostRoot, 'web/node_modules/typescript'));
 const hostModule = { exports: {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(hostRoot, 'web/src/services/pluginAppearance.ts'), 'utf8'), {
@@ -105,7 +105,7 @@ function appearanceHost() {
     await frame.locator('.channel-card').first().waitFor(); await settle(); await mode('dark');
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 844 });
-      await frame.locator('#appSidebar').evaluate(async node => { await Promise.all(node.getAnimations().map(animation => animation.finished)); });
+      assert.equal(await frame.locator('#openJournal').isVisible(), true);
       assert.equal(await frame.locator('body').evaluate(node => node.scrollWidth <= innerWidth), true);
       await assertContrast(frame, '.app-main'); await noOverrides();
       await page.screenshot({ path: path.join(output, `host-dark-mobile-${width}.png`) });
@@ -118,6 +118,6 @@ function appearanceHost() {
     await frame.locator('#appearanceStatus').filter({ hasText: '已恢复此前模式' }).waitFor();
     await mode('light');
     assert.deepEqual(errors, []);
-    console.log('Official 2.1.2 sandbox script passed: host mode, custom palette, manual override, drafts, filters, persistence, invalid messages and mobile.');
+    console.log('Host sandbox script passed: host mode, custom palette, manual override, drafts, filters, persistence, invalid messages and mobile.');
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

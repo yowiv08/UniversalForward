@@ -434,7 +434,7 @@ public sealed partial class UniversalForwardTerminal
             apiKeyMasked = MaskSecret(key),
             keySelectionMode = settings.KeySelectionMode, keyRevision = settings.KeyRevision,
             enabledKeyCount = keys.Count(k => k.Enabled), totalKeyCount = keys.Count,
-            keys = keys.Select(k => new { k.Id, k.Name, k.Secret, masked = MaskSecret(k.Secret), k.Enabled,
+            keys = keys.Select(k => new { k.Id, k.Name, k.Secret, masked = MaskSecret(k.Secret), k.Enabled, k.HealthVersion,
                 k.AutoDisabledAt, k.AutoDisabledStatusCode, k.AutoDisabledSource, k.AutoDisabledFailures,
                 health = _keyHealth.Describe(account.Id, k) }).ToArray(),
             keyAutoDisable = settings.KeyAutoDisable,

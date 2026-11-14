@@ -8,38 +8,40 @@
   <style>/*__STYLE__*/</style>
 </head>
 <body>
-  <button id="sidebarOverlay" class="sidebar-overlay" aria-label="收起导航" hidden></button>
-  <aside id="appSidebar" class="app-sidebar" aria-label="插件导航">
-    <div class="brand"><span class="brand-symbol" data-icon="forward" aria-hidden="true"></span><div class="brand-copy"><strong>UniversalForward</strong><span>多协议上游转发</span></div></div>
-    <nav class="primary-navigation" aria-label="主导航">
-      <p class="nav-group-label">功能</p>
-      <button id="showChannels" class="nav-item" type="button" aria-current="page" title="渠道管理"><span data-icon="channels"></span><span class="nav-text">渠道管理</span><span id="navChannelCount" class="nav-count">0</span></button>
-      <button id="openJournal" class="nav-item" type="button" title="请求日志"><span data-icon="journal"></span><span class="nav-text">请求日志</span></button>
-      <p class="nav-group-label filter-group-label">快速筛选</p>
-      <button id="showEnabled" class="nav-item nav-filter" type="button" title="已启用渠道"><span class="status-dot" aria-hidden="true"></span><span class="nav-text">已启用渠道</span><span id="navEnabledCount" class="nav-count">0</span></button>
-      <button id="showDisabled" class="nav-item nav-filter" type="button" title="已禁用渠道"><span class="status-dot off" aria-hidden="true"></span><span class="nav-text">已禁用渠道</span><span id="navDisabledCount" class="nav-count">0</span></button>
-    </nav>
-    <div class="sidebar-bottom"><span class="sidebar-plugin-icon" data-icon="code"></span><div><strong>Router2API</strong><span>UniversalForward 插件</span></div></div>
-  </aside>
   <div class="app-main">
-    <header class="workspace-header"><div class="workspace-breadcrumb"><button id="navToggle" class="icon-button" type="button" aria-label="切换导航" aria-controls="appSidebar" aria-expanded="true"><span data-icon="panel"></span></button><span class="header-divider" aria-hidden="true"></span><span class="breadcrumb-root">工作区</span><span class="breadcrumb-chevron" data-icon="chevron-right" aria-hidden="true"></span><span id="workspaceTitle">渠道管理</span></div><div class="appearance-switch segmented" role="group" aria-label="插件外观"><button type="button" data-appearance-mode="host" aria-pressed="true">跟随宿主</button><button type="button" data-appearance-mode="light" aria-pressed="false"><span aria-hidden="true">☀</span>白天</button><button type="button" data-appearance-mode="dark" aria-pressed="false"><span aria-hidden="true">☾</span>黑夜</button></div></header>
+    <header class="workspace-header">
+      <div class="workspace-navigation">
+        <div class="brand"><span class="brand-symbol" data-icon="forward" aria-hidden="true"></span><strong>UniversalForward</strong></div>
+        <nav class="primary-navigation" aria-label="插件导航">
+          <button id="showChannels" class="nav-item" type="button" aria-current="page"><span data-icon="channels"></span>渠道<span id="navChannelCount" class="nav-count">0</span></button>
+          <button id="openJournal" class="nav-item" type="button"><span data-icon="journal"></span>请求日志</button>
+        </nav>
+      </div>
+      <div class="workspace-actions">
+        <div class="appearance-switch segmented" role="group" aria-label="插件外观"><button type="button" data-appearance-mode="host" aria-pressed="true">跟随宿主</button><button type="button" data-appearance-mode="light" aria-pressed="false">白天</button><button type="button" data-appearance-mode="dark" aria-pressed="false">黑夜</button></div>
+        <button id="openPluginSettings" class="icon-button" type="button" aria-label="插件设置" title="插件设置"><span data-icon="settings"></span></button>
+        <button id="reload" class="icon-button" type="button" aria-label="刷新渠道" title="刷新渠道"><span data-icon="refresh"></span></button>
+        <button id="add" class="primary" type="button"><span data-icon="plus"></span>添加渠道</button>
+      </div>
+    </header>
     <div id="appearanceStatus" class="feedback appearance-status" role="status" hidden></div>
     <main class="workspace">
     <section id="channelsWorkspace" class="page-workspace" aria-labelledby="channelsHeading">
-    <header class="page-heading">
-      <div><h1 id="channelsHeading">渠道管理</h1><p class="page-description">配置上游地址、认证、Key 和模型。</p></div>
-      <div class="actions"><button id="openPluginSettings" class="secondary"><span data-icon="settings"></span>插件设置</button><button id="reload" class="secondary"><span data-icon="refresh"></span>刷新</button><button id="add" class="primary"><span data-icon="plus"></span>添加渠道</button></div>
-    </header>
+    <h1 id="channelsHeading" class="sr-only">渠道管理</h1>
     <section class="metrics" aria-label="渠道概览">
-      <div><div class="metric-label"><span>全部渠道</span><span data-icon="channels"></span></div><strong id="metricChannels">—</strong><div class="metric-description">已添加的上游连接</div></div>
-      <div><div class="metric-label"><span>已启用渠道</span><span data-icon="activity"></span></div><strong id="metricEnabled">—</strong><div class="metric-description"><span class="status-dot" aria-hidden="true"></span>参与请求转发</div></div>
-      <div><div class="metric-label"><span>启用密钥</span><span data-icon="key"></span></div><strong id="metricKeys">—</strong><div class="metric-description">所有渠道的启用 Key</div></div>
-      <div><div class="metric-label"><span>已配置模型</span><span data-icon="models"></span></div><strong id="metricModels">—</strong><div class="metric-description">按模型名称去重统计</div></div>
+      <div><span class="metric-label">全部渠道</span><strong id="metricChannels">—</strong></div>
+      <div><span class="metric-label">已启用</span><strong id="metricEnabled">—</strong></div>
+      <div><span class="metric-label">启用 Key</span><strong id="metricKeys">—</strong></div>
+      <div><span class="metric-label">已配置模型</span><strong id="metricModels">—</strong></div>
     </section>
     <div id="message" class="feedback" role="status" hidden></div>
     <section class="channel-section" aria-labelledby="channelsTitle">
-      <div class="section-toolbar"><div class="between"><div><h2 id="channelsTitle">上游渠道 <span id="channelCount" class="count">0</span></h2><p class="section-description">管理渠道配置、启用状态与连接测试。</p></div><div class="segmented view-switch" role="group" aria-label="渠道显示方式"><button id="viewGrid" type="button" aria-pressed="true"><span data-icon="grid"></span>卡片</button><button id="viewList" type="button" aria-pressed="false"><span data-icon="list"></span>列表</button></div></div>
+      <div class="section-toolbar"><div class="between"><div><h2 id="channelsTitle">上游渠道 <span id="channelCount" class="count">0</span></h2></div><div class="segmented view-switch" role="group" aria-label="渠道显示方式"><button id="viewGrid" type="button" aria-pressed="true"><span data-icon="grid"></span>卡片</button><button id="viewList" type="button" aria-pressed="false"><span data-icon="list"></span>列表</button></div></div>
         <div class="toolbar"><div class="filters"><div class="search-input"><span data-icon="search"></span><input id="filter" type="search" aria-label="搜索渠道" placeholder="搜索渠道、地址或模型…"></div><select id="statusFilter" aria-label="渠道状态"><option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已禁用</option></select></div><span id="channelResult" class="muted" role="status">正在读取渠道…</span></div>
+      </div>
+      <div class="channel-status-shortcuts" role="group" aria-label="快速筛选渠道">
+        <button id="showEnabled" class="nav-filter" type="button" aria-pressed="false"><span class="status-dot" aria-hidden="true"></span>已启用<span id="navEnabledCount" class="nav-count">0</span></button>
+        <button id="showDisabled" class="nav-filter" type="button" aria-pressed="false"><span class="status-dot off" aria-hidden="true"></span>已禁用<span id="navDisabledCount" class="nav-count">0</span></button>
       </div>
       <div id="channelColumns" class="channel-columns" aria-hidden="true" hidden><span>渠道</span><span>模型</span><span>访问密钥</span><span>路由配置</span><span class="column-actions">操作</span></div>
       <section id="cards" class="channel-grid" data-view="grid" aria-label="渠道列表" aria-live="polite" aria-busy="true"><div class="empty">正在读取渠道…</div></section>
@@ -47,6 +49,7 @@
     <p class="workspace-footnote"><span data-icon="info"></span>渠道配置保存后生效，连接测试使用已保存的配置。</p>
     </section>
   <section id="journal" class="journal-workspace page-workspace" aria-labelledby="journalTitle" hidden>
+    <div class="journal-workspace-body">
     <div class="journal-content" role="region" aria-label="请求日志内容" tabindex="0">
     <header class="journal-heading"><div class="journal-title-group"><h1 id="journalTitle">请求日志</h1><span id="journalRecordCount" class="count" title="内存中的日志条数，重启或重载插件后清空">—</span></div><div class="actions"><button id="journalClose" type="button" class="secondary" aria-label="返回渠道" title="返回渠道"><span data-icon="arrow-left"></span><span class="journal-action-label">返回渠道</span></button><button id="journalReload" type="button" class="secondary" aria-label="刷新日志" title="刷新日志"><span data-icon="refresh"></span><span class="journal-action-label">刷新日志</span></button></div></header>
     <div id="journalStatus" class="feedback" role="status" hidden></div>
@@ -71,6 +74,16 @@
       </details>
       <details class="journal-explanation"><summary><span data-icon="info"></span>日志说明</summary><p>日志保存在内存中，重启或重载插件后清空。记录包含请求元数据、Token 用量、请求／响应头、扩展参数和错误，不保存请求／响应正文。</p><p>请求头可能包含访问密钥，仅供管理员查看。思考参数来自请求和上游报告，不表示模型内部的计算强度。</p></details>
     </div>
+      <aside id="journalDetail" class="detail-panel" hidden aria-labelledby="requestDetailTitle">
+        <header class="request-detail-heading"><h3 id="requestDetailTitle">日志详情</h3><button id="journalDetailClose" class="icon-button" aria-label="关闭详情"><span data-icon="x"></span></button></header>
+        <div id="journalOverview"></div>
+        <div class="actions"><button id="journalExport" type="button" class="secondary">导出整条日志</button><button id="journalDelete" type="button" class="secondary danger">删除日志</button></div>
+        <details class="journal-metadata"><summary>请求元数据与重试记录</summary><pre id="journalMetadata" class="journal-pre" tabindex="0"></pre></details>
+        <label for="journalPart">原始内容</label><select id="journalPart"></select>
+        <div class="actions"><button id="journalRaw" type="button" class="secondary">原文</button><button id="journalJson" type="button" class="secondary">JSON</button><button id="journalCopy" type="button" class="secondary">复制原文</button></div>
+        <div id="journalPartStatus" class="muted"></div><pre id="journalBody" class="journal-pre" tabindex="0"></pre>
+      </aside>
+    </div>
     <footer class="actions journal-pagination" aria-label="日志分页"><label for="journalPageSize">每页<select id="journalPageSize"><option value="10">10 条</option><option value="25">25 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label><button id="journalPrevious" type="button" class="secondary" disabled>上一页</button><span id="journalPage" role="status"></span><button id="journalNext" type="button" class="secondary" disabled>下一页</button></footer>
   </section>
     </main>
@@ -87,15 +100,7 @@
       <div class="actions plugin-settings-actions"><button id="executionReload" type="button" class="secondary">重新读取</button><button id="executionSave" type="submit" class="primary">保存尝试次数</button></div>
     </form>
   </dialog>
-      <dialog id="journalDetail" class="request-detail-dialog" aria-labelledby="requestDetailTitle">
-        <header class="request-detail-heading"><h3 id="requestDetailTitle">日志详情</h3><button id="journalDetailClose" class="icon-button" aria-label="关闭详情"><span data-icon="x"></span></button></header>
-        <div id="journalOverview"></div>
-        <div class="actions"><button id="journalExport" type="button" class="secondary">导出整条日志</button><button id="journalDelete" type="button" class="secondary danger">删除日志</button></div>
-        <details class="journal-metadata"><summary>请求元数据与重试记录</summary><pre id="journalMetadata" class="journal-pre" tabindex="0"></pre></details>
-        <label for="journalPart">原始内容</label><select id="journalPart"></select>
-        <div class="actions"><button id="journalRaw" type="button" class="secondary">原文</button><button id="journalJson" type="button" class="secondary">JSON</button><button id="journalCopy" type="button" class="secondary">复制原文</button></div>
-        <div id="journalPartStatus" class="muted"></div><pre id="journalBody" class="journal-pre" tabindex="0"></pre>
-      </dialog>
+
   <dialog id="editor" class="editor-dialog" aria-labelledby="formTitle">
     <form id="accountForm" novalidate>
       <header class="dialog-heading"><div class="dialog-title-group"><span class="dialog-icon" data-icon="settings"></span><div><h2 id="formTitle">添加渠道</h2><p id="formDescription" class="dialog-description">配置渠道连接与转发规则</p></div></div><button type="button" id="close" class="icon-button" aria-label="关闭编辑"><span data-icon="x"></span></button></header>
@@ -294,21 +299,31 @@
   </dialog>
   <dialog id="testDialog" class="test-dialog" aria-labelledby="testTitle">
     <header class="dialog-heading"><div class="dialog-title-group"><span class="dialog-icon" data-icon="test"></span><div><h2 id="testTitle">测试渠道连接</h2><p class="dialog-description">使用本渠道已保存的地址、认证、模型与转发规则。</p></div></div><button id="testClose" type="button" class="icon-button" aria-label="关闭测试"><span data-icon="x"></span></button></header>
+    <div class="test-workspace-body">
     <div class="test-content">
       <details id="testConfiguration" class="test-configuration" open><summary>测试配置<span id="testConfigSummary">自动选择 · 非流式 · 32 Token</span></summary><div class="test-configuration-body">
       <div class="test-setup"><div><label for="testEndpoint">端点类型</label><select id="testEndpoint"></select></div><div><label for="testMaxTokens">输出上限 · Token</label><input id="testMaxTokens" type="number" min="1" max="32768" value="32"></div><div><label for="testStream">流式模式</label><label class="stream-control"><input id="testStream" type="checkbox" role="switch"><span id="testStreamLabel">已禁用</span></label></div></div>
       <p class="test-endpoint-hint muted">自动选择优先使用模型的首选协议；未配置时，Claude 优先使用 Messages，其他模型优先使用 Responses，否则使用渠道第一个已启用的端点。仅启用 Chat Completions 时自动使用该接口。</p>
       <div class="test-prompt"><label for="testContent">测试内容</label><textarea id="testContent" rows="2" maxlength="16000" placeholder="留空使用默认内容：Reply with OK."></textarea><p class="muted">提高输出上限可能增加费用。</p></div>
-      <label class="inline-check"><input id="testAutoDisableKeys" type="checkbox">本次测试允许自动禁用 Key</label><p id="testAutoDisableHint" class="muted"></p>
+      <p class="muted">测试只记录结果，不累计自动禁用计数。测试结束后，可按结果选择要禁用的 Key。</p>
       </div></details>
       <div class="test-model-heading"><h3>渠道模型</h3><input id="testFilter" aria-label="筛选测试模型" placeholder="筛选模型…"></div>
-      <div class="test-toolbar"><div class="actions"><button id="testAll" class="primary">测试全部</button><button id="testSelected" class="secondary">测试勾选</button><button id="testCancel" class="secondary" disabled>取消测试</button><button id="testResume" class="secondary" hidden>重试查询</button></div><div class="test-key-choice"><label for="testKey">测试 Key</label><select id="testKey"></select></div></div>
+      <div class="test-toolbar"><div class="actions"><button id="testAll" class="primary">测试全部</button><button id="testSelected" class="secondary">测试勾选</button><button id="testCancel" class="secondary" disabled>取消测试</button><button id="testResume" class="secondary" hidden>重试查询</button><button id="testDisableKeysOpen" class="secondary" type="button" aria-expanded="false" aria-controls="testDisablePanel" hidden>禁用 Key</button></div><div class="test-key-choice"><label for="testKey">测试 Key</label><select id="testKey"></select></div></div>
+      <section id="testDisablePanel" class="test-disable-panel" aria-labelledby="testDisableTitle" hidden>
+        <div class="between"><h3 id="testDisableTitle">选择要禁用的 Key</h3><button id="testDisableCancel" type="button" class="text-button">收起</button></div>
+        <p class="muted">按测试结果选择，点击确认后禁用。Key 可在渠道设置中重新启用；已更换或重新启用的 Key 需重新测试。</p>
+        <div class="actions"><button id="testDisableSelectFailed" type="button" class="secondary">选择失败 Key</button><button id="testDisableSelectAll" type="button" class="secondary">全选</button><button id="testDisableSelectNone" type="button" class="text-button">清空选择</button></div>
+        <div id="testDisableKeyList" class="disable-key-list"></div>
+        <div class="actions"><button id="testDisableConfirm" type="button" class="primary" disabled>禁用所选 Key</button></div>
+      </section>
       <div id="testProgress" class="feedback" role="status" hidden></div><div id="testError" class="feedback error" role="alert" hidden></div>
       <div class="table-scroll"><table><thead><tr><th><input id="testSelectAll" type="checkbox" aria-label="勾选可见模型"></th><th>模型</th><th>状态</th><th>结果</th><th>操作</th></tr></thead><tbody id="testRows"></tbody></table><div id="testEmpty" class="empty" hidden><span data-icon="search"></span><h3>没有可测试的模型</h3><p>尝试其他关键词，或先在渠道设置中添加模型。</p></div></div>
     </div>
+  <aside id="testDetailDialog" class="detail-panel" hidden aria-labelledby="testDetailTitle"><header class="request-detail-heading"><h3 id="testDetailTitle">连接详情</h3><button id="testDetailClose" class="icon-button" aria-label="关闭连接详情"><span data-icon="x"></span></button></header><div id="testDetailOverview"></div><h4>响应原文</h4><pre id="testDetails" class="journal-pre"></pre><button id="testDetailMore" class="secondary" hidden>加载更多原文</button></aside>
+    </div>
     <footer class="test-pagination"><span id="testTotal"></span><label for="testPageSize">每页行数</label><select id="testPageSize"><option>10</option><option selected>30</option><option>50</option><option>100</option></select><button id="testFirst" aria-label="测试模型首页">«</button><button id="testPrevious" aria-label="测试模型上一页">‹</button><span id="testPageNumber"></span><button id="testNext" aria-label="测试模型下一页">›</button><button id="testLast" aria-label="测试模型末页">»</button></footer>
   </dialog>
-  <dialog id="testDetailDialog" class="request-detail-dialog" aria-labelledby="testDetailTitle"><header class="request-detail-heading"><h3 id="testDetailTitle">连接详情</h3><button id="testDetailClose" class="icon-button" aria-label="关闭连接详情"><span data-icon="x"></span></button></header><div id="testDetailOverview"></div><h4>响应原文</h4><pre id="testDetails" class="journal-pre"></pre><button id="testDetailMore" class="secondary" hidden>加载更多原文</button></dialog>
+
   <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmTitle"><h3 id="confirmTitle">确认操作</h3><p id="confirmText"></p><div class="actions"><button id="confirmNo" class="secondary">取消</button><button id="confirmYes" class="primary">确认</button></div></dialog>
   <script>/*__SCRIPT__*/</script>
 </body>

@@ -192,9 +192,11 @@ public sealed class KeyAutoDisableTests
     }
 
     [TestMethod]
-    [DataRow(true, false, true)]
-    [DataRow(false, true, false)]
-    public async Task TestCheckboxIsIndependentAndStopsPinnedKeyRetries(bool formalEnabled, bool testEnabled, bool staysEnabled)
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    [DataRow(false, false)]
+    [DataRow(false, true)]
+    public async Task ConnectionTestsNeverDisableKeysEvenWithLegacyFlag(bool formalEnabled, bool testEnabled)
     {
         var account = Account(threshold: 1, retries: 3, enabled: formalEnabled);
         var host = ChannelKeysTests.Host(account); var sends = 0;
@@ -203,11 +205,37 @@ public sealed class KeyAutoDisableTests
         using var terminal = new UniversalForwardTerminal(host);
         var result = await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
             JsonSerializer.SerializeToElement(new { accountId = account.Id, models = RepeatedModels, keyIds = AlphaKey, autoDisableKeys = testEnabled }), _ => { }, CancellationToken.None));
-        Assert.AreEqual(staysEnabled, ReadKeys(account)[0].Enabled);
-        Assert.AreEqual(testEnabled ? 1 : 8, sends);
+        Assert.IsTrue(ReadKeys(account)[0].Enabled);
+        Assert.AreEqual(8, sends);
+        Assert.AreEqual(7L, ChannelKeysTests.Settings(account)["keyRevision"]!.GetValue<long>());
+        Mock.Get(host.Services.Accounts).Verify(x => x.CompareExchangeCredentialAsync(
+            It.IsAny<string>(), It.IsAny<long>(), It.IsAny<Credential>(), It.IsAny<CancellationToken>()), Times.Never);
         Assert.IsFalse(result!.Value.TryGetProperty("rows", out _));
         var rows = ConnectionTestAssertions.Rows(terminal);
-        if (testEnabled) Assert.AreEqual("skipped", rows[1].GetProperty("state").GetString());
+        Assert.IsTrue(rows.EnumerateArray().All(row => row.GetProperty("state").GetString() == "failed"));
+        Assert.IsTrue(rows.EnumerateArray().All(row => row.GetProperty("keyHealthVersion").GetInt64() == 0));
+    }
+
+    [TestMethod]
+    [DataRow(200)]
+    [DataRow(403)]
+    public async Task ConnectionTestResultsNeitherResetNorIncreaseFormalFailureCount(int testStatus)
+    {
+        var account = Account(threshold: 2, retries: 0);
+        Edit(account, s => s["keySelectionMode"] = "priority");
+        var host = ChannelKeysTests.Host(account);
+        using var handler = new Handler(_ => Response(testStatus));
+        Mock.Get(host.Services.Http).Setup(x => x.CreateDirectClient(It.IsAny<PluginHttpClientOptions>()))
+            .Returns(() => new HttpClient(handler, false));
+        using var terminal = new UniversalForwardTerminal(host);
+        await terminal.InvokeAsync(Attempt(account, Client(_ => Task.FromResult(Response(403))), "before-test"));
+        await Registration(terminal).ExecuteAsync(new PluginJobContext("job", "universalforward", "universalforward",
+            JsonSerializer.SerializeToElement(new { accountId = account.Id, models = RepeatedModels, keyIds = AlphaKey }), _ => { }, CancellationToken.None));
+        Assert.IsTrue(ReadKeys(account)[0].Enabled);
+        await terminal.InvokeAsync(Attempt(account, Client(_ => Task.FromResult(Response(403))), "after-test"));
+        Assert.IsFalse(ReadKeys(account)[0].Enabled);
+        Assert.AreEqual(2, ReadKeys(account)[0].AutoDisabledFailures);
+        Assert.AreEqual("forward", ReadKeys(account)[0].AutoDisabledSource);
     }
 
     [TestMethod]

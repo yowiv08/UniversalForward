@@ -81,7 +81,7 @@ public sealed partial class UniversalForwardTerminal
         { return LocalFailure(error.Message); }
 
         var connectionTest = context.HttpClient as ConnectionTestClient;
-        var keyRuleEnabled = connectionTest?.AutoDisableKeys ?? settings.KeyAutoDisable.Enabled;
+        var keyRuleEnabled = connectionTest is null && settings.KeyAutoDisable.Enabled;
         var keyRules = settings.KeyAutoDisable.Rules();
         var requestIdentity = connectionTest?.OperationId ?? (string.IsNullOrWhiteSpace(context.TraceId) ? Guid.NewGuid().ToString("N") : context.TraceId);
         var failedKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -258,7 +258,7 @@ public sealed partial class UniversalForwardTerminal
                 var keyRuleMatched = keyRuleEnabled && keyRules.Contains(originalCode);
                 if (keyRuleEnabled)
                     await ObserveKeyStatusAsync(context.Account.Id, selectedKey, settings.KeyAutoDisable,
-                        requestIdentity, originalCode, keyRuleMatched, isTest, total.Token);
+                        requestIdentity, originalCode, keyRuleMatched, total.Token);
                 if (keyRuleMatched)
                 {
                     failedKeys.Add(selectedKey.Id);

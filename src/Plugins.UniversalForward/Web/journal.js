@@ -1,5 +1,5 @@
   let journalEpoch = 0, journalPage = 1, journalPageSize = 10, journalPages = 1, journalLoading = false;
-  let journalDetail = null, journalRawBody = '', journalPartEpoch = 0;
+  let journalDetail = null, journalRawBody = '', journalPartEpoch = 0, journalDetailTrigger = null;
   const journalStates = { running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '中断' };
   const journalKinds = { forward: '转发', 'connection-test': '连接测试', 'models-discover': '获取模型', 'models-refresh': '刷新模型' };
   const journalRetainedPart = name => name !== 'incoming' && name !== 'received'
@@ -43,9 +43,17 @@
     $('journalTitle').textContent = channel ? '请求日志 · ' + (accounts.find(account => account.id === channel)?.label || channel) : '请求日志';
     $('journalTitle').title = $('journalTitle').textContent;
   }
+  function hideJournalDetail() {
+    const restoreFocus = $('journalDetail').contains(document.activeElement);
+    journalPartEpoch++; journalRawBody = ''; journalDetail = null;
+    $('journalDetail').hidden = true;
+    $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; $('journalOverview').replaceChildren();
+    for (const item of $('journalRows').children) item.classList.remove('is-selected');
+    if (restoreFocus && journalDetailTrigger?.isConnected) journalDetailTrigger.focus({ preventScroll: true });
+    journalDetailTrigger = null;
+  }
   function closeJournal() {
-    journalEpoch++; journalPartEpoch++; journalDetail = null; journalRawBody = '';
-    $('journalDetail').close(); $('journalBody').textContent = ''; $('journalMetadata').textContent = '';
+    journalEpoch++; hideJournalDetail();
     setWorkspacePage('channels');
   }
   function updateJournalPagination() {
@@ -61,8 +69,7 @@
     $('journalExpand').setAttribute('aria-expanded', String(!!channel));
     $('journalExpand').textContent = channel ? '收起筛选' : '更多筛选';
     $('journalEmpty').hidden = true;
-    journalPage = 1; journalPages = 1; journalDetail = null; journalRawBody = ''; journalPartEpoch++;
-    $('journalDetail').close(); $('journalBody').textContent = ''; $('journalMetadata').textContent = '';
+    journalPage = 1; journalPages = 1; hideJournalDetail();
     setWorkspacePage('journal');
     await loadJournal();
   }
@@ -149,6 +156,7 @@
     }
   }
   async function showJournalDetail(id) {
+    journalDetailTrigger = document.activeElement;
     const epoch = ++journalPartEpoch;
     journalDetail = null; journalRawBody = ''; $('journalBody').textContent = '';
     try {
@@ -157,7 +165,8 @@
       const detail = { ...received, parts: journalParts(received) };
       journalDetail = detail;
       renderJournalOverview(detail);
-      if (!$('journalDetail').open) $('journalDetail').showModal();
+      $('journalDetail').hidden = false;
+      $('journalDetailClose').focus({ preventScroll: true });
       $('journalMetadata').textContent = JSON.stringify(detail, null, 2);
       $('journalDelete').disabled = detail.state === 'running';
       $('journalPart').replaceChildren(...(detail.parts || []).map(part => option(part.name, journalPartLabel(part.name))));
@@ -243,11 +252,18 @@
     } catch (error) { if (current()) { $('journalBody').textContent = ''; journalError(error); } }
   }
   $('openJournal').onclick = () => openJournal();
-  $('journalDetailClose').onclick = () => $('journalDetail').close();
-  $('journalDetail').addEventListener('close', () => {
-    journalPartEpoch++; journalRawBody = ''; journalDetail = null;
-    $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; $('journalOverview').replaceChildren();
+  $('journalDetailClose').onclick = hideJournalDetail;
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && journalActive() && !$('journalDetail').hidden && !document.querySelector('dialog[open]')) {
+      event.preventDefault();
+      hideJournalDetail();
+    }
   });
+  $('journalExpand').onclick = () => {
+    const panel = $('journalAdvanced'); panel.hidden = !panel.hidden;
+    $('journalExpand').setAttribute('aria-expanded', String(!panel.hidden));
+    $('journalExpand').textContent = panel.hidden ? '更多筛选' : '收起筛选';
+  };
   $('journalClose').onclick = closeJournal;
   $('journalReload').onclick = () => loadJournal();
   $('journalFilters').onsubmit = event => { event.preventDefault(); loadJournal(1); };
@@ -271,13 +287,13 @@
   };
   $('journalClear').onclick = async () => {
     if (!await ask('清空所有已结束的请求日志？', '清空请求日志')) return;
-    try { await api('POST', 'logs/clear', {}); $('journalDetail').close(); journalPartEpoch++; journalDetail = null; journalRawBody = ''; $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; await loadJournal(1); }
+    try { await api('POST', 'logs/clear', {}); hideJournalDetail(); await loadJournal(1); }
     catch (error) { journalError(error); }
   };
   $('journalDelete').onclick = async () => {
     const detail = journalDetail;
     if (!detail || !await ask('删除这条请求日志及其详细记录？', '删除请求日志')) return;
-    try { await api('POST', 'logs/delete', { id: detail.id }); $('journalDetail').close(); journalPartEpoch++; journalDetail = null; journalRawBody = ''; $('journalBody').textContent = ''; $('journalMetadata').textContent = ''; await loadJournal(); }
+    try { await api('POST', 'logs/delete', { id: detail.id }); hideJournalDetail(); await loadJournal(); }
     catch (error) { journalError(error); }
   };
   $('journalSettings').onsubmit = async event => {
