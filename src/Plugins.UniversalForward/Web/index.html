@@ -105,7 +105,7 @@
     <form id="accountForm" novalidate>
       <header class="dialog-heading"><div class="dialog-title-group"><span class="dialog-icon" data-icon="settings"></span><div><h2 id="formTitle">添加渠道</h2><p id="formDescription" class="dialog-description">配置渠道连接与转发规则</p></div></div><button type="button" id="close" class="icon-button" aria-label="关闭编辑"><span data-icon="x"></span></button></header>
       <input name="id" type="hidden">
-      <div class="editor-layout">
+      <fieldset id="editorFields" class="editor-layout" aria-label="渠道配置">
         <nav class="editor-nav" role="tablist" aria-label="渠道设置">
           <span class="editor-nav-label">渠道设置</span>
           <button type="button" id="tab-basic" role="tab" data-tab="basic" aria-controls="panel-basic" aria-selected="true"><span data-icon="settings"></span><span>基础设置<small>名称、连接与状态</small></span></button>
@@ -298,7 +298,7 @@
             <p id="mappingSuccessHint" class="mapping-success-hint" hidden>将失败状态映射为 2xx 后，外层按成功响应处理，可能阻止继续尝试、目标切换或失败冷却。</p>
           </section>
         </div>
-      </div>
+      </fieldset>
       <footer class="editor-footer"><div id="formError" class="feedback error" role="alert" hidden></div><div class="between"><span id="editorSummary" class="muted">未保存</span><div class="actions"><button id="cancel" type="button" class="secondary">取消</button><button id="save" class="primary" type="submit">保存渠道</button></div></div></footer>
     </form>
   </dialog>

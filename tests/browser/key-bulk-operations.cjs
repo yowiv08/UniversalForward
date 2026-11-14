@@ -11,17 +11,26 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => {
       window.calls = [];
+      window.pendingAccountReads = [];
       window.bulkAccount = { id: 'bulk', label: '批量 Key 管理', baseUrl: 'https://example.test/v1', enabled: true,
         models: ['model'], endpoints: ['/v1/responses'], keyRevision: 1,
         keys: Array.from({ length: 100 }, (_, i) => ({ id: 'key-' + i, name: 'Channel ' + i,
           secret: 'test-only-secret-' + i, enabled: i < 2 })) };
-      window.Router2API = { request: async (method, route, body) => {
+      window.Router2API = { request: async (method, route, input) => {
+        const body = input ? structuredClone(input) : input;
         calls.push({ method, route, body });
         if (route === 'appearance/settings') return { mode: 'light' };
         if (route === 'execution/settings') return { defaultHostAttempts: 1, execution: { setupTimeoutSeconds: 300, totalSetupTimeoutSeconds: 180, responseTimeoutSeconds: 600 } };
         if (route === 'network/proxies') return { subscriptions: [], nodes: [] };
-        if (route === 'accounts') return { accounts: [structuredClone(bulkAccount)] };
+        if (route === 'accounts') {
+          const result = { accounts: [structuredClone(bulkAccount)] };
+          if (window.holdAccounts) await new Promise(resolve => pendingAccountReads.push(resolve));
+          if (window.failAccounts) throw Error('模拟列表刷新失败');
+          return result;
+        }
         if (route === 'accounts/save') {
+          if (window.holdSave) await new Promise(resolve => { window.releaseSave = resolve; });
+          window.releaseSave = null;
           if (window.failSave) throw Error('模拟保存失败');
           if (body.keyRevision !== bulkAccount.keyRevision) throw Error('Key 配置已变化');
           const keys = body.keys.map((key, i) => ({ ...key, id: key.id || 'added-' + i,
@@ -89,12 +98,44 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.locator('#keyDeleteSelected').click(); await page.locator('#confirmNo').click();
     assert.equal(await page.locator('#keyRows .key-row').count(), 100);
     assert.equal(await page.evaluate(() => calls.filter(call => call.route === 'accounts/save').length), 0);
-    await page.evaluate(() => { window.failSave = true; });
+    await page.evaluate(() => { window.failSave = true; window.holdSave = true; });
     await page.locator('#save').click();
+    await page.waitForFunction(() => typeof window.releaseSave === 'function');
+    for (const selector of ['#keyRows .key-selection input', '#keyRows .key-enabled input',
+      '#keyRows .key-name-cell input', '#keyRows .key-secret-cell input', '#keyRows .actions button',
+      '#keySelectAll', '#keyEnableSelected', '#keyDisableSelected', '#keyDeleteSelected', '#keyBatch', '#keyAdd',
+      '#keySelectionMode', '#baseUrl', '#models', '#cancel', '#close', '#save']) {
+      assert.equal(await page.locator(selector).evaluateAll(nodes => nodes.length > 0 && nodes.every(node => node.matches(':disabled'))), true,
+        selector + ' must stay disabled until the save completes');
+    }
+    const saveCount = await page.evaluate(() => calls.filter(call => call.route === 'accounts/save').length);
+    await page.locator('#save').evaluate(button => button.form.requestSubmit());
+    assert.equal(await page.evaluate(() => calls.filter(call => call.route === 'accounts/save').length), saveCount);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#editor').isVisible(), true);
+    await page.evaluate(() => { window.holdSave = false; window.releaseSave(); });
     await page.locator('#formError').filter({ hasText: '模拟保存失败' }).waitFor();
     assert.equal((await selection()).filter(Boolean).length, 100);
     assert.equal(await page.locator('#keyDeleteSelected').isEnabled(), true);
-    await page.evaluate(() => { window.failSave = false; }); await save();
+    assert.equal(await page.getByRole('textbox', { name: 'Key 1 名称', exact: true }).isEnabled(), true);
+    assert.equal(await page.locator('#keyRows .key-row').first().getByRole('button', { name: '上移', exact: true }).isDisabled(), true);
+    assert.equal(await page.locator('#keyRows .key-row').last().getByRole('button', { name: '下移', exact: true }).isDisabled(), true);
+    await page.evaluate(() => { window.failSave = false; window.holdAccounts = true; });
+    await page.locator('#save').click();
+    await page.waitForFunction(() => pendingAccountReads.length === 1);
+    assert.equal(await page.locator('#editor').isVisible(), true, 'Wait for the saved channel to refresh before reopening the editor');
+    assert.equal(await page.locator('#keyRows .key-enabled input').first().isDisabled(), true);
+    // A background task may request another refresh while the save is waiting for its list response.
+    await page.locator('#reload').evaluate(button => { button.onclick(); });
+    await page.waitForFunction(() => pendingAccountReads.length === 2);
+    await page.evaluate(async () => {
+      pendingAccountReads.shift()();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    assert.equal(await page.locator('#editor').isVisible(), true, 'Keep the editor locked until the latest refresh completes');
+    await page.evaluate(() => { window.holdAccounts = false; pendingAccountReads.shift()(); });
+    await page.locator('#editor').waitFor({ state: 'hidden' });
+    await page.getByText('渠道已保存', { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => bulkAccount.keys.every(key => key.enabled)), true);
     assert.equal(await page.evaluate(() => bulkAccount.keys[1].name), 'Renamed third key');
     assert.equal(await page.evaluate(() => calls.filter(call => call.route === 'accounts/save').at(-1).body.keys.every(key => key.secret === '' && !('selected' in key))), true);
@@ -120,7 +161,34 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.evaluate(() => bulkAccount.keys.length), 100);
     assert.equal(await page.evaluate(() => bulkAccount.keys.some(key => key.enabled)), false);
     assert.deepEqual(await page.evaluate(() => bulkAccount.keys.slice(-2).map(key => key.secret)), ['new-key-one', 'new-key-two']);
+
+    // A refresh started before the save must neither suppress the new refresh nor restore stale Keys.
+    await page.evaluate(() => { window.holdAccounts = true; });
+    await page.locator('#reload').click();
+    await page.waitForFunction(() => pendingAccountReads.length === 1);
+    await edit(); await selectAll.check(); await page.locator('#keyEnableSelected').click();
+    await page.locator('#save').click();
+    await page.waitForFunction(() => pendingAccountReads.length === 2);
+    await page.evaluate(() => pendingAccountReads.pop()());
+    await page.locator('#editor').waitFor({ state: 'hidden' });
+    await edit(); assert.equal((await enabled()).every(Boolean), true);
+    await page.evaluate(async () => {
+      window.holdAccounts = false; pendingAccountReads.shift()();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    await page.locator('#cancel').click(); await edit();
+    assert.equal((await enabled()).every(Boolean), true, 'An older list response must not overwrite the saved Key state');
+    await save();
+
+    // A failed list refresh must keep the saved response's Key state and revision available for the next edit.
+    await edit(); await selectAll.check(); await page.locator('#keyDisableSelected').click();
+    await page.evaluate(() => { window.failAccounts = true; });
+    await save();
+    await page.getByText('渠道已保存，列表刷新失败，请刷新重试', { exact: true }).waitFor();
+    await edit(); assert.equal((await enabled()).some(Boolean), false);
+    await page.evaluate(() => { window.failAccounts = false; });
+    await save();
     assert.deepEqual(errors, []);
-    console.log('Bulk Key operations passed: 100 Keys, partial selection, independent enable state, reorder, cancellation, save failure, persisted enable/disable/delete, new Keys and 320/390px layout.');
+    console.log('Bulk Key operations passed: 100 Keys, partial selection, independent enable state, reorder, cancellation, locked saves, save/refresh failure recovery, out-of-order refreshes, persisted enable/disable/delete, new Keys and 320/390px layout.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -20,7 +20,7 @@
   let accounts = [], candidates = [], keyDraft = [], deletedKeyIds = [], keyRevision = 0, keySequence = 0;
   const selectedKeyIds = new Set();
   let modelProtocolDraft = {}, extraParams = {}, savedAccount = null, editorEpoch = 0;
-  let loading = false, saving = false;
+  let accountLoadRequest = 0, accountLoad, saving = false;
   const switchingChannels = new Set();
   let workspacePage = 'channels';
   function setWorkspacePage(page) {
@@ -308,14 +308,23 @@
     } catch (e) { message(e.message, true); }
     finally { switchingChannels.delete(account.id); render(); }
   }
-  async function load() {
-    if (loading) return;
-    loading = true; $('reload').disabled = true; $('cards').setAttribute('aria-busy', 'true'); $('channelResult').textContent = '正在读取渠道…';
-    try { const data = await api('GET', 'accounts'); accounts = data.accounts || []; render(); }
-    catch (e) { message(e.message, true); $('channelResult').textContent = '读取失败，请刷新重试';
-      if (!accounts.length) { const empty = el('div', undefined, 'empty'); empty.append(el('h3', '渠道加载失败'), el('p', '请检查连接后重新加载。'), button('重新加载', load)); $('cards').replaceChildren(empty); }
-    }
-    finally { loading = false; $('reload').disabled = false; $('cards').setAttribute('aria-busy', 'false'); }
+  function load() {
+    const request = ++accountLoadRequest;
+    $('reload').disabled = true; $('cards').setAttribute('aria-busy', 'true'); $('channelResult').textContent = '正在读取渠道…';
+    return accountLoad = (async () => {
+      try {
+        const data = await api('GET', 'accounts');
+        if (request !== accountLoadRequest) return accountLoad;
+        accounts = data.accounts || []; render(); return true;
+      }
+      catch (e) {
+        if (request !== accountLoadRequest) return accountLoad;
+        message(e.message, true); $('channelResult').textContent = '读取失败，请刷新重试';
+        if (!accounts.length) { const empty = el('div', undefined, 'empty'); empty.append(el('h3', '渠道加载失败'), el('p', '请检查连接后重新加载。'), button('重新加载', load)); $('cards').replaceChildren(empty); }
+        return false;
+      }
+      finally { if (request === accountLoadRequest) { $('reload').disabled = false; $('cards').setAttribute('aria-busy', 'false'); } }
+    })();
   }
   function duplicateChannelName(label) {
     const base = label?.trim() || '渠道', limit = form.elements.label.maxLength;
@@ -369,6 +378,7 @@
   }
   $('authenticationMode').onchange = applyAuthenticationMode;
   function open(account, { duplicate = false } = {}) {
+    if (saving) return;
     const sourceLabel = account?.label || '';
     if (duplicate) {
       account = structuredClone(account);
@@ -376,7 +386,7 @@
       for (const key of account.keys || []) key.id = '';
       for (const name of ['state', 'availableModels', 'modelsUpdatedAt']) delete account[name];
     }
-    editorEpoch++; savedAccount = duplicate ? null : account; form.reset(); saving = false;
+    editorEpoch++; savedAccount = duplicate ? null : account; form.reset();
     for (const details of form.querySelectorAll('details')) details.open = false;
     $('discover').disabled = false;
     $('discoveryDetails').hidden = true;
@@ -453,6 +463,14 @@
   function keyHint() {
     $('keyModeHint').textContent = { roundRobin: '按启用 Key 的顺序依次分配', random: '随机选择一个启用 Key', priority: '使用排序最前的启用 Key' }[$('keySelectionMode').value];
   }
+  function setEditorSaving(value) {
+    saving = value;
+    $('editorFields').disabled = value;
+    form.setAttribute('aria-busy', String(value));
+    for (const id of ['save', 'cancel', 'close']) $(id).disabled = value;
+    $('save').textContent = value ? '保存中…' : '保存渠道';
+    syncKeySelection();
+  }
   function syncKeySelection() {
     const selected = keyDraft.filter(key => selectedKeyIds.has(key.uiId));
     $('keySelectAll').checked = !!keyDraft.length && selected.length === keyDraft.length;
@@ -476,14 +494,18 @@
   }
   $('keyEnableSelected').onclick = () => setSelectedKeysEnabled(true);
   $('keyDisableSelected').onclick = () => setSelectedKeysEnabled(false);
-  $('keyDeleteSelected').onclick = async () => {
+  async function removeKeys(keys, text, title) {
     if (saving) return;
-    const targets = new Set(keyDraft.filter(key => selectedKeyIds.has(key.uiId))), epoch = editorEpoch;
-    if (!targets.size || !await ask(`删除所选的 ${targets.size} 个 Key？保存渠道后生效。`, '批量删除 Key')) return;
+    const targets = new Set(keys), epoch = editorEpoch;
+    if (!targets.size || !await ask(text, title)) return;
     if (epoch !== editorEpoch || !dialog.open || saving) return;
-    for (const key of targets) if (key.id) deletedKeyIds.push(key.id);
+    for (const key of keyDraft) if (targets.has(key) && key.id) deletedKeyIds.push(key.id);
     keyDraft = keyDraft.filter(key => !targets.has(key));
     renderKeys();
+  }
+  $('keyDeleteSelected').onclick = () => {
+    const keys = keyDraft.filter(key => selectedKeyIds.has(key.uiId));
+    return removeKeys(keys, `删除所选的 ${keys.length} 个 Key？保存渠道后生效。`, '批量删除 Key');
   };
   function renderKeys() {
     const currentIds = new Set(keyDraft.map(key => key.uiId));
@@ -512,11 +534,7 @@
         b.append(icon(delta < 0 ? 'chevron-up' : 'chevron-down')); b.setAttribute('aria-label', title); b.title = title;
         b.disabled = index + delta < 0 || index + delta >= keyDraft.length; actions.append(b);
       }
-      const remove = button('', async () => {
-        if (!await ask(`删除「${key.name || '未命名 Key'}」？`, '删除 Key')) return;
-        if (key.id) deletedKeyIds.push(key.id);
-        keyDraft = keyDraft.filter(k => k !== key); renderKeys();
-      }, 'icon-button danger');
+      const remove = button('', () => removeKeys([key], `删除「${key.name || '未命名 Key'}」？保存渠道后生效。`, '删除 Key'), 'icon-button danger');
       remove.append(icon('trash')); remove.setAttribute('aria-label', '删除 Key'); remove.title = '删除 Key'; actions.append(remove);
       const nameCell = el('div', undefined, 'key-name-cell'), secretCell = el('div', undefined, 'key-secret-cell'), name = el('input'), secret = el('input');
       name.value = key.name; name.placeholder = defaultKeyName(effectiveKeySecret(key)) || '默认取密钥末尾 4 位'; name.setAttribute('aria-label', `Key ${index + 1} 名称`);
@@ -720,8 +738,7 @@
       for (const name of Object.keys(defaults)) requestPolicy[name] = name === 'retryStatusCodes' ? form.elements[name].value : Number(form.elements[name].value);
       let network;
       try { network = readNetwork(); } catch (e) { fail(e.message, 'basic', 'proxyScope'); }
-      saving = true; $('save').disabled = true; $('save').textContent = '保存中…'; syncKeySelection();
-      const saved = await api('POST', 'accounts/save', {
+      const payload = {
         id: form.elements.id.value || null, label: form.elements.label.value.trim(), baseUrl: form.elements.baseUrl.value.trim(),
         ...network,
         responsesTransport: form.elements.responsesTransport.value,
@@ -729,10 +746,19 @@
         keys, deletedKeyIds, keyRevision, keySelectionMode: $('keySelectionMode').value, keyAutoDisable, weight: Number(form.elements.weight.value),
         enabled: form.elements.enabled.checked, endpoints, models, modelProtocols, reasoningPolicy, systemPromptPolicy, requestPolicy, headerOverride,
         headerOverrideMode: headerPolicyMode, endpointHeaderOverrides: endpointHeaderDraft, extraParams
-      });
-      editorEpoch++; dialog.close(); await load(); message(saved.warning || '渠道已保存', !!saved.warning);
+      };
+      setEditorSaving(true);
+      const saved = await api('POST', 'accounts/save', payload);
+      if (saved.account?.id) {
+        const index = accounts.findIndex(account => account.id === saved.account.id);
+        if (index < 0) accounts.push(saved.account); else accounts[index] = saved.account;
+        render();
+      }
+      const refreshed = await load();
+      editorEpoch++; dialog.close();
+      message(saved.warning || (refreshed ? '渠道已保存' : '渠道已保存，列表刷新失败，请刷新重试'), !!saved.warning || !refreshed);
     } catch (e) { feedback('formError', e.message, true); }
-    finally { saving = false; $('save').disabled = false; $('save').textContent = '保存渠道'; syncKeySelection(); }
+    finally { setEditorSaving(false); }
   });
   /*__CONNECTION_TESTS__*/
   /*__SETTINGS__*/
