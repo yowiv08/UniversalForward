@@ -18,6 +18,7 @@
     responseMaxRetries: 3, responseRetryIntervalSeconds: 5,
     retryStatusCodes: '100-199,300-399,401-407,409-499,500-503,505-523,525-599' };
   let accounts = [], candidates = [], keyDraft = [], deletedKeyIds = [], keyRevision = 0, keySequence = 0;
+  const selectedKeyIds = new Set();
   let modelProtocolDraft = {}, extraParams = {}, savedAccount = null, editorEpoch = 0;
   let loading = false, saving = false;
   const switchingChannels = new Set();
@@ -403,7 +404,7 @@
       return { ...k, secret, originalSecret: secret, autoName,
         name: autoName && secret ? defaultKeyName(secret) : k.name || '', uiId: 'draft:' + ++keySequence };
     });
-    deletedKeyIds = []; keyRevision = account?.keyRevision ?? 0;
+    deletedKeyIds = []; keyRevision = account?.keyRevision ?? 0; selectedKeyIds.clear();
     modelProtocolDraft = Object.assign(Object.create(null), structuredClone(account?.modelProtocols || {}));
     loadReasoningPolicy(account?.reasoningPolicy);
     loadSystemPrompt(account?.systemPromptPolicy);
@@ -452,16 +453,59 @@
   function keyHint() {
     $('keyModeHint').textContent = { roundRobin: '按启用 Key 的顺序依次分配', random: '随机选择一个启用 Key', priority: '使用排序最前的启用 Key' }[$('keySelectionMode').value];
   }
+  function syncKeySelection() {
+    const selected = keyDraft.filter(key => selectedKeyIds.has(key.uiId));
+    $('keySelectAll').checked = !!keyDraft.length && selected.length === keyDraft.length;
+    $('keySelectAll').indeterminate = selected.length > 0 && selected.length < keyDraft.length;
+    $('keySelectAll').disabled = saving || !keyDraft.length;
+    $('keySelectionSummary').textContent = `已选 ${selected.length} / ${keyDraft.length} 个`;
+    $('keyEnableSelected').disabled = saving || !selected.some(key => !key.enabled);
+    $('keyDisableSelected').disabled = saving || !selected.some(key => key.enabled);
+    $('keyDeleteSelected').disabled = saving || !selected.length;
+    for (const input of $('keyRows').querySelectorAll('.key-selection input')) input.disabled = saving;
+  }
+  $('keySelectAll').onchange = () => {
+    selectedKeyIds.clear();
+    if ($('keySelectAll').checked) for (const key of keyDraft) selectedKeyIds.add(key.uiId);
+    renderKeys();
+  };
+  function setSelectedKeysEnabled(enabled) {
+    if (saving) return;
+    for (const key of keyDraft) if (selectedKeyIds.has(key.uiId)) key.enabled = enabled;
+    renderKeys();
+  }
+  $('keyEnableSelected').onclick = () => setSelectedKeysEnabled(true);
+  $('keyDisableSelected').onclick = () => setSelectedKeysEnabled(false);
+  $('keyDeleteSelected').onclick = async () => {
+    if (saving) return;
+    const targets = new Set(keyDraft.filter(key => selectedKeyIds.has(key.uiId))), epoch = editorEpoch;
+    if (!targets.size || !await ask(`删除所选的 ${targets.size} 个 Key？保存渠道后生效。`, '批量删除 Key')) return;
+    if (epoch !== editorEpoch || !dialog.open || saving) return;
+    for (const key of targets) if (key.id) deletedKeyIds.push(key.id);
+    keyDraft = keyDraft.filter(key => !targets.has(key));
+    renderKeys();
+  };
   function renderKeys() {
+    const currentIds = new Set(keyDraft.map(key => key.uiId));
+    for (const id of selectedKeyIds) if (!currentIds.has(id)) selectedKeyIds.delete(id);
     const root = $('keyRows'); root.replaceChildren(); $('keyCount').textContent = keyDraft.length;
     if (!keyDraft.length) root.append(el('div', '在下方添加上游 Key', 'empty'));
     else {
       const columns = el('div', undefined, 'key-table-head'); columns.setAttribute('aria-hidden', 'true');
-      for (const label of ['密钥名称', '访问密钥', '启用', '操作']) columns.append(el('span', label));
+      for (const label of ['选择', '密钥名称', '访问密钥', '启用', '操作']) columns.append(el('span', label));
       root.append(columns);
     }
     keyDraft.forEach((key, index) => {
       const row = el('div', undefined, 'key-row card');
+      row.classList.toggle('is-selected', selectedKeyIds.has(key.uiId));
+      const selection = el('input'), selectionCell = el('div', undefined, 'key-selection');
+      selection.type = 'checkbox'; selection.checked = selectedKeyIds.has(key.uiId);
+      selection.setAttribute('aria-label', `选择 Key ${index + 1}`);
+      selection.onchange = () => {
+        if (selection.checked) selectedKeyIds.add(key.uiId); else selectedKeyIds.delete(key.uiId);
+        row.classList.toggle('is-selected', selection.checked); syncKeySelection();
+      };
+      selectionCell.append(selection);
       const actions = el('div', undefined, 'actions');
       for (const [title, delta] of [['上移', -1], ['下移', 1]]) {
         const b = button('', () => { [keyDraft[index], keyDraft[index + delta]] = [keyDraft[index + delta], keyDraft[index]]; renderKeys(); }, 'icon-button');
@@ -490,11 +534,11 @@
       else if (key.health?.consecutiveFailures) secretCell.append(el('small', `连续失败 ${key.health.consecutiveFailures} 次`));
       if (key.health?.saveError) secretCell.append(el('small', key.health.saveError, 'feedback error'));
       const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = key.enabled;
-      enabled.onchange = () => { key.enabled = enabled.checked; fillKeyOptions($('discoveryKey'), keyDraft, false); summary(); };
+      enabled.onchange = () => { key.enabled = enabled.checked; fillKeyOptions($('discoveryKey'), keyDraft, false); syncKeySelection(); summary(); };
       const label = el('label', undefined, 'inline-check key-enabled');
-      label.append(enabled, el('span', '启用 Key', 'key-enabled-label sr-only')); row.append(nameCell, secretCell, label, actions); root.append(row);
+      label.append(enabled, el('span', '启用 Key', 'key-enabled-label sr-only')); row.append(selectionCell, nameCell, secretCell, label, actions); root.append(row);
     });
-    fillKeyOptions($('discoveryKey'), keyDraft, false); keyHint(); summary();
+    fillKeyOptions($('discoveryKey'), keyDraft, false); keyHint(); syncKeySelection(); summary();
   }
   $('keySelectionMode').onchange = keyHint;
   $('keyAdd').onclick = () => {
@@ -676,7 +720,7 @@
       for (const name of Object.keys(defaults)) requestPolicy[name] = name === 'retryStatusCodes' ? form.elements[name].value : Number(form.elements[name].value);
       let network;
       try { network = readNetwork(); } catch (e) { fail(e.message, 'basic', 'proxyScope'); }
-      saving = true; $('save').disabled = true; $('save').textContent = '保存中…';
+      saving = true; $('save').disabled = true; $('save').textContent = '保存中…'; syncKeySelection();
       const saved = await api('POST', 'accounts/save', {
         id: form.elements.id.value || null, label: form.elements.label.value.trim(), baseUrl: form.elements.baseUrl.value.trim(),
         ...network,
@@ -688,7 +732,7 @@
       });
       editorEpoch++; dialog.close(); await load(); message(saved.warning || '渠道已保存', !!saved.warning);
     } catch (e) { feedback('formError', e.message, true); }
-    finally { saving = false; $('save').disabled = false; $('save').textContent = '保存渠道'; }
+    finally { saving = false; $('save').disabled = false; $('save').textContent = '保存渠道'; syncKeySelection(); }
   });
   /*__CONNECTION_TESTS__*/
   /*__SETTINGS__*/

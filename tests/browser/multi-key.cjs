@@ -113,7 +113,7 @@ const html = require('./page-source.cjs')();
     await page.locator('#keyBatch').fill('');
     await page.locator('#keyRows .card').nth(1).getByRole('button', { name: '上移' }).click();
     await page.getByRole('textbox', { name: 'Key 1 名称', exact: true }).fill('Beta renamed');
-    await page.locator('#keyRows .card').nth(1).getByRole('checkbox').uncheck();
+    await page.locator('#keyRows .card').nth(1).locator('.key-enabled input').uncheck();
     await page.locator('#keyRows .card').nth(2).getByRole('button', { name: '删除 Key' }).click();
     await page.locator('#confirmYes').click();
     await page.locator('#keySelectionMode').selectOption('priority');

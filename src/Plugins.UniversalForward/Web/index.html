@@ -152,6 +152,11 @@
               <div class="field"><label for="keyAutoDisableThreshold">连续失败请求数</label><input id="keyAutoDisableThreshold" type="number" min="1" max="100" value="3"></div>
               <p class="muted">同一请求对每个 Key 最多记一次；非匹配 HTTP 响应清零。达到阈值后需手动启用并保存。计数重启清零，禁用状态保留。切换使用普通重试额度，额度为 0 时不额外发送。</p>
             </fieldset>
+            <div class="key-bulk-toolbar" role="group" aria-label="Key 批量操作">
+              <label class="inline-check"><input id="keySelectAll" type="checkbox">全选 Key</label>
+              <span id="keySelectionSummary" class="muted" role="status">已选 0 个</span>
+              <div class="actions"><button id="keyEnableSelected" type="button" class="secondary" disabled>批量启用</button><button id="keyDisableSelected" type="button" class="secondary" disabled>批量禁用</button><button id="keyDeleteSelected" type="button" class="secondary danger" disabled>批量删除</button></div>
+            </div>
             <div id="keyRows" class="key-list"></div>
             <div class="batch-box"><label for="keyBatch">批量添加</label><textarea id="keyBatch" rows="3" placeholder="每行一个 Key" autocomplete="off" spellcheck="false"></textarea><div class="between"><small>名称默认取末尾 4 位 · 最多 100 个</small><button id="keyAdd" type="button" class="secondary">添加到列表</button></div></div>
           </section>
