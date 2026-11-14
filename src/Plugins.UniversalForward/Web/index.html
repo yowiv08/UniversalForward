@@ -43,10 +43,16 @@
         <button id="showEnabled" class="nav-filter" type="button" aria-pressed="false"><span class="status-dot" aria-hidden="true"></span>已启用<span id="navEnabledCount" class="nav-count">0</span></button>
         <button id="showDisabled" class="nav-filter" type="button" aria-pressed="false"><span class="status-dot off" aria-hidden="true"></span>已禁用<span id="navDisabledCount" class="nav-count">0</span></button>
       </div>
+      <div class="channel-bulk-toolbar" role="group" aria-label="渠道批量操作">
+        <label class="inline-check"><input id="channelSelectAll" type="checkbox">全选当前结果</label>
+        <span id="channelSelectionSummary" class="muted" role="status">已选 0 个</span>
+        <div class="actions"><button id="channelClearSelection" type="button" class="text-button" disabled>取消选择</button><button id="channelEnableSelected" type="button" class="secondary" disabled>批量启用</button><button id="channelDisableSelected" type="button" class="secondary" disabled>批量禁用</button><button id="channelDeleteSelected" type="button" class="secondary danger" disabled>批量删除</button></div>
+      </div>
+      <div id="channelBulkStatus" class="feedback channel-bulk-status" role="status" hidden></div>
       <div id="channelColumns" class="channel-columns" aria-hidden="true" hidden><span>渠道</span><span>模型</span><span>访问密钥</span><span>路由配置</span><span class="column-actions">操作</span></div>
       <section id="cards" class="channel-grid" data-view="grid" aria-label="渠道列表" aria-live="polite" aria-busy="true"><div class="empty">正在读取渠道…</div></section>
     </section>
-    <p class="workspace-footnote"><span data-icon="info"></span>渠道配置保存后生效，连接测试使用已保存的配置。</p>
+    <p class="workspace-footnote"><span data-icon="info"></span>编辑配置保存后生效，渠道启停与删除直接生效。连接测试使用已保存的配置。</p>
     </section>
   <section id="journal" class="journal-workspace page-workspace" aria-labelledby="journalTitle" hidden>
     <div class="journal-workspace-body">

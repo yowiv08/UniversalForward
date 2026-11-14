@@ -20,8 +20,10 @@
   let accounts = [], candidates = [], keyDraft = [], deletedKeyIds = [], keyRevision = 0, keySequence = 0;
   const selectedKeyIds = new Set();
   let modelProtocolDraft = {}, extraParams = {}, savedAccount = null, editorEpoch = 0;
-  let accountLoadRequest = 0, accountLoad, saving = false;
+  let accountLoadRequest = 0, accountLoad, accountLoading = false, saving = false;
   const switchingChannels = new Set();
+  const selectedChannelIds = new Set();
+  let channelBulkState = null;
   let workspacePage = 'channels';
   function setWorkspacePage(page) {
     closeChannelMenu();
@@ -215,6 +217,85 @@
   function summary() {
     $('editorSummary').textContent = `${keyDraft.filter(k => k.enabled).length} 个启用 Key · ${modelIds().length} 个模型`;
   }
+  function visibleAccounts() {
+    const q = $('filter').value.toLowerCase(), status = $('statusFilter').value;
+    return accounts.filter(a => [a.label, a.baseUrl, ...(a.models || [])].join(' ').toLowerCase().includes(q)
+      && (status === 'all' || !!a.enabled === (status === 'enabled')));
+  }
+  function syncChannelSelection(visible = visibleAccounts()) {
+    const ids = new Set(visible.map(account => account.id));
+    for (const id of selectedChannelIds) if (!ids.has(id)) selectedChannelIds.delete(id);
+    const selected = visible.filter(account => selectedChannelIds.has(account.id));
+    const busy = !!channelBulkState, blocked = busy || switchingChannels.size > 0;
+    $('channelSelectAll').checked = !!visible.length && selected.length === visible.length;
+    $('channelSelectAll').indeterminate = selected.length > 0 && selected.length < visible.length;
+    $('channelSelectAll').disabled = blocked || !visible.length;
+    $('channelSelectionSummary').textContent = busy
+      ? `正在${channelBulkState.label} ${channelBulkState.completed} / ${channelBulkState.total} 个`
+      : `已选 ${selected.length} / 当前 ${visible.length} 个`;
+    $('channelClearSelection').disabled = blocked || !selected.length;
+    $('channelEnableSelected').disabled = blocked || !selected.some(account => !account.enabled);
+    $('channelDisableSelected').disabled = blocked || !selected.some(account => account.enabled);
+    $('channelDeleteSelected').disabled = blocked || !selected.length;
+    for (const id of ['filter', 'statusFilter', 'showEnabled', 'showDisabled', 'showChannels', 'add']) $(id).disabled = busy;
+    $('reload').disabled = busy || accountLoading;
+    for (const input of $('cards').querySelectorAll('.channel-selection input')) {
+      input.checked = selectedChannelIds.has(input.value); input.disabled = blocked;
+      input.closest('.channel-card').classList.toggle('is-selected', input.checked);
+    }
+  }
+  $('channelSelectAll').onchange = () => {
+    if (channelBulkState || switchingChannels.size) return;
+    selectedChannelIds.clear();
+    if ($('channelSelectAll').checked) for (const account of visibleAccounts()) selectedChannelIds.add(account.id);
+    syncChannelSelection();
+  };
+  $('channelClearSelection').onclick = () => {
+    if (channelBulkState || switchingChannels.size) return;
+    selectedChannelIds.clear(); syncChannelSelection();
+  };
+  async function runChannelBulkAction(action) {
+    if (channelBulkState || switchingChannels.size) return;
+    const selected = visibleAccounts().filter(account => selectedChannelIds.has(account.id));
+    const enabled = action === 'enable', label = { enable: '启用', disable: '禁用', delete: '删除' }[action];
+    const targets = selected.filter(account => action === 'delete' || !!account.enabled !== enabled);
+    if (!targets.length) return;
+    channelBulkState = { label, total: targets.length, completed: 0 }; render();
+    try {
+      if (action === 'delete' && !await ask(`删除所选的 ${targets.length} 个渠道及其全部配置？\n\n${targets.map(account => account.label || account.id).join('、')}`, '批量删除渠道')) return;
+      feedback('channelBulkStatus');
+      const updated = new Map(), removed = new Set(), failures = [];
+      for (const account of targets) {
+        try {
+          if (action === 'delete') {
+            await api('POST', 'accounts/delete', { id: account.id }); removed.add(account.id);
+          } else {
+            const data = await api('POST', 'accounts/enabled', { id: account.id, enabled });
+            if (data.account?.id !== account.id) throw Error('渠道响应无效，请刷新后核对');
+            updated.set(account.id, data.account);
+          }
+        } catch (error) { failures.push({ id: account.id, label: account.label || account.id, error: error.message || String(error) }); }
+        channelBulkState.completed++;
+        $('channelSelectionSummary').textContent = `正在${label} ${channelBulkState.completed} / ${targets.length} 个`;
+      }
+      const merged = new Map(accounts.map(account => [account.id, account]));
+      for (const [id, account] of updated) merged.set(id, account);
+      for (const id of removed) merged.delete(id);
+      accounts = [...merged.values()];
+      selectedChannelIds.clear();
+      for (const failure of failures) selectedChannelIds.add(failure.id);
+      render();
+      const refreshed = await load();
+      const succeeded = targets.length - failures.length, skipped = selected.length - targets.length;
+      const result = `批量${label}完成：成功 ${succeeded} 个${failures.length ? `，失败 ${failures.length} 个` : ''}${skipped ? `，另 ${skipped} 个已${label}` : ''}。`;
+      feedback('channelBulkStatus', result + (failures.length ? '\n' + failures.map(failure => `${failure.label}：${failure.error}`).join('\n') : '')
+        + (refreshed ? '' : '\n渠道列表刷新失败，请刷新后核对。'), failures.length > 0 || !refreshed);
+    } catch (error) { feedback('channelBulkStatus', error.message || String(error), true); }
+    finally { channelBulkState = null; render(); }
+  }
+  $('channelEnableSelected').onclick = () => runChannelBulkAction('enable');
+  $('channelDisableSelected').onclick = () => runChannelBulkAction('disable');
+  $('channelDeleteSelected').onclick = () => runChannelBulkAction('delete');
   function render() {
     closeChannelMenu();
     $('metricChannels').textContent = accounts.length;
@@ -227,8 +308,7 @@
     const q = $('filter').value.toLowerCase(), status = $('statusFilter').value;
     $('showEnabled').setAttribute('aria-pressed', String(status === 'enabled'));
     $('showDisabled').setAttribute('aria-pressed', String(status === 'disabled'));
-    const visible = accounts.filter(a => [a.label, a.baseUrl, ...(a.models || [])].join(' ').toLowerCase().includes(q)
-      && (status === 'all' || !!a.enabled === (status === 'enabled')));
+    const visible = visibleAccounts();
     $('channelCount').textContent = visible.length;
     $('channelResult').textContent = q || status !== 'all' ? `显示 ${visible.length} / ${accounts.length} 个渠道` : `共 ${accounts.length} 个渠道`;
     const root = $('cards'); root.replaceChildren();
@@ -236,21 +316,32 @@
       const empty = el('div', undefined, 'empty');
       empty.append(icon(accounts.length ? 'search' : 'channels'), el('h3', accounts.length ? '没有匹配的渠道' : '添加你的第一个渠道'),
         el('p', accounts.length ? '尝试其他关键词，或重置筛选条件。' : '填写上游地址和密钥，然后选择需要转发的模型。'));
-      empty.append(accounts.length ? button('重置筛选', () => { $('filter').value = ''; $('statusFilter').value = 'all'; render(); })
-        : button('添加渠道', () => open(null), 'primary'));
-      root.append(empty); return;
+      const action = accounts.length ? button('重置筛选', () => { $('filter').value = ''; $('statusFilter').value = 'all'; render(); })
+        : button('添加渠道', () => open(null), 'primary');
+      action.disabled = !!channelBulkState; empty.append(action);
+      root.append(empty); syncChannelSelection(visible); return;
     }
     for (const a of visible) {
       const card = el('article', undefined, 'channel-card'), top = el('div', undefined, 'channel-top');
+      const blocked = !!channelBulkState || switchingChannels.has(a.id);
       card.dataset.enabled = String(!!a.enabled);
-      card.setAttribute('aria-busy', String(switchingChannels.has(a.id)));
+      card.setAttribute('aria-busy', String(blocked));
       const identity = el('div', undefined, 'channel-identity');
       const title = el('div', undefined, 'channel-title');
       const name = button(a.label, () => open(a), 'channel-name-button');
       name.setAttribute('aria-label', `编辑渠道「${a.label}」`);
       const heading = el('h3'); heading.append(name); title.append(heading);
       const monogram = el('span', [...(a.label?.trim() || 'U')][0].toUpperCase(), 'channel-monogram'); monogram.setAttribute('aria-hidden', 'true');
-      top.append(monogram, title);
+      const selection = el('label', undefined, 'channel-selection'), checkbox = el('input');
+      checkbox.type = 'checkbox'; checkbox.value = a.id; checkbox.checked = selectedChannelIds.has(a.id);
+      checkbox.setAttribute('aria-label', `选择渠道「${a.label || a.id}」`);
+      checkbox.onchange = () => {
+        if (channelBulkState || switchingChannels.size) return;
+        if (checkbox.checked) selectedChannelIds.add(a.id); else selectedChannelIds.delete(a.id);
+        syncChannelSelection();
+      };
+      selection.title = '选择渠道'; selection.append(checkbox);
+      top.append(monogram, title, selection);
       const address = el('p', a.baseUrl, 'channel-url');
       address.title = a.baseUrl;
       const keys = el('div', undefined, 'channel-keys'), keyCount = el('div', undefined, 'key-count');
@@ -284,21 +375,26 @@
       const copy = button('复制', () => { closeChannelMenu(true); open(a, { duplicate: true }); }, 'menu-item'); copy.prepend(icon('copy'));
       const remove = button('删除', async () => {
           closeChannelMenu();
+          if (channelBulkState || switchingChannels.has(a.id)) return;
           if (!await ask(`删除渠道「${a.label}」及其配置？`, '删除渠道')) return;
-          try { await api('POST', 'accounts/delete', { id: a.id }); await load(); message('渠道已删除'); }
+          if (channelBulkState || switchingChannels.has(a.id)) return;
+          switchingChannels.add(a.id); render();
+          try { await api('POST', 'accounts/delete', { id: a.id }); accounts = accounts.filter(account => account.id !== a.id); await load(); message('渠道已删除'); }
           catch (e) { message(e.message, true); }
+          finally { switchingChannels.delete(a.id); render(); }
         }, 'menu-item danger'); remove.prepend(icon('trash'));
       for (const item of [log, copy, remove]) item.setAttribute('role', 'menuitem');
       menu.append(log, copy, el('div', undefined, 'menu-separator'), remove);
       actions.append(edit, test, toggle, trigger, menu);
-      if (switchingChannels.has(a.id)) for (const control of [...actions.querySelectorAll('button'), modelCount]) control.disabled = true;
+      if (blocked) for (const control of [...actions.querySelectorAll('button'), modelCount, name]) control.disabled = true;
       const statusLine = el('div', undefined, 'channel-status-line'); statusLine.append(el('span', a.enabled ? '已启用' : '已禁用', 'badge' + (a.enabled ? '' : ' off')), endpoints);
       title.append(address); identity.append(top, statusLine);
       card.append(identity, models, keys, meta, actions); root.append(card);
     }
+    syncChannelSelection(visible);
   }
   async function setChannelEnabled(account) {
-    if (switchingChannels.has(account.id)) return;
+    if (channelBulkState || switchingChannels.has(account.id)) return;
     const enabled = !account.enabled;
     switchingChannels.add(account.id); render();
     try {
@@ -310,6 +406,7 @@
   }
   function load() {
     const request = ++accountLoadRequest;
+    accountLoading = true;
     $('reload').disabled = true; $('cards').setAttribute('aria-busy', 'true'); $('channelResult').textContent = '正在读取渠道…';
     return accountLoad = (async () => {
       try {
@@ -323,7 +420,7 @@
         if (!accounts.length) { const empty = el('div', undefined, 'empty'); empty.append(el('h3', '渠道加载失败'), el('p', '请检查连接后重新加载。'), button('重新加载', load)); $('cards').replaceChildren(empty); }
         return false;
       }
-      finally { if (request === accountLoadRequest) { $('reload').disabled = false; $('cards').setAttribute('aria-busy', 'false'); } }
+      finally { if (request === accountLoadRequest) { accountLoading = false; $('cards').setAttribute('aria-busy', 'false'); syncChannelSelection(); } }
     })();
   }
   function duplicateChannelName(label) {
@@ -378,7 +475,7 @@
   }
   $('authenticationMode').onchange = applyAuthenticationMode;
   function open(account, { duplicate = false } = {}) {
-    if (saving) return;
+    if (saving || channelBulkState || switchingChannels.has(account?.id)) return;
     const sourceLabel = account?.label || '';
     if (duplicate) {
       account = structuredClone(account);
