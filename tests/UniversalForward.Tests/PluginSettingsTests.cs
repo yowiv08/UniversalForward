@@ -79,7 +79,7 @@ public sealed class PluginSettingsTests
     public async Task InvalidAttemptsNeverWrite(string json)
     {
         using var terminal = Terminal();
-        Assert.AreEqual(400, (await terminal.SaveExecutionSettingsAsync(new() { Body = JsonDocument.Parse(json).RootElement })).StatusCode);
+        Assert.AreEqual(400, (await terminal.SaveExecutionSettingsAsync(new() { Body = JsonElement.Parse(json) })).StatusCode);
         Assert.IsFalse(Directory.Exists(_directory));
     }
 

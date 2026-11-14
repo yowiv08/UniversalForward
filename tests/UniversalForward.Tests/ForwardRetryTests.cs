@@ -31,7 +31,7 @@ public sealed class ForwardRetryTests
         var result = await terminal.InvokeAsync(Context(client.Object, new() { MaxRetries = retries }));
         Assert.AreEqual(sends, bodies.Count);
         Assert.AreEqual(1, bodies.Distinct().Count());
-        Assert.AreEqual("vendor/model", JsonDocument.Parse(bodies[0]).RootElement.GetProperty("model").GetString());
+        Assert.AreEqual("vendor/model", JsonElement.Parse(bodies[0]).GetProperty("model").GetString());
         Assert.AreEqual(429, result.Response.StatusCode);
         Assert.AreEqual(PluginRetryAction.NextAttempt, result.Attempt.Decision!.Retry);
         Assert.AreEqual(PluginAccountAction.None, result.Attempt.Decision.AccountAction);
