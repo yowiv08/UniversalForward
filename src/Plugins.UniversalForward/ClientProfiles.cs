@@ -224,9 +224,8 @@ internal static class ClientProfiles
         return body;
     }
 
-    internal static void EnsureClaudeSystemIdentity(JsonObject body)
+    private static void EnsureClaudeSystemIdentity(JsonObject body)
     {
-        const string identityText = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
         var system = body["system"] switch
         {
             null => new JsonArray(),
@@ -235,10 +234,16 @@ internal static class ClientProfiles
                 new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
             _ => throw new FormatException("Claude system 必须为字符串或数组")
         };
+        EnsureClaudeSystemIdentity(system);
+        body["system"] = system;
+    }
+
+    internal static void EnsureClaudeSystemIdentity(JsonArray system)
+    {
+        const string identityText = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
         if (!system.OfType<JsonObject>().Any(x => x["text"] is JsonValue text && text.TryGetValue<string>(out var value)
             && (value.StartsWith(identityText, StringComparison.Ordinal) || value.StartsWith("You are Claude Code,", StringComparison.Ordinal))))
             system.Insert(0, new JsonObject { ["type"] = "text", ["text"] = identityText });
-        body["system"] = system;
     }
 
     internal static JsonObject TestBody(string profile, string model, Dictionary<string, string> headers)

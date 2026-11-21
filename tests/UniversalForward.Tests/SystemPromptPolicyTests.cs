@@ -37,6 +37,7 @@ public sealed class SystemPromptPolicyTests
     [TestMethod]
     [DataRow("/v1/responses")]
     [DataRow("/v1/messages")]
+    [DataRow("/v1/chat/completions")]
     public void DefaultAndOffRulesKeepEveryFieldUntouched(string endpoint)
     {
         var body = Object("""{"instructions":{"not":"a string"},"system":42,"input":[{"role":"system","content":"keep"}],"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","name":"tool"}]}""");
@@ -49,22 +50,111 @@ public sealed class SystemPromptPolicyTests
     }
 
     [TestMethod]
+    [DataRow("/v1/responses", """{"instructions":"客户端\r\n\r\n渠道规则\r\n其他指令"}""")]
+    [DataRow("/v1/responses", """{"instructions":"","input":[{"role":"user","content":"hello"},{"type":"message","role":"system","content":[{"type":"input_text","text":"渠道规则"}]}]}""")]
+    [DataRow("/v1/responses", """{"input":[{"role":"developer","content":"渠道规则"}]}""")]
+    [DataRow("/v1/messages", """{"system":"渠道规则"}""")]
+    [DataRow("/v1/messages", """{"system":[{"type":"text","text":"渠道规则","cache_control":{"type":"ephemeral","ttl":"1h"}},{"type":"text","text":"其他指令"}]}""")]
+    [DataRow("/v1/chat/completions", """{"messages":[{"role":"user","content":"hello"},{"role":"developer","content":[{"type":"text","text":"渠道规则","cache_control":{"type":"ephemeral"}}]}]}""")]
+    public void AppendKeepsAnExistingInstructionInPlace(string endpoint, string json)
+    {
+        var body = Object(json);
+        var before = body.ToJsonString();
+        Assert.IsNull(Policy(text: "渠道规则").Apply(body, endpoint));
+        Assert.AreEqual(before, body.ToJsonString());
+    }
+
+    [TestMethod]
+    [DataRow("渠道规则\r\n", "前文\r\n渠道规则\r\n后文")]
+    [DataRow("\n渠道规则", "前文\n渠道规则\n后文")]
+    public void PromptOwnLineBreaksCanSeparateItFromAdjacentInstructions(string text, string instructions)
+    {
+        var body = new JsonObject { ["instructions"] = instructions };
+        Assert.IsNull(Policy(text: text).Apply(body, "/v1/responses"));
+        Assert.AreEqual(instructions, body["instructions"]!.GetValue<string>());
+    }
+
+    [TestMethod]
+    [DataRow("/v1/responses", """{"instructions":"不要回答中文","input":[{"role":"user","content":"回答中文"},{"type":"reasoning","role":"developer","content":"回答中文"},{"type":"function_call_output","role":"system","output":"回答中文"},{"role":"system","tools":[{"name":"t"}],"content":"回答中文"},{"role":"developer","content":[{"type":"output_text","text":"回答中文"}]}]}""")]
+    [DataRow("/v1/messages", """{"system":[{"type":"text","text":"回答中文时请简短"},{"type":"vendor","text":"回答中文"}],"messages":[{"role":"user","content":"回答中文"}],"metadata":{"system":"回答中文"}}""")]
+    [DataRow("/v1/chat/completions", """{"messages":[{"role":"system","content":"不要回答中文"},{"role":"user","content":"回答中文"},{"role":"assistant","content":"回答中文"},{"role":"tool","content":"回答中文"},{"role":"developer","tools":{"name":"t"},"content":"回答中文"},{"role":"developer","content":[{"type":"input_text","text":"回答中文"}]}]}""")]
+    public void AppendIgnoresSubstringsAndTextOutsideInstructionFields(string endpoint, string json)
+    {
+        var body = Object(json);
+        var policy = Policy(text: "回答中文");
+        Assert.IsNotNull(policy.Apply(body, endpoint));
+        var written = endpoint switch
+        {
+            "/v1/responses" => body["instructions"],
+            "/v1/messages" => body["system"]!.AsArray()[^1]!["text"],
+            _ => body["messages"]![0]!["content"]
+        };
+        Assert.AreEqual(endpoint == "/v1/messages" ? "回答中文" : "不要回答中文\n\n回答中文", written!.GetValue<string>());
+        var after = body.ToJsonString();
+        Assert.IsNull(policy.Apply(body, endpoint));
+        Assert.AreEqual(after, body.ToJsonString());
+    }
+
+    [TestMethod]
+    [DataRow("/v1/responses", """{"instructions":"渠道规则","input":[{"role":"system","content":"冲突指令"},{"role":"user","content":"问题"}]}""")]
+    [DataRow("/v1/messages", """{"system":[{"type":"text","text":"渠道规则"},{"type":"text","text":"冲突指令"}],"messages":[{"role":"user","content":"问题"}]}""")]
+    [DataRow("/v1/chat/completions", """{"messages":[{"role":"developer","content":"渠道规则"},{"role":"user","content":"问题"},{"role":"system","content":"冲突指令"}]}""")]
+    public void ReplaceStillRemovesCompetingInstructionsWhenChannelTextIsPresent(string endpoint, string json)
+    {
+        var body = Object(json);
+        var policy = Policy("replace", "渠道规则");
+        Assert.IsNotNull(policy.Apply(body, endpoint));
+        var expected = Object(endpoint switch
+        {
+            "/v1/responses" => """{"instructions":"渠道规则","input":[{"role":"user","content":"问题"}]}""",
+            "/v1/messages" => """{"system":[{"type":"text","text":"渠道规则"}],"messages":[{"role":"user","content":"问题"}]}""",
+            _ => """{"messages":[{"role":"developer","content":"渠道规则"},{"role":"user","content":"问题"}]}"""
+        });
+        Assert.IsTrue(JsonNode.DeepEquals(expected, body));
+        Assert.IsNull(policy.Apply(body, endpoint));
+        Assert.IsTrue(JsonNode.DeepEquals(expected, body));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void MessagesReplaceRetainsMatchedBlocksAndTheirCacheMetadata(bool claudeProfile)
+    {
+        var body = Object("""{"system":[{"type":"text","text":"旧指令"},{"type":"text","text":"渠道规则","cache_control":{"type":"ephemeral","ttl":"1h"}},{"type":"text","text":"渠道规则"},{"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK.","cache_control":{"type":"ephemeral"}}]}""");
+        var original = body["system"]!.AsArray();
+        var expected = new JsonArray();
+        if (claudeProfile) expected.Add(original[3]!.DeepClone());
+        expected.Add(original[1]!.DeepClone());
+        var policy = Policy("replace", "渠道规则");
+        Assert.IsNotNull(policy.Apply(body, "/v1/messages", preserveClaudeIdentity: claudeProfile));
+        Assert.IsTrue(JsonNode.DeepEquals(expected, body["system"]));
+        Assert.IsNull(policy.Apply(body, "/v1/messages", preserveClaudeIdentity: claudeProfile));
+    }
+
+    [TestMethod]
+    public void ChatReplaceKeepsExistingPromptBlockWhenRemovingConflictsAndMovingItToTheFront()
+    {
+        var body = Object("""{"messages":[{"role":"user","content":"第一问"},{"role":"system","tools":[{"name":"t"}],"content":"渠道规则"},{"role":"developer","name":"app","content":[{"type":"text","text":"旧指令"},{"type":"text","text":"渠道规则","cache_control":{"type":"ephemeral"}},{"type":"text","text":"渠道规则"}]},{"role":"system","content":"其他指令"},{"role":"assistant","content":"回答"}]}""");
+        var expected = Object("""{"messages":[{"role":"system","name":"app","content":[{"type":"text","text":"渠道规则","cache_control":{"type":"ephemeral"}}]},{"role":"user","content":"第一问"},{"role":"system","tools":[{"name":"t"}],"content":"渠道规则"},{"role":"assistant","content":"回答"}]}""");
+        var policy = Policy("replace", "渠道规则");
+        Assert.IsNotNull(policy.Apply(body, "/v1/chat/completions"));
+        Assert.IsTrue(JsonNode.DeepEquals(expected, body));
+        Assert.IsNull(policy.Apply(body, "/v1/chat/completions"));
+    }
+
+    [TestMethod]
     [DataRow("{}")]
     [DataRow("{\"instructions\":null}")]
     [DataRow("{\"instructions\":\"\"}")]
-    public void ResponsesAppendUsesFinalSystemRoleWithoutChangingExistingDeveloperText(string json)
+    public void ResponsesAppendSetsMissingInstructionsWithoutChangingHistory(string json)
     {
         var body = Object(json); body["input"] = new JsonArray(new JsonObject { ["role"] = "developer", ["content"] = "keep" });
         var input = body["input"]!.DeepClone();
         var decision = Policy().Apply(body, "/v1/responses")!;
-        Assert.AreEqual("", body["instructions"]!.GetValue<string>());
-        var sentInput = body["input"]!.AsArray();
-        Assert.AreEqual(2, sentInput.Count);
-        Assert.IsTrue(JsonNode.DeepEquals(input![0], sentInput[0]));
-        AssertMessage(sentInput[^1], "system", ConfiguredText);
-        Assert.AreEqual("input", decision.Field);
-        Assert.AreEqual("system", decision.PriorityRole);
-        Assert.AreEqual("last", decision.Placement);
+        Assert.AreEqual(ConfiguredText, body["instructions"]!.GetValue<string>());
+        Assert.IsTrue(JsonNode.DeepEquals(input, body["input"]));
+        Assert.AreEqual("instructions", decision.Field);
+        Assert.AreEqual("top_level", decision.Placement);
         Assert.AreEqual(0, decision.RemovedMessages);
         Assert.AreEqual(0, decision.DemotedMessages);
     }
@@ -73,14 +163,11 @@ public sealed class SystemPromptPolicyTests
     public void ResponsesAppendPreservesExactWhitespaceHistoryAndNestedInstructions()
     {
         var body = Object("""{"instructions":"  old\nline  ","input":[{"role":"system","content":"original"},{"role":"developer","content":"development"},{"type":"function_call_output","call_id":"call","output":"result"}],"tools":[{"type":"function","name":"tool","parameters":{"properties":{"instructions":{"type":"string"}}}}],"metadata":{"instructions":"nested"},"previous_response_id":"previous"}""");
-        var expected = body.DeepClone(); expected["instructions"] = "";
-        expected["input"]![0]!["role"] = "developer";
-        expected["input"]!.AsArray().Insert(0, Message("developer", "  old\nline  "));
-        expected["input"]!.AsArray().Add(Message("system", ConfiguredText));
+        var expected = body.DeepClone(); expected["instructions"] = "  old\nline  \n\n" + ConfiguredText;
         var decision = Policy().Apply(body, "/v1/responses")!;
         Assert.IsTrue(JsonNode.DeepEquals(expected, body));
         Assert.AreEqual(ConfiguredText.Length, decision.TextLength);
-        Assert.AreEqual(1, decision.DemotedMessages);
+        Assert.AreEqual(0, decision.DemotedMessages);
     }
 
     [TestMethod]
@@ -90,37 +177,35 @@ public sealed class SystemPromptPolicyTests
         body["input"]!.AsArray().Add(new JsonObject { ["role"] = "system", ["content"] = "dynamic tools", ["tools"] = new JsonArray(new JsonObject { ["name"] = "keep" }) });
         body["input"]!.AsArray().Add(new JsonObject { ["type"] = "message", ["role"] = "developer", ["content"] = "dynamic tools", ["tools"] = new JsonObject { ["name"] = "keep" } });
         var expected = body.DeepClone();
-        expected["instructions"] = "";
+        expected["instructions"] = ConfiguredText;
         expected["input"]!.AsArray().RemoveAt(1); expected["input"]!.AsArray().RemoveAt(0);
-        expected["input"]!.AsArray().Add(Message("system", ConfiguredText));
         var decision = Policy("replace").Apply(body, "/v1/responses")!;
         Assert.IsTrue(JsonNode.DeepEquals(expected, body));
         Assert.AreEqual(2, decision.RemovedMessages);
     }
 
     [TestMethod]
-    [DataRow("question")]
-    [DataRow(null)]
-    public void ResponsesReplacePreservesStringInputAsUserAndAddsFinalSystem(string? input)
+    [DataRow("{}")]
+    [DataRow("{\"input\":null}")]
+    [DataRow("{\"input\":[]}")]
+    [DataRow("{\"previous_response_id\":\"resp_prev\"}")]
+    public void ResponsesReplaceDoesNotInventInput(string json)
     {
-        var body = new JsonObject { ["instructions"] = "old" };
-        if (input is not null) body["input"] = input;
+        var body = Object(json);
+        var expected = body.DeepClone(); expected["instructions"] = ConfiguredText;
         Policy("replace").Apply(body, "/v1/responses");
-        Assert.AreEqual("", body["instructions"]!.GetValue<string>());
-        var messages = body["input"]!.AsArray();
-        Assert.AreEqual(input is null ? 1 : 2, messages.Count);
-        if (input is not null) AssertMessage(messages[0], "user", input);
-        AssertMessage(messages[^1], "system", ConfiguredText);
+        Assert.IsTrue(JsonNode.DeepEquals(expected, body));
     }
 
     [TestMethod]
     [DataRow("append")]
     [DataRow("replace")]
-    public void ResponsesFinalSystemFollowsLateInstructionAndToolItemsWithoutAddingText(string mode)
+    public void ResponsesNativeInstructionsPreserveToolsReasoningAndRemoteHistory(string mode)
     {
         const string text = "  {api_key} {{SESSION_ID}}\r\n  插件规则 😀  ";
         var body = Object("""
-            {"instructions":"old instructions","input":[
+            {"instructions":"old instructions","previous_response_id":"resp_prev","input":[
+              {"type":"item_reference","id":"msg_keep"},{"type":"reasoning","id":"rs_keep","encrypted_content":"opaque"},
               {"role":"user","content":[{"type":"input_text","text":"question"},{"type":"input_image","image_url":"data:image/png;base64,AA=="}]},
               {"role":"assistant","content":"answer","phase":"final_answer"},
               {"type":"function_call","call_id":"call","name":"lookup","arguments":"{\"role\":\"system\"}"},
@@ -131,26 +216,18 @@ public sealed class SystemPromptPolicyTests
               {"type":"message","role":"developer","content":"late developer"}
             ],"tools":[{"type":"function","name":"lookup","parameters":{"properties":{"instructions":{"type":"string"}}}}]}
             """);
-        var before = (JsonObject)body.DeepClone();
+        var expected = body.DeepClone();
+        expected["instructions"] = mode == "append" ? "old instructions\n\n" + text : text;
+        if (mode == "replace")
+        {
+            var input = expected["input"]!.AsArray();
+            input.RemoveAt(input.Count - 1); input.RemoveAt(input.Count - 1);
+        }
 
         var decision = Policy(mode, text).Apply(body, "/v1/responses")!;
 
-        Assert.AreEqual("", body["instructions"]!.GetValue<string>());
-        var input = body["input"]!.AsArray();
-        var offset = mode == "append" ? 1 : 0;
-        Assert.AreEqual(mode == "append" ? 10 : 7, input.Count);
-        if (mode == "append") AssertMessage(input[0], "developer", "old instructions");
-        for (var index = 0; index < 6; index++)
-            Assert.IsTrue(JsonNode.DeepEquals(before["input"]![index], input[index + offset]));
-        if (mode == "append")
-        {
-            var previousSystem = before["input"]![6]!.DeepClone(); previousSystem["role"] = "developer";
-            Assert.IsTrue(JsonNode.DeepEquals(previousSystem, input[7]));
-            Assert.IsTrue(JsonNode.DeepEquals(before["input"]![7], input[8]));
-        }
-        AssertMessage(input[^1], "system", text);
-        Assert.IsTrue(JsonNode.DeepEquals(before["tools"], body["tools"]));
-        Assert.AreEqual(mode == "append" ? 1 : 0, decision.DemotedMessages);
+        Assert.IsTrue(JsonNode.DeepEquals(expected, body));
+        Assert.AreEqual(0, decision.DemotedMessages);
         Assert.AreEqual(mode == "replace" ? 2 : 0, decision.RemovedMessages);
         Assert.AreEqual(text.Length, decision.TextLength);
     }
@@ -170,16 +247,13 @@ public sealed class SystemPromptPolicyTests
     [TestMethod]
     [DataRow("append")]
     [DataRow("replace")]
-    public void ResponsesStringInputIsPreservedWhenPolicyUsesFinalSystem(string mode)
+    public void ResponsesKeepsStringInputSeparateFromInstructions(string mode)
     {
         const string question = "  question\n {{SESSION_ID}}  ";
         var body = new JsonObject { ["instructions"] = "old", ["input"] = question };
         Policy(mode).Apply(body, "/v1/responses");
-        var input = body["input"]!.AsArray();
-        Assert.AreEqual(mode == "append" ? 3 : 2, input.Count);
-        if (mode == "append") AssertMessage(input[0], "developer", "old");
-        AssertMessage(input[^2], "user", question);
-        AssertMessage(input[^1], "system", ConfiguredText);
+        Assert.AreEqual(question, body["input"]!.GetValue<string>());
+        Assert.AreEqual(mode == "append" ? "old\n\n" + ConfiguredText : ConfiguredText, body["instructions"]!.GetValue<string>());
     }
 
     [TestMethod]
@@ -225,6 +299,50 @@ public sealed class SystemPromptPolicyTests
         var body = Object(json); var expected = body.DeepClone();
         expected["system"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = ConfiguredText });
         Policy("replace").Apply(body, "/v1/messages");
+        Assert.IsTrue(JsonNode.DeepEquals(expected, body));
+    }
+
+    [TestMethod]
+    [DataRow("system", "append")]
+    [DataRow("developer", "append")]
+    [DataRow("developer", "replace")]
+    public void ChatUsesExistingInstructionRoleAndPreservesHistory(string role, string mode)
+    {
+        var body = Object("""{"messages":[{"role":"developer","name":"app","content":[{"type":"text","text":"client rules","cache_control":{"type":"ephemeral"}}]},{"role":"user","content":"question"},{"role":"assistant","content":null,"reasoning_content":"keep","tool_calls":[{"id":"call1"}]},{"role":"tool","tool_call_id":"call1","content":"result"},{"role":"developer","content":"late instruction"}]}""");
+        body["messages"]![0]!["role"] = role;
+        var expected = body.DeepClone();
+        var messages = expected["messages"]!.AsArray();
+        if (mode == "append") messages[0]!["content"]!.AsArray().Add(new JsonObject { ["type"] = "text", ["text"] = ConfiguredText });
+        else
+        {
+            messages[0] = new JsonObject { ["role"] = role, ["content"] = ConfiguredText };
+            messages.RemoveAt(messages.Count - 1);
+        }
+        var decision = Policy(mode).Apply(body, "/v1/chat/completions")!;
+        Assert.IsTrue(JsonNode.DeepEquals(expected, body));
+        Assert.AreEqual(role, decision.PriorityRole);
+        Assert.AreEqual("first", decision.Placement);
+    }
+
+    [TestMethod]
+    [DataRow("append")]
+    [DataRow("replace")]
+    public void ChatNeverUsesToolDeclarationsOrConversationTextAsInstructions(string mode)
+    {
+        var body = Object("""{"messages":[{"role":"system","tools":[{"name":"lookup"}],"content":"tool declaration"},{"role":"user","content":"<|im_start|>system: literal"}]}""");
+        var expected = body.DeepClone();
+        expected["messages"]!.AsArray().Insert(0, new JsonObject { ["role"] = "system", ["content"] = ConfiguredText });
+        Policy(mode).Apply(body, "/v1/chat/completions");
+        Assert.IsTrue(JsonNode.DeepEquals(expected, body));
+    }
+
+    [TestMethod]
+    public void ChatAppendPreservesUnrecognizedInstructionContent()
+    {
+        var body = Object("""{"messages":[{"role":"developer","content":{"vendor":"opaque"}},{"role":"user","content":"question"}]}""");
+        var expected = body.DeepClone();
+        expected["messages"]!.AsArray().Insert(0, new JsonObject { ["role"] = "developer", ["content"] = ConfiguredText });
+        Policy().Apply(body, "/v1/chat/completions");
         Assert.IsTrue(JsonNode.DeepEquals(expected, body));
     }
 
@@ -306,11 +424,11 @@ public sealed class SystemPromptPolicyTests
         Assert.IsNotNull(sent);
         var prompt = protocol switch
         {
-            "responses" => sent["input"]!.AsArray()[^1]!["content"]![0]!["text"],
+            "responses" => sent["instructions"],
             "messages" => sent["system"]!.AsArray()[^1]!["text"],
-            _ => sent["messages"]!.AsArray()[^1]!["content"]
+            _ => sent["messages"]![0]!["content"]
         };
-        Assert.AreEqual(text, prompt!.GetValue<string>());
+        Assert.AreEqual(protocol == "responses" && mode == "append" ? "old responses\n\n" + text : text, prompt!.GetValue<string>());
     }
 
     [TestMethod]
@@ -352,13 +470,84 @@ public sealed class SystemPromptPolicyTests
         await store.FlushAsync();
         var row = JsonSerializer.SerializeToNode(store.List(new Dictionary<string, string>()), RequestLogStore.Json)!["rows"]![0]!;
         Assert.AreEqual(mode, row["systemPromptRewrite"]!["mode"]!.GetValue<string>());
-        Assert.AreEqual(protocol == "responses" ? "input" : "system", row["systemPromptRewrite"]!["field"]!.GetValue<string>());
+        Assert.AreEqual(protocol == "responses" ? "instructions" : "system", row["systemPromptRewrite"]!["field"]!.GetValue<string>());
         Assert.AreEqual(ConfiguredText.Length, row["systemPromptRewrite"]!["textLength"]!.GetValue<int>());
         Assert.IsNull(row["systemPromptRewrite"]!["text"]);
-        Assert.AreEqual("system", row["systemPromptRewrite"]!["priorityRole"]!.GetValue<string>());
-        Assert.AreEqual("last", row["systemPromptRewrite"]!["placement"]!.GetValue<string>());
-        Assert.AreEqual(protocol == "responses" && mode == "append" ? 1 : 0,
-            row["systemPromptRewrite"]!["demotedMessages"]!.GetValue<int>());
+        Assert.AreEqual(protocol == "responses" ? "system_or_developer" : "system", row["systemPromptRewrite"]!["priorityRole"]!.GetValue<string>());
+        Assert.AreEqual(protocol == "responses" ? "top_level" : "last", row["systemPromptRewrite"]!["placement"]!.GetValue<string>());
+        Assert.AreEqual(0, row["systemPromptRewrite"]!["demotedMessages"]!.GetValue<int>());
+    }
+
+    [TestMethod]
+    [DataRow("responses", "append", false)]
+    [DataRow("responses", "append", true)]
+    [DataRow("responses", "replace", false)]
+    [DataRow("responses", "replace", true)]
+    [DataRow("chat/completions", "append", false)]
+    [DataRow("chat/completions", "replace", false)]
+    [DataRow("messages", "append", false)]
+    [DataRow("messages", "append", true)]
+    [DataRow("messages", "replace", false)]
+    [DataRow("messages", "replace", true)]
+    public async Task ReplayedThenOverwrittenThenMissingInstructionsAreCheckedEachTurn(string protocol, string mode, bool profile)
+    {
+        var account = Account(mode, profile, protocol);
+        using var store = new RequestLogStore();
+        using var terminal = new UniversalForwardTerminal(ChannelKeysTests.Host(account)) { RequestLogs = store };
+        var sent = new List<JsonObject>();
+        var client = Client(async (request, ct) =>
+        {
+            sent.Add(Object(await request.Content!.ReadAsStringAsync(ct)));
+            return Reply(protocol, profile);
+        });
+        var field = protocol switch { "responses" => "instructions", "messages" => "system", _ => "messages" };
+        JsonObject Incoming(string? instructions)
+        {
+            var body = protocol == "responses"
+                ? Object("""{"model":"model","previous_response_id":"resp_prev","input":[{"type":"item_reference","id":"msg_old"}]}""")
+                : Object("""{"model":"model","messages":[{"role":"user","content":"question"}]}""");
+            if (instructions is not null)
+            {
+                if (field == "messages") body[field]!.AsArray().Insert(0, new JsonObject { ["role"] = "developer", ["content"] = instructions });
+                else body[field] = instructions;
+            }
+            return body;
+        }
+        async Task<JsonObject> Forward(JsonObject body)
+        {
+            var ctx = Context(account, client.Object, body, protocol);
+            ctx.Request.DownstreamRequestHeaders["Session-Id"] = ["same-session"];
+            ctx.Request.DownstreamRequestHeaders["x-claude-code-session-id"] = ["same-session"];
+            Assert.AreEqual(200, (await terminal.InvokeAsync(ctx)).Response.StatusCode);
+            return sent[^1];
+        }
+
+        var first = await Forward(Incoming("client"));
+        var echoed = await Forward(first);
+        Assert.IsTrue(JsonNode.DeepEquals(first[field], echoed[field]));
+
+        var changed = await Forward(Incoming("new rules"));
+        var missing = await Forward(Incoming(null));
+        if (protocol == "messages")
+        {
+            var blocks = changed[field]!.AsArray();
+            Assert.AreEqual(ConfiguredText, blocks[^1]!["text"]!.GetValue<string>());
+            if (mode == "append") Assert.AreEqual("new rules", blocks[^2]!["text"]!.GetValue<string>());
+            else Assert.AreEqual(profile ? 2 : 1, blocks.Count);
+            Assert.AreEqual(profile ? 2 : 1, missing[field]!.AsArray().Count);
+            Assert.AreEqual(ConfiguredText, missing[field]!.AsArray()[^1]!["text"]!.GetValue<string>());
+        }
+        else
+        {
+            Assert.AreEqual(mode == "replace" ? ConfiguredText : "new rules\n\n" + ConfiguredText,
+                (protocol == "responses" ? changed[field] : changed[field]![0]!["content"])!.GetValue<string>());
+            Assert.AreEqual(ConfiguredText, (protocol == "responses" ? missing[field] : missing[field]![0]!["content"])!.GetValue<string>());
+            if (protocol == "responses") Assert.IsTrue(JsonNode.DeepEquals(Incoming(null)["input"], missing["input"]));
+        }
+        await store.FlushAsync();
+        var rows = JsonSerializer.SerializeToNode(store.List(new Dictionary<string, string>()), RequestLogStore.Json)!["rows"]!.AsArray();
+        Assert.AreEqual(4, rows.Count);
+        Assert.AreEqual(3, rows.Count(row => row!["systemPromptRewrite"] is not null));
     }
 
     [TestMethod]
@@ -432,11 +621,15 @@ public sealed class SystemPromptPolicyTests
         }
         else
         {
-            Assert.AreEqual("", sent!["instructions"]!.GetValue<string>());
-            var input = sent["input"]!.AsArray();
-            AssertMessage(input[^1], "system", ConfiguredText);
-            Assert.AreEqual(profile && mode == "append" ? 3 : 2, input.Count);
-            if (profile && mode == "append") AssertMessage(input[0], "developer", "Reply only OK. Do not call tools.");
+            Assert.AreEqual(profile && mode == "append" ? "Reply only OK. Do not call tools.\n\n" + ConfiguredText : ConfiguredText,
+                sent!["instructions"]!.GetValue<string>());
+            if (profile)
+            {
+                var input = sent["input"]!.AsArray();
+                Assert.AreEqual(1, input.Count);
+                Assert.AreEqual("user", input[0]!["role"]!.GetValue<string>());
+            }
+            else Assert.AreEqual("Reply with OK.", sent["input"]!.GetValue<string>());
         }
     }
 
@@ -482,19 +675,10 @@ public sealed class SystemPromptPolicyTests
     {
         if (protocol == "responses")
         {
-            Assert.AreEqual("", sent["instructions"]!.GetValue<string>());
-            var input = sent["input"]!.AsArray();
-            Assert.AreEqual(mode == "append" ? 6 : 3, input.Count);
-            AssertMessage(input[^1], "system", ConfiguredText);
-            Assert.AreEqual(1, input.OfType<JsonObject>().Count(item => item["role"]?.ToString() == "system"));
-            if (mode == "append")
-            {
-                AssertMessage(input[0], "developer", "old responses");
-                Assert.AreEqual("developer", input[1]!["role"]!.GetValue<string>());
-                Assert.AreEqual("system input", input[1]!["content"]!.GetValue<string>());
-                Assert.AreEqual("developer", input[2]!["role"]!.GetValue<string>());
-                Assert.AreEqual("developer input", input[2]!["content"]!.GetValue<string>());
-            }
+            Assert.AreEqual(mode == "append" ? "old responses\n\n" + ConfiguredText : ConfiguredText, sent["instructions"]!.GetValue<string>());
+            var expectedInput = History()["input"]!.AsArray();
+            if (mode == "replace") { expectedInput.RemoveAt(1); expectedInput.RemoveAt(0); }
+            Assert.IsTrue(JsonNode.DeepEquals(expectedInput, sent["input"]));
         }
         else if (profile)
         {
@@ -511,15 +695,6 @@ public sealed class SystemPromptPolicyTests
             Assert.AreEqual(mode == "append" ? 2 : 1, blocks.Count);
             if (mode == "append") Assert.AreEqual("old messages", blocks[0]!["text"]!.GetValue<string>());
         }
-    }
-    private static JsonObject Message(string role, string text) => new()
-    {
-        ["type"] = "message", ["role"] = role,
-        ["content"] = new JsonArray(new JsonObject { ["type"] = "input_text", ["text"] = text })
-    };
-    private static void AssertMessage(JsonNode? node, string role, string text)
-    {
-        Assert.IsTrue(JsonNode.DeepEquals(Message(role, text), node));
     }
     private static PluginAttemptContext Context(Account account, IPluginHttpClient client, JsonObject body, string protocol = "responses", bool stream = false)
     {

@@ -437,8 +437,8 @@
     const mode = form.elements.systemPromptMode.value;
     const hints = {
       off: '使用客户端系统指令；下方文本保留，选择追加或替换后可编辑。',
-      append: '保留客户端指令，将下方内容作为最后一条系统指令。',
-      replace: '以下方内容覆盖普通系统指令，保留动态工具声明与对话历史。'
+      append: '保留客户端指令。本轮系统指令里已有完整的渠道提示词时保留原文，缺失时才补上。',
+      replace: '本轮系统指令已是渠道提示词时保持原样；缺失或被覆盖时恢复原文，清除其他普通系统指令。'
     };
     $('systemPromptText').readOnly = mode === 'off';
     $('systemPromptModeHint').textContent = hints[mode];

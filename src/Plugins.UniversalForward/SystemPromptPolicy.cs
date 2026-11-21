@@ -18,74 +18,185 @@ public sealed class SystemPromptPolicy
             throw new FormatException("追加或替换时，系统提示词不能为空。");
     }
 
-    internal SystemPromptRewriteDecision? Apply(JsonObject body, string endpoint)
+    internal SystemPromptRewriteDecision? Apply(JsonObject body, string endpoint, bool preserveClaudeIdentity = false)
     {
         Validate();
         if (Mode == "off") return null;
-        if (endpoint == "/v1/responses")
+        return endpoint switch
         {
-            // Validate both fields before changing the request. A trailing system message has
-            // its own role; concatenating channel text into instructions leaves competing roles.
-            var original = Mode == "append" ? ReadInstructions(body["instructions"]) : null;
-            var input = ReadInput(body["input"]);
-            var removed = 0;
-            var demoted = 0;
-            for (var index = input.Count - 1; index >= 0; index--)
+            "/v1/responses" => ApplyResponses(body),
+            "/v1/messages" => ApplyMessages(body, preserveClaudeIdentity),
+            "/v1/chat/completions" => ApplyChat(body),
+            _ => null
+        };
+    }
+
+    private SystemPromptRewriteDecision? ApplyResponses(JsonObject body)
+    {
+        var input = ReadInputMessages(body["input"]);
+        var removed = 0;
+        if (Mode == "append")
+        {
+            var original = ReadInstructions(body["instructions"]);
+            if (ContainsPrompt(original) || SystemMessagesContainPrompt(input, "input_text")) return null;
+            body["instructions"] = AppendText(original);
+        }
+        else
+        {
+            if (input is not null) removed = RemoveSystemMessages(input);
+            if (StringValue(body["instructions"]) != Text) body["instructions"] = Text;
+            else if (removed == 0) return null;
+        }
+        return new(Mode, "instructions", Text.Length, removed, Placement: "top_level", PriorityRole: "system_or_developer");
+    }
+
+    private SystemPromptRewriteDecision? ApplyMessages(JsonObject body, bool preserveClaudeIdentity)
+    {
+        var original = body["system"];
+        if (Mode == "append")
+        {
+            if (ContentContainsPrompt(original, "text")) return null;
+            var blocks = ReadSystem(original);
+            blocks.Add(TextBlock(Text));
+            if (!ReferenceEquals(original, blocks)) body["system"] = blocks;
+        }
+        else
+        {
+            var replacement = new JsonArray(TextBlock(Text));
+            if (preserveClaudeIdentity) ClientProfiles.EnsureClaudeSystemIdentity(replacement);
+            if (SameSystemText(original, replacement)) return null;
+            if (original is JsonArray current)
             {
-                if (input[index] is not JsonObject item || !IsSystemMessage(item)) continue;
-                if (Mode == "replace") { input.RemoveAt(index); removed++; }
-                else if (item["role"]!.GetValue<string>() == "system")
+                for (var i = 0; i < replacement.Count; i++)
                 {
-                    item["role"] = "developer";
-                    demoted++;
+                    var wanted = replacement[i]!["text"]!.GetValue<string>();
+                    if (FindTextBlock(current, wanted) is not { } existing) continue;
+                    current.Remove(existing);
+                    replacement[i] = existing;
                 }
             }
-            if (!string.IsNullOrEmpty(original)) input.Insert(0, Message("developer", original));
-            input.Add(Message("system", Text));
-            if (!ReferenceEquals(body["input"], input)) body["input"] = input;
-            // Codex-compatible upstreams require this field to exist even when instructions
-            // are supplied as explicit input messages. Do not send the channel text twice.
-            body["instructions"] = string.Empty;
-            return new(Mode, "input", Text.Length, removed, DemotedMessages: demoted);
+            body["system"] = replacement;
         }
-        if (endpoint == "/v1/messages")
+        return new(Mode, "system", Text.Length, 0, TemplateIdentityPreserved: Mode == "replace" && preserveClaudeIdentity);
+    }
+
+    private SystemPromptRewriteDecision? ApplyChat(JsonObject body)
+    {
+        var messages = body["messages"] switch
         {
-            var blocks = Mode == "replace" ? new JsonArray() : ReadSystem(body["system"]);
-            blocks.Add(new JsonObject { ["type"] = "text", ["text"] = Text });
-            if (!ReferenceEquals(body["system"], blocks)) body["system"] = blocks;
-            return new(Mode, "system", Text.Length, 0);
+            null => new JsonArray(),
+            JsonArray array => array,
+            _ => throw new FormatException("改写系统提示词时，Chat Completions messages 必须为数组或 null。")
+        };
+        var leading = messages.Count > 0 && messages[0] is JsonObject first && IsSystemMessage(first) ? first : null;
+        var role = StringValue(leading?["role"]) ?? "system";
+        var removed = 0;
+        if (Mode == "append")
+        {
+            if (SystemMessagesContainPrompt(messages, "text")) return null;
+            if (leading?["content"] is JsonArray parts) parts.Add(TextBlock(Text));
+            else if (StringValue(leading?["content"]) is { } original) leading!["content"] = AppendText(original);
+            else messages.Insert(0, new JsonObject { ["role"] = role, ["content"] = Text });
         }
-        if (endpoint == "/v1/chat/completions")
+        else
         {
-            var messages = body["messages"] switch
+            var (keep, block) = FindChatPrompt(messages);
+            removed = RemoveSystemMessages(messages, keep);
+            if (keep is null) messages.Insert(0, new JsonObject { ["role"] = role, ["content"] = Text });
+            else
             {
-                null => new JsonArray(),
-                JsonArray array => array,
-                _ => throw new FormatException("改写系统提示词时，Chat Completions messages 必须为数组或 null。")
-            };
-            var removed = 0;
-            if (Mode == "replace")
-                for (var index = messages.Count - 1; index >= 0; index--)
-                    if (messages[index] is JsonObject item && IsSystemMessage(item))
-                    { messages.RemoveAt(index); removed++; }
-            // Chat 兼容上游未必支持 developer 角色，追加时保持已有角色，不引入角色转换。
-            messages.Add(new JsonObject { ["role"] = "system", ["content"] = Text });
-            if (!ReferenceEquals(body["messages"], messages)) body["messages"] = messages;
-            return new(Mode, "messages", Text.Length, removed);
+                if (block is not null && keep["content"] is JsonArray { Count: > 1 } parts)
+                {
+                    parts.Clear();
+                    parts.Add(block);
+                }
+                else if (removed == 0 && ReferenceEquals(keep, leading)) return null;
+                if (!ReferenceEquals(keep, messages[0]))
+                {
+                    messages.Remove(keep);
+                    messages.Insert(0, keep);
+                }
+                if (StringValue(keep["role"]) != role) keep["role"] = role;
+            }
         }
+        if (!ReferenceEquals(body["messages"], messages)) body["messages"] = messages;
+        return new(Mode, "messages", Text.Length, removed, Placement: "first", PriorityRole: role);
+    }
+
+    private (JsonObject? Message, JsonObject? Block) FindChatPrompt(JsonArray messages)
+    {
+        foreach (var node in messages)
+        {
+            if (node is not JsonObject item || !IsSystemMessage(item)) continue;
+            var content = item["content"];
+            if (StringValue(content) == Text) return (item, null);
+            if (content is JsonArray parts && FindTextBlock(parts, Text) is { } block) return (item, block);
+        }
+        return (null, null);
+    }
+
+    private static JsonObject? FindTextBlock(JsonArray parts, string text)
+    {
+        foreach (var part in parts)
+            if (part is JsonObject block && BlockText(block, "text") == text) return block;
         return null;
     }
 
-    private static JsonObject Message(string role, string text) => new()
+    private bool SystemMessagesContainPrompt(JsonArray? messages, string blockType)
     {
-        ["type"] = "message", ["role"] = role,
-        ["content"] = new JsonArray(new JsonObject { ["type"] = "input_text", ["text"] = text })
-    };
-    private static JsonArray ReadInput(JsonNode? node) => node switch
+        if (messages is not null)
+            foreach (var node in messages)
+                if (node is JsonObject item && IsSystemMessage(item) && ContentContainsPrompt(item["content"], blockType)) return true;
+        return false;
+    }
+
+    private bool ContentContainsPrompt(JsonNode? content, string blockType)
     {
-        null => new JsonArray(),
+        if (content is not JsonArray parts) return ContainsPrompt(StringValue(content));
+        foreach (var part in parts)
+            if (ContainsPrompt(BlockText(part, blockType))) return true;
+        return false;
+    }
+
+    private bool ContainsPrompt(string? content)
+    {
+        if (content is null || content.Length < Text.Length) return false;
+        var from = 0;
+        while (from <= content.Length - Text.Length)
+        {
+            var start = content.IndexOf(Text, from, StringComparison.Ordinal);
+            if (start < 0) break;
+            var end = start + Text.Length;
+            if ((start == 0 || IsLineBreak(content[start - 1]) || IsLineBreak(Text[0]))
+                && (end == content.Length || IsLineBreak(content[end]) || IsLineBreak(Text[^1]))) return true;
+            // 同一行内的其他子串也不可能是独立指令，从下一个换行符继续。
+            var nextBreak = content.AsSpan(start + 1).IndexOfAny('\r', '\n');
+            if (nextBreak < 0) break;
+            from = start + 1 + nextBreak;
+        }
+        return false;
+    }
+
+    private static bool SameSystemText(JsonNode? original, JsonArray replacement)
+    {
+        if (original is not JsonArray blocks)
+            return replacement.Count == 1 && StringValue(original) == BlockText(replacement[0], "text");
+        if (blocks.Count != replacement.Count) return false;
+        for (var i = 0; i < blocks.Count; i++)
+            if (BlockText(blocks[i], "text") != BlockText(replacement[i], "text")) return false;
+        return true;
+    }
+
+    private static string? StringValue(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+    private static bool IsLineBreak(char c) => c is '\r' or '\n';
+    private static string? BlockText(JsonNode? node, string type) => node is JsonObject block && StringValue(block["type"]) == type ? StringValue(block["text"]) : null;
+    private static JsonObject TextBlock(string text) => new() { ["type"] = "text", ["text"] = text };
+    private string AppendText(string? original) => string.IsNullOrEmpty(original) ? Text : original + "\n\n" + Text;
+    private static JsonArray? ReadInputMessages(JsonNode? node) => node switch
+    {
+        null => null,
         JsonArray array => array,
-        JsonValue value when value.TryGetValue<string>(out var text) => new JsonArray(Message("user", text)),
+        JsonValue value when value.TryGetValue<string>(out _) => null,
         _ => throw new FormatException("改写系统提示词时，Responses input 必须为字符串、数组或 null。")
     };
     private static string? ReadInstructions(JsonNode? node) => node switch
@@ -99,15 +210,21 @@ public sealed class SystemPromptPolicy
         null => new JsonArray(),
         JsonArray array => array,
         JsonValue value when value.TryGetValue<string>(out var text) => string.IsNullOrEmpty(text)
-            ? new JsonArray() : new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
+            ? new JsonArray() : new JsonArray(TextBlock(text)),
         _ => throw new FormatException("追加系统提示词时，Messages system 必须为字符串、数组或 null。")
     };
+    private static int RemoveSystemMessages(JsonArray messages, JsonObject? keep = null)
+    {
+        var originalCount = messages.Count;
+        for (var index = messages.Count - 1; index >= 0; index--)
+            if (messages[index] is JsonObject item && !ReferenceEquals(item, keep) && IsSystemMessage(item)) messages.RemoveAt(index);
+        return originalCount - messages.Count;
+    }
     private static bool IsSystemMessage(JsonObject item)
     {
-        var type = item["type"];
-        var message = !item.ContainsKey("type") || type is JsonValue value && value.TryGetValue<string>(out var name) && name == "message";
-        var dynamicTools = item["tools"] is JsonArray { Count: > 0 } or JsonObject { Count: > 0 };
-        return message && !dynamicTools && item["role"] is JsonValue role && role.TryGetValue<string>(out var text) && text is "system" or "developer";
+        if (StringValue(item["role"]) is not ("system" or "developer")) return false;
+        return (!item.ContainsKey("type") || StringValue(item["type"]) == "message")
+            && item["tools"] is not (JsonArray { Count: > 0 } or JsonObject { Count: > 0 });
     }
 }
 

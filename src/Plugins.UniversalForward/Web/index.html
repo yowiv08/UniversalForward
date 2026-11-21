@@ -217,8 +217,8 @@
               <span id="systemPromptModeLabel" class="reasoning-field-label">处理方式</span>
               <div id="systemPromptMode" class="reasoning-mode-grid" role="radiogroup" aria-labelledby="systemPromptModeLabel">
                 <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="off" class="sr-only" aria-labelledby="systemPromptOffTitle" aria-describedby="systemPromptOffHint" checked><span class="reasoning-mode-icon" data-icon="forward"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptOffTitle">不改写</strong><small id="systemPromptOffHint">使用客户端提示词</small></label>
-                <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="append" class="sr-only" aria-labelledby="systemPromptAppendTitle" aria-describedby="systemPromptAppendHint"><span class="reasoning-mode-icon" data-icon="plus"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptAppendTitle">追加</strong><small id="systemPromptAppendHint">在末尾添加渠道指令</small></label>
-                <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="replace" class="sr-only" aria-labelledby="systemPromptReplaceTitle" aria-describedby="systemPromptReplaceHint"><span class="reasoning-mode-icon" data-icon="edit"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptReplaceTitle">替换</strong><small id="systemPromptReplaceHint">使用渠道提示词</small></label>
+                <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="append" class="sr-only" aria-labelledby="systemPromptAppendTitle" aria-describedby="systemPromptAppendHint"><span class="reasoning-mode-icon" data-icon="plus"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptAppendTitle">追加</strong><small id="systemPromptAppendHint">缺失时补上渠道指令</small></label>
+                <label class="reasoning-mode-card"><input type="radio" name="systemPromptMode" value="replace" class="sr-only" aria-labelledby="systemPromptReplaceTitle" aria-describedby="systemPromptReplaceHint"><span class="reasoning-mode-icon" data-icon="edit"></span><span class="reasoning-mode-check" data-icon="check"></span><strong id="systemPromptReplaceTitle">替换</strong><small id="systemPromptReplaceHint">只保留渠道指令</small></label>
               </div>
             </div>
             <p id="systemPromptModeHint" class="system-prompt-mode-hint" role="status">使用客户端系统指令；下方文本保留，选择追加或替换后可编辑。</p>
@@ -230,11 +230,11 @@
             <details id="systemPromptDetails" class="system-prompt-details">
               <summary>协议与保留范围</summary>
               <div>
-                <p><strong>追加：</strong>保留客户端指令，将渠道文本作为最后一条独立系统指令。</p>
-                <p><strong>替换：</strong>移除普通系统指令，写入渠道文本。动态工具声明、工具调用、工具结果和对话历史保留。</p>
-                <p>Responses 在 <code>input</code> 末尾写入 system 消息，<code>instructions</code> 设为空字符串。追加时，客户端 instructions 和普通 system 消息使用 developer 角色；替换时移除普通 system／developer 指令。</p>
-                <p>Messages 在顶层 <code>system</code> 数组中写入独立文本块，追加时保留客户端缓存块。Claude Code 模板保留必要的客户端身份声明。</p>
-                <p>Chat Completions 在 <code>messages</code> 末尾写入 system 消息。追加时保留客户端角色，替换时移除普通 system／developer 指令。</p>
+                <p><strong>追加：</strong>每次检查本轮系统指令。完整的渠道提示词已单独成行或成块时保留原位；缺失时才补上。用户消息和工具结果中的引用不算系统指令。</p>
+                <p><strong>替换：</strong>系统指令位置已有渠道原文且没有其他普通指令时，直接转发。缺失或被改写时恢复原文；有重复或其他普通指令时，只保留一份渠道指令。动态工具声明和对话历史保留。</p>
+                <p>Responses 同时检查 <code>instructions</code> 和 <code>input</code> 中的普通 system／developer 指令，缺失时补到 <code>instructions</code>。只传上一轮响应 ID 时也会补上。</p>
+                <p>Messages 检查顶层 <code>system</code> 的文本，缺失时补一个文本块。追加时保留客户端缓存块；Claude Code 模板保留必要的身份声明。</p>
+                <p>Chat Completions 检查 <code>messages</code> 中的普通 system／developer 指令。缺失时补到首位，沿用首条系统指令的角色，否则使用 system。</p>
                 <p>连接测试与正式请求使用同一规则，内部重试复用请求体。上游的额外规则和模型的指令遵循程度由上游决定。</p>
               </div>
             </details>

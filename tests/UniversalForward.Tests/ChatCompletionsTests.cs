@@ -183,8 +183,8 @@ public sealed class ChatCompletionsTests
         original["messages"]!.AsArray().Insert(2, JsonNode.Parse("""{"role":"system","content":"Tools","tools":[{"name":"lookup"}]}"""));
         var expected = original.DeepClone(); expected["model"] = "model"; expected["reasoning_effort"] = "high";
         var messages = expected["messages"]!.AsArray();
-        if (mode == "replace") { messages.RemoveAt(1); messages.RemoveAt(0); }
-        if (mode != "off") messages.Add(new JsonObject { ["role"] = "system", ["content"] = "Channel rules" });
+        if (mode == "replace") { messages.RemoveAt(1); messages[0]!["content"] = "Channel rules"; }
+        if (mode == "append") messages[0]!["content"] = "System rules\n\nChannel rules";
         var bodies = new List<string>();
         var client = Client(async request =>
         {

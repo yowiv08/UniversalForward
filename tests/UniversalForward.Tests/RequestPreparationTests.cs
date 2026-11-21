@@ -52,6 +52,7 @@ public sealed class RequestPreparationTests
         Assert.IsFalse(result.Response.IsStreaming);
         Assert.AreEqual(3, bodies.Count);
         var initial = Object(bodies[0]);
+        Assert.AreEqual("channel instructions", initial["instructions"]!.GetValue<string>());
         Assert.AreEqual("previous", initial["previous_response_id"]!.ToString());
         Assert.IsTrue(initial["input"]!.AsArray().Any(item => item?["type"]?.ToString() == "reasoning"));
         Assert.AreEqual("max", initial["reasoning"]!["effort"]!.ToString());
@@ -62,15 +63,15 @@ public sealed class RequestPreparationTests
         Assert.IsTrue(sent["stream"]!.GetValue<bool>());
         Assert.AreEqual("max", sent["reasoning"]!["effort"]!.GetValue<string>());
         Assert.AreEqual("auto", sent["reasoning"]!["summary"]!.GetValue<string>());
-        Assert.AreEqual("", sent["instructions"]!.GetValue<string>());
+        Assert.AreEqual("channel instructions", sent["instructions"]!.GetValue<string>());
         Assert.IsFalse(sent.ContainsKey("previous_response_id"));
-        Assert.AreEqual(5, sent["input"]!.AsArray().Count);
+        Assert.AreEqual(4, sent["input"]!.AsArray().Count);
         Assert.IsTrue(sent["input"]!.AsArray().OfType<JsonObject>().All(item => !item.ContainsKey("id")));
         Assert.AreEqual("question", sent["input"]![0]!["content"]!.GetValue<string>());
         Assert.AreEqual("call", sent["input"]![2]!["call_id"]!.GetValue<string>());
         Assert.AreEqual("{\"id\":\"keep\"}", sent["input"]![2]!["arguments"]!.GetValue<string>());
-        Assert.AreEqual("system", sent["input"]![4]!["role"]!.GetValue<string>());
-        Assert.AreEqual("channel instructions", sent["input"]![4]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.AreEqual("function_call_output", sent["input"]![3]!["type"]!.GetValue<string>());
+        Assert.AreEqual("result", sent["input"]![3]!["output"]!.GetValue<string>());
         Assert.IsTrue(JsonNode.DeepEquals(original["tools"], sent["tools"]));
         Assert.IsTrue(sent["include"]!.AsArray().Any(value => value!.ToString() == "reasoning.encrypted_content"));
         Assert.IsNotNull(sent["client_metadata"]!["session_id"]);

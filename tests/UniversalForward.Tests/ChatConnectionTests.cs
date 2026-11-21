@@ -103,9 +103,11 @@ public sealed partial class ConnectionTestsTests
             Assert.AreEqual("a", body["model"]!.ToString());
             Assert.AreEqual(stream, body["stream"]!.GetValue<bool>());
             Assert.AreEqual(256, body["max_completion_tokens"]!.GetValue<int>());
-            Assert.AreEqual("Test Chat Completions", body["messages"]![0]!["content"]!.ToString());
-            Assert.AreEqual("system", body["messages"]![1]!["role"]!.ToString());
-            Assert.AreEqual("Channel instructions", body["messages"]![1]!["content"]!.ToString());
+            Assert.AreEqual(2, body["messages"]!.AsArray().Count);
+            Assert.AreEqual("system", body["messages"]![0]!["role"]!.ToString());
+            Assert.AreEqual("Channel instructions", body["messages"]![0]!["content"]!.ToString());
+            Assert.AreEqual("user", body["messages"]![1]!["role"]!.ToString());
+            Assert.AreEqual("Test Chat Completions", body["messages"]![1]!["content"]!.ToString());
             Assert.AreEqual("high", body["reasoning_effort"]!.ToString());
             Assert.IsNull(body["input"]);
             Assert.IsNull(body["max_tokens"]);

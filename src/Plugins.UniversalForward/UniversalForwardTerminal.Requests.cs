@@ -174,14 +174,9 @@ public sealed partial class UniversalForwardTerminal
             }
             if (settings.SystemPromptPolicy.Mode != "off")
             {
-                var rewrite = settings.SystemPromptPolicy.Apply(body, upstreamEndpoint);
+                var rewrite = settings.SystemPromptPolicy.Apply(body, upstreamEndpoint, preserveClaudeIdentity: profile == "claude");
                 if (rewrite is not null)
                 {
-                    if (profile == "claude" && upstreamEndpoint == "/v1/messages" && rewrite.Mode == "replace")
-                    {
-                        ClientProfiles.EnsureClaudeSystemIdentity(body);
-                        rewrite = rewrite with { TemplateIdentityPreserved = true };
-                    }
                     capture?.RewroteSystemPrompt(rewrite);
                     await TryLogAsync("request.system_prompt.rewritten", "已应用渠道系统提示词规则",
                         traceId: context.TraceId, accountId: context.Account.Id, model: context.Request.Model,

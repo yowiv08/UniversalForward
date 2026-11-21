@@ -90,7 +90,7 @@ function promptHost() {
 
     await open();
     assert.equal(await selectedMode(), 'append');
-    assert.match(await field('systemPromptModeHint').innerText(), /最后一条系统指令/);
+    assert.match(await field('systemPromptModeHint').innerText(), /保留客户端指令.*缺失时才补上/);
     assert.match(await field('systemPromptTextHint').innerText(), /按原文发送/);
     assert.equal(await field('systemPromptText').inputValue(), original.systemPromptPolicy.text);
     assert.equal(await field('systemPromptText').evaluate(node => getComputedStyle(node).fontSize), '15px');
@@ -102,7 +102,7 @@ function promptHost() {
     await page.keyboard.press('ArrowRight'); assert.equal(await selectedMode(), 'append');
     assert.equal(await field('systemPromptText').isEditable(), true);
     await page.keyboard.press('ArrowRight'); assert.equal(await selectedMode(), 'replace');
-    assert.match(await field('systemPromptModeHint').innerText(), /覆盖/);
+    assert.match(await field('systemPromptModeHint').innerText(), /保持原样.*被覆盖时恢复原文/);
 
     // Validate active prompts before sending and focus the relevant tab without losing the draft.
     await field('systemPromptText').fill(' \n\t '); await field('tab-basic').click(); await field('save').click();

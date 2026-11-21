@@ -226,7 +226,7 @@ public sealed class HostAdaptationTests
             Assert.AreEqual("test-key", call.Key);
             var expected = original.DeepClone();
             expected["model"] = call.Model;
-            expected["messages"]!.AsArray().Add(new JsonObject { ["role"] = "system", ["content"] = "Channel instructions" });
+            expected["messages"]![0]!["content"] = "Client instructions\n\nChannel instructions";
             Assert.IsTrue(JsonNode.DeepEquals(expected, JsonNode.Parse(call.Body)));
         }
         if (stream)
@@ -326,7 +326,11 @@ public sealed class HostAdaptationTests
             var platforms = new PlatformRegistry();
             platforms.Register(new("universalforward", "universalforward", "UniversalForward", Terminal));
             var database = new SqlSugarDatabase(Options.Create(new DatabaseOptions { Path = Path.Combine(_directory, "mapping.db") }), NullLogger<SqlSugarDatabase>.Instance);
-            new DatabaseInitializer(database, NullLogger<DatabaseInitializer>.Instance).Initialize();
+            using (var db = database.CreateClient())
+            {
+                db.DbMaintenance.CreateDatabase();
+                db.CodeFirst.InitTables<ModelMappingEntity>();
+            }
             var health = new ModelMappingHealth();
             var mappings = new ModelMappingStore(database, health);
             var targets = new List<ModelMappingTarget> { new("universalforward", "universalforward", "primary", RetryCount: mappedAttempts, FailureThreshold: threshold) };
