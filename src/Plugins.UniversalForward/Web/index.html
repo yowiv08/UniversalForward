@@ -152,13 +152,6 @@
           </section>
           <section id="panel-keys" role="tabpanel" aria-labelledby="tab-keys" hidden>
             <div class="section-heading"><h3>Key 管理 <span id="keyCount" class="count">0</span></h3><p>配置分配策略及失效 Key 处理方式</p></div>
-            <div class="key-strategy"><div class="field"><label for="keySelectionMode">分配策略</label><select id="keySelectionMode"><option value="roundRobin">轮询</option><option value="random">随机</option><option value="priority">主备顺序</option></select></div><p id="keyModeHint" class="muted"></p></div>
-            <fieldset class="batch-box"><legend>自动禁用 Key</legend>
-              <label class="inline-check"><input id="keyAutoDisableEnabled" type="checkbox">正式请求启用自动禁用与失败切换</label>
-              <div class="field"><label for="keyAutoDisableCodes">HTTP 状态码</label><input id="keyAutoDisableCodes" value="401,403" placeholder="401,403,500-503"><small>支持 400–599，以逗号分隔状态码或区间，按上游原始状态码判断。</small></div>
-              <div class="field"><label for="keyAutoDisableThreshold">连续失败请求数</label><input id="keyAutoDisableThreshold" type="number" min="1" max="100" value="3"></div>
-              <p class="muted">同一请求对每个 Key 最多记一次；非匹配 HTTP 响应清零。达到阈值后需手动启用并保存。计数重启清零，禁用状态保留。切换使用普通重试额度，额度为 0 时不额外发送。</p>
-            </fieldset>
             <div class="key-bulk-toolbar" role="group" aria-label="Key 批量操作">
               <label class="inline-check"><input id="keySelectAll" type="checkbox">全选 Key</label>
               <span id="keySelectionSummary" class="muted" role="status">已选 0 个</span>
@@ -166,6 +159,13 @@
             </div>
             <div id="keyRows" class="key-list"></div>
             <div class="batch-box"><label for="keyBatch">批量添加</label><textarea id="keyBatch" rows="3" placeholder="每行一个 Key" autocomplete="off" spellcheck="false"></textarea><div class="between"><small>名称默认取末尾 4 位 · 最多 100 个</small><button id="keyAdd" type="button" class="secondary">添加到列表</button></div></div>
+            <div class="key-strategy"><div class="field"><label for="keySelectionMode">分配策略</label><select id="keySelectionMode"><option value="roundRobin">轮询</option><option value="random">随机</option><option value="priority">主备顺序</option></select></div><p id="keyModeHint" class="muted"></p></div>
+            <fieldset class="batch-box"><legend>自动禁用 Key</legend>
+              <label class="inline-check"><input id="keyAutoDisableEnabled" type="checkbox">正式请求启用自动禁用与失败切换</label>
+              <div class="field"><label for="keyAutoDisableCodes">HTTP 状态码</label><input id="keyAutoDisableCodes" value="401,403" placeholder="401,403,500-503"><small>支持 400–599，以逗号分隔状态码或区间，按上游原始状态码判断。</small></div>
+              <div class="field"><label for="keyAutoDisableThreshold">连续失败请求数</label><input id="keyAutoDisableThreshold" type="number" min="1" max="100" value="3"></div>
+              <p class="muted">同一请求对每个 Key 最多记一次；非匹配 HTTP 响应清零。达到阈值后需手动启用并保存。计数重启清零，禁用状态保留。切换使用普通重试额度，额度为 0 时不额外发送。</p>
+            </fieldset>
           </section>
           <section id="panel-models" role="tabpanel" aria-labelledby="tab-models" hidden>
             <div class="section-heading"><h3>模型与协议</h3><p>选择可用模型并设置上游协议</p></div>
@@ -223,8 +223,8 @@
             </div>
             <p id="systemPromptModeHint" class="system-prompt-mode-hint" role="status">使用客户端系统指令；下方文本保留，选择追加或替换后可编辑。</p>
             <div class="field system-prompt-field">
-              <div class="system-prompt-field-heading"><label for="systemPromptText">自定义系统提示词</label><span id="systemPromptCount" class="system-prompt-count">0 / 32,000 字符</span></div>
-              <textarea id="systemPromptText" rows="10" maxlength="32000" placeholder="例如：请用简体中文回答，先给结论，再解释原因。" spellcheck="false" aria-describedby="systemPromptTextHint systemPromptCount" readonly></textarea>
+              <div class="system-prompt-field-heading"><label for="systemPromptText">自定义系统提示词</label><span id="systemPromptCount" class="system-prompt-count">0 字符</span></div>
+              <textarea id="systemPromptText" rows="10" placeholder="例如：请用简体中文回答，先给结论，再解释原因。" spellcheck="false" aria-describedby="systemPromptTextHint systemPromptCount" readonly></textarea>
               <small id="systemPromptTextHint">按原文发送，保留空格和换行。保存后对本渠道的请求生效。</small>
             </div>
             <details id="systemPromptDetails" class="system-prompt-details">

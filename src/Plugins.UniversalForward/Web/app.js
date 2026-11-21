@@ -442,7 +442,7 @@
     };
     $('systemPromptText').readOnly = mode === 'off';
     $('systemPromptModeHint').textContent = hints[mode];
-    $('systemPromptCount').textContent = `${$('systemPromptText').value.length.toLocaleString('en-US')} / 32,000 字符`;
+    $('systemPromptCount').textContent = `${$('systemPromptText').value.length.toLocaleString('en-US')} 字符`;
   }
   function loadSystemPrompt(policy) {
     form.elements.systemPromptMode.value = policy?.mode || 'off';
@@ -452,7 +452,6 @@
   function readSystemPrompt() {
     const mode = form.elements.systemPromptMode.value, text = $('systemPromptText').value;
     if (!['off', 'append', 'replace'].includes(mode)) fail('请选择系统提示词处理方式', 'prompt');
-    if (text.length > 32000) fail('系统提示词不能超过 32,000 字符', 'prompt', 'systemPromptText');
     if (mode !== 'off' && !text.trim()) fail('追加或替换时，请填写系统提示词', 'prompt', 'systemPromptText');
     return { mode, text };
   }

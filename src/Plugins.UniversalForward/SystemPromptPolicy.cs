@@ -5,7 +5,6 @@ namespace Plugins.UniversalForward;
 /// <summary>渠道的系统提示词改写规则。</summary>
 public sealed class SystemPromptPolicy
 {
-    internal const int MaxTextLength = 32000;
     public string Mode { get; set; } = "off";
     public string Text { get; set; } = string.Empty;
 
@@ -13,8 +12,8 @@ public sealed class SystemPromptPolicy
     {
         if (Mode is not ("off" or "append" or "replace"))
             throw new FormatException("系统提示词处理方式必须为不改写、追加或替换。");
-        if (Text is null || Text.Length > MaxTextLength)
-            throw new FormatException("系统提示词必须为文本，长度不能超过 32000。");
+        if (Text is null)
+            throw new FormatException("系统提示词必须为文本。");
         if (Mode != "off" && string.IsNullOrWhiteSpace(Text))
             throw new FormatException("追加或替换时，系统提示词不能为空。");
     }

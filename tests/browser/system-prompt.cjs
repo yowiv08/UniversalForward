@@ -93,9 +93,8 @@ function promptHost() {
     assert.match(await field('systemPromptModeHint').innerText(), /最后一条系统指令/);
     assert.match(await field('systemPromptTextHint').innerText(), /按原文发送/);
     assert.equal(await field('systemPromptText').inputValue(), original.systemPromptPolicy.text);
-    assert.equal(await field('systemPromptText').getAttribute('maxlength'), '32000');
     assert.equal(await field('systemPromptText').evaluate(node => getComputedStyle(node).fontSize), '15px');
-    assert.match(await field('systemPromptCount').innerText(), new RegExp('^' + original.systemPromptPolicy.text.length + ' / 32,000'));
+    assert.equal(await field('systemPromptCount').innerText(), `${original.systemPromptPolicy.text.length} 字符`);
     await selectMode('replace'); await selectMode('off');
     assert.equal(await field('systemPromptText').inputValue(), original.systemPromptPolicy.text);
     assert.equal(await field('systemPromptText').isEditable(), false);
@@ -111,13 +110,11 @@ function promptHost() {
     assert.equal(await field('tab-prompt').getAttribute('aria-selected'), 'true');
     assert.equal(await field('systemPromptText').evaluate(node => document.activeElement === node), true);
     assert.equal((await saveCalls()).length, 0);
-    await field('systemPromptText').evaluate(node => { node.value = 'x'.repeat(32001); node.dispatchEvent(new Event('input', { bubbles: true })); });
-    await field('save').click(); assert.match(await field('formError').innerText(), /不能超过/);
-    assert.equal((await saveCalls()).length, 0);
     await field('systemPromptText').fill('<img src=x onerror=window.injected=true>');
     assert.equal(await field('panel-prompt').locator('img').count(), 0);
-    const exactText = '  请用简体中文回答。\n\n先给结论，再解释原因。\n保留代码里的 `literal` 和 ${variables}。 😀  \n';
+    const exactText = '  请用简体中文回答。\n\n' + '先给结论，再解释原因。\n'.repeat(4096) + '保留代码里的 `literal` 和 ${variables}。 😀  \n';
     await field('systemPromptText').fill(exactText);
+    assert.equal(await field('systemPromptCount').innerText(), `${exactText.length.toLocaleString('en-US')} 字符`);
     await page.evaluate(() => { promptState.failSave = true; });
     await field('save').click(); await field('formError').filter({ hasText: '模拟渠道保存失败' }).waitFor();
     assert.equal(await field('editor').isVisible(), true);

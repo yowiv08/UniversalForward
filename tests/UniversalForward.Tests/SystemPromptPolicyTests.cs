@@ -286,15 +286,31 @@ public sealed class SystemPromptPolicyTests
     }
 
     [TestMethod]
-    public async Task TextLengthUsesUtf16UnitsAndRejectsOversizeWithoutWriting()
+    [DataRow("responses", "append")]
+    [DataRow("messages", "replace")]
+    [DataRow("chat/completions", "append")]
+    public async Task LongPromptIsSavedAndForwardedVerbatim(string protocol, string mode)
     {
         var account = Account(); using var terminal = new UniversalForwardTerminal(ChannelKeysTests.Host(account));
-        var text = string.Concat(Enumerable.Repeat("😀", 16000));
-        Assert.AreEqual(32000, text.Length);
-        Assert.AreEqual(200, (await terminal.SaveAccountAsync(ChannelKeysTests.Context(new { id = account.Id, label = account.Label, systemPromptPolicy = Policy(text: text) }))).StatusCode);
-        var before = ChannelKeysTests.Settings(account).ToJsonString();
-        Assert.AreEqual(400, (await terminal.SaveAccountAsync(ChannelKeysTests.Context(new { id = account.Id, label = account.Label, systemPromptPolicy = Policy(text: text + "x") }))).StatusCode);
-        Assert.AreEqual(before, ChannelKeysTests.Settings(account).ToJsonString());
+        var text = "  " + new string('文', 65_536) + "\n末尾 😀  ";
+        var saved = await terminal.SaveAccountAsync(ChannelKeysTests.Context(new { id = account.Id, label = account.Label, systemPromptPolicy = Policy(mode, text) }));
+        Assert.AreEqual(200, saved.StatusCode);
+        JsonObject? sent = null;
+        var client = Client(async (request, ct) =>
+        {
+            sent = Object(await request.Content!.ReadAsStringAsync(ct));
+            return Reply(protocol, false);
+        });
+        var result = await terminal.InvokeAsync(Context(account, client.Object, History(), protocol));
+        Assert.AreEqual(200, result.Response.StatusCode);
+        Assert.IsNotNull(sent);
+        var prompt = protocol switch
+        {
+            "responses" => sent["input"]!.AsArray()[^1]!["content"]![0]!["text"],
+            "messages" => sent["system"]!.AsArray()[^1]!["text"],
+            _ => sent["messages"]!.AsArray()[^1]!["content"]
+        };
+        Assert.AreEqual(text, prompt!.GetValue<string>());
     }
 
     [TestMethod]
@@ -522,7 +538,12 @@ public sealed class SystemPromptPolicyTests
     private static HttpResponseMessage Reply(string protocol, bool stream) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(stream ? protocol == "responses" ? "data: " + ResponsesDone + "\n\n" : MessagesSse
-            : protocol == "responses" ? ResponseJson : """{"id":"message","type":"message","role":"assistant","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}""",
+            : protocol switch
+            {
+                "responses" => ResponseJson,
+                "chat/completions" => """{"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}""",
+                _ => """{"id":"message","type":"message","role":"assistant","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"""
+            },
             Encoding.UTF8, stream ? "text/event-stream" : "application/json")
     };
     private sealed class RequestHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> reply) : HttpMessageHandler
